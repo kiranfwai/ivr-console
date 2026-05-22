@@ -43,7 +43,18 @@ export interface CallRecord {
   bulkJobId?: string;
 }
 
-export type BulkRowStatus = "pending" | "dialing" | "ok" | "failed";
+export type BulkRowStatus =
+  | "pending"     // not dialed yet
+  | "dialing"     // place-call in flight
+  | "ok"          // place-call succeeded (legacy / WhatsApp bulk uses this as the terminal happy state)
+  | "failed"      // place-call request to Plivo failed (or generic failure for WhatsApp bulk)
+  // Call outcomes (filled in by /api/hangup once the call ends):
+  | "press1"      // engaged
+  | "connected"   // answered, no press-1
+  | "busy"        // line busy
+  | "no-answer"   // rang, not picked up
+  | "rejected"    // invalid number / blocked
+  | "error";      // carrier / Plivo error reaching answer URL
 
 export interface BulkRow {
   phone: string;
@@ -52,6 +63,8 @@ export interface BulkRow {
   callUuid?: string;
   error?: string;
   attemptedAt?: string;
+  hangupCause?: string;
+  durationSec?: number;
 }
 
 export type BulkKind = "call" | "whatsapp";

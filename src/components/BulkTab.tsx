@@ -101,6 +101,19 @@ export default function BulkTab() {
     drive(jobId);
   }
 
+  async function retry(jobId: string) {
+    try {
+      const r = await api<{ job: BulkJob; count: number }>(`/api/bulk/${jobId}/retry`, { method: "POST" });
+      setActiveJobId(r.job.id);
+      setActiveJob(r.job);
+      reloadJobs();
+      toast(`Retrying ${r.count} failed rows`, "ok");
+      drive(r.job.id);
+    } catch (e: any) {
+      toast(e.message || "No retry-able rows", "danger");
+    }
+  }
+
   const counts = activeJob ? tally(activeJob) : null;
 
   return (
@@ -167,22 +180,36 @@ export default function BulkTab() {
             </div>
           </div>
           <Progress counts={counts} />
-          <div className="mt-3 flex gap-2 text-xs">
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
             <Badge tone="accent">total {counts.total}</Badge>
-            <Badge tone="ok">ok {counts.ok}</Badge>
-            <Badge tone="danger">failed {counts.failed}</Badge>
-            <Badge tone="warn">pending {counts.pending}</Badge>
+            <Badge tone="ok">press1 {counts.press1}</Badge>
+            <Badge tone="ok">connected {counts.connected}</Badge>
+            <Badge tone="warn">no-answer {counts.noAnswer}</Badge>
+            <Badge tone="warn">busy {counts.busy}</Badge>
+            <Badge tone="danger">rejected {counts.rejected}</Badge>
+            <Badge tone="danger">error {counts.error + counts.failed}</Badge>
+            {counts.pending > 0 && <Badge tone="muted">pending {counts.pending}</Badge>}
           </div>
-          {counts.failed > 0 && (
+          {counts.retryable > 0 && !running && (
+            <div className="mt-3 flex items-center justify-between bg-bg/60 border border-line rounded-lg px-3 py-2">
+              <div className="text-sm">
+                <span className="text-muted">Retry-able rows (no-answer / busy / error / failed):</span>{" "}
+                <span className="text-ink font-medium">{counts.retryable}</span>
+              </div>
+              <Button onClick={() => retry(activeJob.id)}>Retry failed</Button>
+            </div>
+          )}
+          {counts.retryable > 0 && (
             <details className="mt-3">
-              <summary className="text-sm text-muted cursor-pointer">Failed rows ({counts.failed})</summary>
+              <summary className="text-sm text-muted cursor-pointer">Failed rows ({counts.retryable})</summary>
               <div className="mt-2 max-h-64 overflow-auto text-xs font-mono space-y-1">
                 {activeJob.rows
                   .map((r, i) => ({ r, i }))
-                  .filter((x) => x.r.status === "failed")
+                  .filter((x) => isRetryable(x.r.status))
                   .map(({ r, i }) => (
-                    <div key={i}>
-                      [{i}] {r.phone} — {r.error || "error"}
+                    <div key={i} className="flex justify-between gap-3">
+                      <span>[{i}] {r.phone}</span>
+                      <span className="text-muted">{r.status}{r.hangupCause ? ` · ${r.hangupCause}` : ""}</span>
                     </div>
                   ))}
               </div>
@@ -208,7 +235,7 @@ export default function BulkTab() {
                 >
                   <span className="font-mono text-xs">{j.id}</span>
                   <span className="text-xs text-muted">
-                    {c.ok}/{c.total} ok · {c.failed} failed
+                    {c.ok}/{c.total} ok · {c.failedAll} failed
                   </span>
                 </button>
               );
@@ -220,20 +247,46 @@ export default function BulkTab() {
   );
 }
 
-function tally(job: BulkJob) {
-  let ok = 0, failed = 0, pending = 0, dialing = 0;
-  for (const r of job.rows) {
-    if (r.status === "ok") ok++;
-    else if (r.status === "failed") failed++;
-    else if (r.status === "dialing") dialing++;
-    else pending++;
-  }
-  return { ok, failed, pending, dialing, total: job.rows.length };
+const RETRY_SET = new Set(["no-answer", "busy", "error", "failed"]);
+function isRetryable(status: string) {
+  return RETRY_SET.has(status);
 }
 
-function Progress({ counts }: { counts: { ok: number; failed: number; pending: number; total: number } }) {
+function tally(job: BulkJob) {
+  let press1 = 0, connected = 0, noAnswer = 0, busy = 0, rejected = 0,
+      errorCount = 0, failedCount = 0, okCount = 0, pending = 0, dialing = 0;
+  for (const r of job.rows) {
+    switch (r.status) {
+      case "press1": press1++; break;
+      case "connected": connected++; break;
+      case "no-answer": noAnswer++; break;
+      case "busy": busy++; break;
+      case "rejected": rejected++; break;
+      case "error": errorCount++; break;
+      case "failed": failedCount++; break;
+      case "ok": okCount++; break;
+      case "dialing": dialing++; break;
+      default: pending++;
+    }
+  }
+  const retryable = noAnswer + busy + errorCount + failedCount;
+  return {
+    press1, connected, noAnswer, busy, rejected,
+    error: errorCount,
+    failed: failedCount,
+    okCount,
+    pending, dialing,
+    retryable,
+    // Aggregates for the progress bar:
+    ok: press1 + connected + okCount,
+    failedAll: retryable + rejected,
+    total: job.rows.length,
+  };
+}
+
+function Progress({ counts }: { counts: { ok: number; failedAll: number; total: number } }) {
   const okPct = (counts.ok / counts.total) * 100;
-  const failPct = (counts.failed / counts.total) * 100;
+  const failPct = (counts.failedAll / counts.total) * 100;
   return (
     <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
       <div className="h-full bg-ok" style={{ width: `${okPct}%` }} />

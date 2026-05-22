@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
 import { getCall, patchCall } from "@/lib/calls";
+import { updateBulkRow } from "@/lib/bulk";
+import { deriveOutcome } from "@/lib/outcome";
 import { redis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
@@ -46,17 +48,38 @@ async function handleInner(req: NextRequest) {
   }
 
   if (internalId) {
-    // Preserve press1 — it's the meaningful business outcome; hangup is the lifecycle event.
     const cur = await getCall(internalId);
     const keepPress1 = cur?.status === "press1";
+    const dur = Number(duration) || 0;
+    const cause = hangupCause || callStatus;
     await patchCall(internalId, {
       status: keepPress1 ? "press1" : "hangup",
       hangupAt: new Date().toISOString(),
-      durationSec: Number(duration) || 0,
-      hangupCause: hangupCause || callStatus,
+      durationSec: dur,
+      hangupCause: cause,
     });
+
+    // Propagate outcome to the parent bulk row so the Bulk tab can show
+    // accurate per-call results (not just "was the place-call request accepted").
+    if (cur?.bulkJobId) {
+      const bulkIndex = await findBulkRowIndex(cur.bulkJobId, internalId);
+      if (bulkIndex !== -1) {
+        const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
+        await updateBulkRow(cur.bulkJobId, bulkIndex, {
+          status: outcome,
+          hangupCause: cause,
+          durationSec: dur,
+        });
+      }
+    }
   }
   return NextResponse.json({ ok: true });
+}
+
+async function findBulkRowIndex(jobId: string, callUuid: string): Promise<number> {
+  const job = await redis().get<{ rows: { callUuid?: string }[] }>(`bulk:${jobId}`);
+  if (!job) return -1;
+  return job.rows.findIndex((r) => r.callUuid === callUuid);
 }
 
 export const GET = handle;
