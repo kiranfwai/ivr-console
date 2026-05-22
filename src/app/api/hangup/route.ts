@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
-import { patchCall } from "@/lib/calls";
+import { getCall, patchCall } from "@/lib/calls";
 import { redis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
@@ -46,8 +46,11 @@ async function handleInner(req: NextRequest) {
   }
 
   if (internalId) {
+    // Preserve press1 — it's the meaningful business outcome; hangup is the lifecycle event.
+    const cur = await getCall(internalId);
+    const keepPress1 = cur?.status === "press1";
     await patchCall(internalId, {
-      status: "hangup",
+      status: keepPress1 ? "press1" : "hangup",
       hangupAt: new Date().toISOString(),
       durationSec: Number(duration) || 0,
       hangupCause: hangupCause || callStatus,
