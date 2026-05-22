@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Input, Label, Textarea, Badge, CsvFilePicker, toast } from "./ui";
+import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
+import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
 import { useFetch, api } from "./useData";
 import type { BulkJob } from "@/lib/models";
 
@@ -10,19 +11,27 @@ type Mode = "single" | "bulk";
 export default function WhatsAppTab() {
   const [mode, setMode] = useState<Mode>("single");
   return (
-    <div className="space-y-4">
-      <Card className="!p-2">
-        <div className="flex gap-1">
-          <Button variant={mode === "single" ? "primary" : "ghost"} onClick={() => setMode("single")}>
-            Single
-          </Button>
-          <Button variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => setMode("bulk")}>
-            Bulk
-          </Button>
-        </div>
-      </Card>
+    <Section>
+      <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
+        <ModeBtn active={mode === "single"} onClick={() => setMode("single")} icon={<Send size={12} />} label="Single" />
+        <ModeBtn active={mode === "bulk"} onClick={() => setMode("bulk")} icon={<Zap size={12} />} label="Bulk" />
+      </div>
       {mode === "single" ? <SingleSend /> : <BulkSend />}
-    </div>
+    </Section>
+  );
+}
+
+function ModeBtn({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${
+        active ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
@@ -39,13 +48,8 @@ function SingleSend() {
     try {
       let extraObj: any = undefined;
       if (extra.trim()) {
-        try {
-          extraObj = JSON.parse(extra);
-        } catch {
-          toast("Extra must be valid JSON", "danger");
-          setBusy(false);
-          return;
-        }
+        try { extraObj = JSON.parse(extra); }
+        catch { toast("Extra must be valid JSON", "danger"); setBusy(false); return; }
       }
       const r = await fetch("/api/whatsapp/send", {
         method: "POST",
@@ -54,7 +58,7 @@ function SingleSend() {
       });
       const j = await r.json();
       setLast(j);
-      if (r.ok && j.ok) toast(`Pabbly ${j.status} in ${j.ms}ms`, "ok");
+      if (r.ok && j.ok) toast(`Pabbly ${j.status} · ${j.ms}ms`, "ok");
       else toast(`Failed: ${j.error || j.status}`, "danger");
     } finally {
       setBusy(false);
@@ -63,35 +67,33 @@ function SingleSend() {
 
   return (
     <>
-      <Card>
+      <Card title="Send a single WhatsApp" description="Fires PABBLY_WEBHOOK_URL directly, no Plivo involved.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <Label>Phone</Label>
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="9876543210" />
           </div>
           <div>
-            <Label>Name (optional)</Label>
+            <Label hint="optional">Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Animesh" />
           </div>
           <div className="md:col-span-2">
-            <Label>Extra fields (optional, JSON merged into payload)</Label>
+            <Label hint="optional · merged into payload">Extra JSON</Label>
             <Textarea rows={3} value={extra} onChange={(e) => setExtra(e.target.value)} placeholder='{"campaign": "day1"}' />
           </div>
           <div className="md:col-span-2 flex justify-end">
-            <Button onClick={send} disabled={busy || !phone}>
-              {busy ? "Sending…" : "Send via Pabbly"}
+            <Button onClick={send} disabled={!phone} loading={busy} leftIcon={<Send size={14} />}>
+              Send via Pabbly
             </Button>
           </div>
         </div>
       </Card>
 
       {last && (
-        <Card>
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-sm text-muted">Last response</div>
-            <Badge tone={last.ok ? "ok" : "danger"}>{last.ok ? `${last.status} · ${last.ms}ms` : "failed"}</Badge>
-          </div>
-          <pre className="text-xs font-mono bg-bg p-3 rounded overflow-auto max-h-64">
+        <Card title="Last response" action={
+          <Badge tone={last.ok ? "ok" : "danger"}>{last.ok ? `${last.status} · ${last.ms}ms` : "failed"}</Badge>
+        }>
+          <pre className="text-xs font-mono bg-bg/60 border border-line p-3 rounded-md overflow-auto max-h-64">
             {JSON.stringify(last, null, 2)}
           </pre>
         </Card>
@@ -121,8 +123,7 @@ function delayMsForRate(ratePerMin: number, jitterPct: number): number {
 
 function BulkSend() {
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJob[] }>("/api/bulk");
-  const allJobs = jdata?.jobs ?? [];
-  const jobs = allJobs.filter((j) => j.kind === "whatsapp");
+  const jobs = (jdata?.jobs ?? []).filter((j) => j.kind === "whatsapp");
 
   const [csv, setCsv] = useState<string>("phone,name\n");
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -214,10 +215,10 @@ function BulkSend() {
 
   return (
     <>
-      <Card>
+      <Card title="Bulk WhatsApp via Pabbly" description="Browser-paced trickle send. Persists across tab close.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
-            <Label>Pabbly webhook URL (optional — falls back to PABBLY_WEBHOOK_URL)</Label>
+            <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
             <Input
               value={webhookUrl}
               onChange={(e) => setWebhookUrl(e.target.value)}
@@ -226,7 +227,7 @@ function BulkSend() {
           </div>
 
           <div>
-            <Label>Rate ({rate} msg/min)</Label>
+            <Label hint={`${rate} msg/min`}>Rate</Label>
             <input
               type="range"
               min={1}
@@ -237,7 +238,7 @@ function BulkSend() {
             />
           </div>
           <div>
-            <Label>Jitter (±{jitterPct}%)</Label>
+            <Label hint={`±${jitterPct}%`}>Jitter</Label>
             <input
               type="range"
               min={0}
@@ -250,17 +251,17 @@ function BulkSend() {
         </div>
 
         <div className="mt-4">
-          <div className="flex items-center justify-between mb-1">
-            <Label>Recipients (one per line, &quot;phone,name&quot;)</Label>
+          <div className="flex items-center justify-between mb-1.5">
+            <Label>Recipients · &quot;phone,name&quot; per line</Label>
             <div className="flex items-center gap-2 text-xs text-muted">
-              <span>
-                {previewCount} recipients
-                {previewCount > 0 && ` · ~${estimatedMin} min`}
+              <span className="tabular-nums">
+                {previewCount}
+                {previewCount > 0 && ` · ~${estimatedMin}m`}
               </span>
               <CsvFilePicker onLoad={setCsv} />
               <button
                 onClick={() => setCsv("phone,name\n")}
-                className="px-2 py-1 rounded bg-line/60 hover:bg-line text-ink"
+                className="px-2 py-1 rounded-md bg-elev/60 hover:bg-elev text-ink2 hover:text-ink border border-line transition-colors"
               >
                 Clear
               </button>
@@ -274,59 +275,50 @@ function BulkSend() {
           />
         </div>
 
-        <div className="mt-3 flex justify-end">
-          <Button onClick={start} disabled={!previewCount || running}>
-            {running ? "Sending…" : "Start"}
+        <div className="mt-4 flex justify-end">
+          <Button onClick={start} disabled={!previewCount || running} loading={running} leftIcon={<Play size={14} />} size="lg">
+            {running ? "Sending…" : `Start · ${previewCount} sends`}
           </Button>
         </div>
       </Card>
 
       {activeJob && counts && (
-        <Card>
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <div className="text-sm text-muted">Active WA job</div>
-              <div className="font-mono text-sm">{activeJob.id}</div>
+        <Card
+          title={
+            <div className="flex items-center gap-2">
+              <span>Active WA job</span>
+              <Badge tone={running ? "warn" : counts.pending > 0 ? "warn" : "ok"} dot={running}>
+                {running ? "running" : counts.pending > 0 ? "paused" : "complete"}
+              </Badge>
             </div>
+          }
+          description={<span className="font-mono">{activeJob.id}</span>}
+          action={
             <div className="flex gap-2">
               {running ? (
-                <Button variant="danger" onClick={stop}>Stop</Button>
+                <Button variant="danger" leftIcon={<Square size={12} />} onClick={stop}>Stop</Button>
               ) : counts.pending > 0 ? (
-                <Button onClick={() => resume(activeJob.id)}>Resume</Button>
+                <Button leftIcon={<Play size={12} />} onClick={() => resume(activeJob.id)}>Resume</Button>
               ) : null}
             </div>
+          }
+        >
+          <ProgressBar counts={counts} />
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <Stat label="Sent" value={counts.ok} tone="ok" />
+            <Stat label="Failed" value={counts.failedAll} tone="danger" />
+            <Stat label="Pending" value={counts.pending} tone="muted" />
+            <Stat label="Total" value={counts.total} tone="muted" />
           </div>
-          <Progress counts={counts} />
-          <div className="mt-3 flex gap-2 text-xs">
-            <Badge tone="accent">total {counts.total}</Badge>
-            <Badge tone="ok">sent {counts.ok}</Badge>
-            <Badge tone="danger">failed {counts.failed}</Badge>
-            <Badge tone="warn">pending {counts.pending}</Badge>
-          </div>
-          {counts.failed > 0 && (
-            <details className="mt-3">
-              <summary className="text-sm text-muted cursor-pointer">Failed rows ({counts.failed})</summary>
-              <div className="mt-2 max-h-64 overflow-auto text-xs font-mono space-y-1">
-                {activeJob.rows
-                  .map((r, i) => ({ r, i }))
-                  .filter((x) => x.r.status === "failed")
-                  .map(({ r, i }) => (
-                    <div key={i}>
-                      [{i}] {r.phone} — {r.error || "error"}
-                    </div>
-                  ))}
-              </div>
-            </details>
-          )}
         </Card>
       )}
 
       {!!jobs.length && (
-        <Card>
-          <div className="text-sm text-muted mb-2">Recent WA jobs</div>
-          <div className="space-y-1 text-sm">
+        <Card title="Recent WA jobs">
+          <div className="space-y-1">
             {jobs.slice(0, 8).map((j) => {
               const c = tally(j);
+              const isActive = activeJobId === j.id;
               return (
                 <button
                   key={j.id}
@@ -334,12 +326,24 @@ function BulkSend() {
                     setActiveJobId(j.id);
                     setActiveJob(j);
                   }}
-                  className="w-full text-left hover:bg-line/40 rounded px-2 py-1 flex items-center justify-between"
+                  className={`w-full text-left rounded-lg px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
+                    isActive ? "bg-brand/10 border border-brand/25" : "hover:bg-elev/60 border border-transparent"
+                  }`}
                 >
-                  <span className="font-mono text-xs">{j.id}</span>
-                  <span className="text-xs text-muted">
-                    {c.ok}/{c.total} sent · {c.failed} failed
-                  </span>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <MessageCircle size={14} className="text-muted shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-mono text-xs truncate">{j.id}</div>
+                      <div className="text-xs text-muted">
+                        {new Date(j.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge tone="ok">{c.ok}</Badge>
+                    {c.failedAll > 0 && <Badge tone="danger">{c.failedAll}</Badge>}
+                    <span className="text-muted">/ {c.total}</span>
+                  </div>
                 </button>
               );
             })}
@@ -347,6 +351,21 @@ function BulkSend() {
         </Card>
       )}
     </>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone: "ok" | "warn" | "danger" | "muted" }) {
+  const c = {
+    ok: "text-ok",
+    warn: "text-warn",
+    danger: "text-danger",
+    muted: "text-ink2",
+  }[tone];
+  return (
+    <div className="bg-bg/60 border border-line rounded-lg px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      <div className={`text-xl font-semibold tabular-nums ${c}`}>{value}</div>
+    </div>
   );
 }
 
@@ -358,16 +377,29 @@ function tally(job: BulkJob) {
     else if (r.status === "dialing") dialing++;
     else pending++;
   }
-  return { ok, failed, pending, dialing, total: job.rows.length };
+  return {
+    ok,
+    failedAll: failed,
+    pending,
+    dialing,
+    total: job.rows.length,
+  };
 }
 
-function Progress({ counts }: { counts: { ok: number; failed: number; pending: number; total: number } }) {
+function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; total: number } }) {
   const okPct = (counts.ok / counts.total) * 100;
-  const failPct = (counts.failed / counts.total) * 100;
+  const failPct = (counts.failedAll / counts.total) * 100;
+  const donePct = okPct + failPct;
   return (
-    <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
-      <div className="h-full bg-ok" style={{ width: `${okPct}%` }} />
-      <div className="h-full bg-danger" style={{ width: `${failPct}%` }} />
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted">{Math.round(donePct)}% complete</span>
+        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll} / {counts.total}</span>
+      </div>
+      <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
+        <div className="h-full bg-ok transition-all duration-500" style={{ width: `${okPct}%` }} />
+        <div className="h-full bg-danger transition-all duration-500" style={{ width: `${failPct}%` }} />
+      </div>
     </div>
   );
 }

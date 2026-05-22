@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Button, Card, Input, Label, Badge, toast } from "./ui";
+import { Link as LinkIcon, Upload, Trash2, Music, Play } from "lucide-react";
+import { Button, Card, Input, Label, Badge, EmptyState, Section, IconButton, toast } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio } from "@/lib/models";
 
@@ -18,7 +19,10 @@ export default function AudiosTab() {
     if (!url.trim()) return;
     setBusy(true);
     try {
-      await api("/api/audios", { method: "POST", body: JSON.stringify({ label: label || "Untitled", url }) });
+      await api("/api/audios", {
+        method: "POST",
+        body: JSON.stringify({ label: label || "Untitled", url }),
+      });
       setUrl("");
       setLabel("");
       reload();
@@ -44,7 +48,7 @@ export default function AudiosTab() {
       setLabel("");
       if (fileRef.current) fileRef.current.value = "";
       reload();
-      toast("Uploaded", "ok");
+      toast("Audio uploaded", "ok");
     } catch (e: any) {
       toast(e.message || "Upload failed", "danger");
     } finally {
@@ -60,17 +64,33 @@ export default function AudiosTab() {
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <div className="flex gap-2 mb-3">
-          <Button variant={mode === "url" ? "primary" : "ghost"} onClick={() => setMode("url")}>
-            Paste URL
-          </Button>
-          <Button variant={mode === "upload" ? "primary" : "ghost"} onClick={() => setMode("upload")}>
-            Upload file
-          </Button>
-        </div>
-
+    <Section>
+      <Card
+        title="Add audio"
+        description="Paste a public MP3 URL, or upload a file to Vercel Blob."
+        action={
+          <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
+            <button
+              onClick={() => setMode("url")}
+              className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
+                mode === "url" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+              }`}
+            >
+              <LinkIcon size={12} />
+              Paste URL
+            </button>
+            <button
+              onClick={() => setMode("upload")}
+              className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
+                mode === "upload" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+              }`}
+            >
+              <Upload size={12} />
+              Upload
+            </button>
+          </div>
+        }
+      >
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
           <div>
             <Label>Label</Label>
@@ -80,10 +100,14 @@ export default function AudiosTab() {
             <>
               <div className="md:col-span-2">
                 <Label>Public MP3 URL</Label>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://.../day1.mp3" />
+                <Input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://.../day1.mp3"
+                />
               </div>
               <div className="md:col-span-3 flex justify-end">
-                <Button onClick={addUrl} disabled={busy || !url.trim()}>
+                <Button onClick={addUrl} disabled={!url.trim()} loading={busy} leftIcon={<LinkIcon size={14} />}>
                   Add
                 </Button>
               </div>
@@ -92,50 +116,61 @@ export default function AudiosTab() {
             <>
               <div className="md:col-span-2">
                 <Label>MP3 file</Label>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="audio/*"
-                  className="text-sm text-muted file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-accent file:text-bg file:font-medium"
-                />
+                <label className="flex items-center gap-3 px-3 py-2 bg-bg/60 border border-line rounded-lg cursor-pointer hover:border-line2 transition-colors">
+                  <Upload size={14} className="text-muted" />
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="audio/*"
+                    className="text-sm text-ink2 flex-1 outline-none"
+                  />
+                </label>
               </div>
-              <div className="md:col-span-3 flex justify-end">
-                <Button onClick={uploadFile} disabled={busy}>
+              <div className="md:col-span-3 flex items-center justify-between gap-3">
+                <div className="text-xs text-muted">
+                  Goes to Vercel Blob (requires <code className="text-brand">BLOB_READ_WRITE_TOKEN</code>).
+                </div>
+                <Button onClick={uploadFile} disabled={busy} loading={busy} leftIcon={<Upload size={14} />}>
                   Upload
                 </Button>
-              </div>
-              <div className="md:col-span-3 text-xs text-muted">
-                Uploads go to Vercel Blob (requires <code>BLOB_READ_WRITE_TOKEN</code>). If you haven&apos;t set
-                that env var, use <b>Paste URL</b> with a hosted MP3 instead.
               </div>
             </>
           )}
         </div>
       </Card>
 
-      {!audios.length && (
+      {!audios.length ? (
         <Card>
-          <div className="text-sm text-muted">No audios yet. Add one above.</div>
+          <EmptyState
+            icon={<Music size={20} />}
+            title="No audios yet"
+            description="Add one above. Once added, link it to a campaign in the Campaigns tab."
+          />
         </Card>
-      )}
-
-      <div className="space-y-2">
-        {audios.map((a) => (
-          <Card key={a.id}>
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <div className="font-medium">{a.label}</div>
-                  <Badge tone={a.source === "blob" ? "accent" : "muted"}>{a.source}</Badge>
+      ) : (
+        <div className="space-y-2">
+          {audios.map((a) => (
+            <Card key={a.id} className="group hover:border-line2 transition-colors">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
+                    <Music size={15} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="font-medium truncate">{a.label}</div>
+                      <Badge tone={a.source === "blob" ? "accent" : "muted"}>{a.source}</Badge>
+                    </div>
+                    <div className="text-xs text-muted truncate mt-0.5">{a.url}</div>
+                  </div>
                 </div>
-                <div className="text-xs text-muted truncate mt-0.5">{a.url}</div>
+                <audio controls src={a.url} className="h-8 max-w-[220px]" />
+                <IconButton icon={<Trash2 size={14} />} variant="danger" onClick={() => remove(a.id)} />
               </div>
-              <audio controls src={a.url} className="h-8" />
-              <Button variant="danger" onClick={() => remove(a.id)}>Delete</Button>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </Section>
   );
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Button, Card, Input, Label, Select, Textarea, Badge, toast } from "./ui";
+import { Plus, Edit2, Trash2, Megaphone, Music, Globe, Phone } from "lucide-react";
+import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, Modal, IconButton, toast } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
@@ -17,46 +18,79 @@ export default function CampaignsTab() {
     if (!confirm("Delete this campaign?")) return;
     await api(`/api/campaigns/${id}`, { method: "DELETE" });
     reloadC();
-    toast("Deleted", "ok");
+    toast("Campaign deleted", "ok");
   }
 
   return (
-    <div className="space-y-4">
+    <Section>
       <div className="flex justify-end">
-        <Button onClick={() => setCreating(true)}>+ New campaign</Button>
+        <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
+          New campaign
+        </Button>
       </div>
 
-      {!campaigns.length && (
+      {!campaigns.length ? (
         <Card>
-          <div className="text-sm text-muted">
-            No campaigns yet. Create one to choose its audio, prompt, and press-1 webhook.
-          </div>
+          <EmptyState
+            icon={<Megaphone size={20} />}
+            title="No campaigns yet"
+            description="A campaign bundles the audio, prompt, press-1 webhook, and from-number. Pick one when dialing."
+            action={
+              <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
+                Create campaign
+              </Button>
+            }
+          />
         </Card>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {campaigns.map((c) => {
-          const a = audios.find((a) => a.id === c.audioId);
-          return (
-            <Card key={c.id}>
-              <div className="flex items-start justify-between">
-                <div className="min-w-0">
-                  <div className="font-medium">{c.name}</div>
-                  <div className="text-xs text-muted mt-1">audio: {a?.label || "(none — fallback day1)"}</div>
-                  {c.fromNumber && <div className="text-xs text-muted">from: {c.fromNumber}</div>}
-                  <div className="text-xs text-muted truncate mt-1">
-                    {c.webhookUrl ? `webhook: ${c.webhookUrl}` : "webhook: default (env)"}
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {campaigns.map((c) => {
+            const a = audios.find((a) => a.id === c.audioId);
+            const hasWebhook = !!c.webhookUrl;
+            return (
+              <Card key={c.id} className="group hover:border-line2 transition-colors">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
+                        <Megaphone size={14} />
+                      </div>
+                      <div className="font-medium truncate">{c.name}</div>
+                    </div>
+                    <div className="space-y-1 text-xs text-muted ml-10">
+                      <div className="flex items-center gap-1.5">
+                        <Music size={11} />
+                        <span className="truncate">{a?.label || "Fallback day1.mp3"}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Globe size={11} />
+                        <span className="truncate">
+                          {hasWebhook ? "Custom Pabbly webhook" : "Default (env)"}
+                        </span>
+                        {hasWebhook && <Badge tone="accent" className="ml-0.5">override</Badge>}
+                      </div>
+                      {c.fromNumber && (
+                        <div className="flex items-center gap-1.5">
+                          <Phone size={11} />
+                          <span className="font-mono">{c.fromNumber}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="opacity-60 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
+                    <IconButton icon={<Edit2 size={14} />} onClick={() => setEditing(c)} />
+                    <IconButton
+                      icon={<Trash2 size={14} />}
+                      variant="danger"
+                      onClick={() => remove(c.id)}
+                    />
                   </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <Button variant="ghost" onClick={() => setEditing(c)}>Edit</Button>
-                  <Button variant="danger" onClick={() => remove(c.id)}>Delete</Button>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       {(creating || editing) && (
         <CampaignEditor
@@ -73,7 +107,7 @@ export default function CampaignsTab() {
           }}
         />
       )}
-    </div>
+    </Section>
   );
 }
 
@@ -99,16 +133,11 @@ function CampaignEditor({
     if (!name.trim()) return;
     setBusy(true);
     try {
+      const payload = { name, audioId: audioId || null, prompt, webhookUrl, fromNumber };
       if (initial) {
-        await api(`/api/campaigns/${initial.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ name, audioId: audioId || null, prompt, webhookUrl, fromNumber }),
-        });
+        await api(`/api/campaigns/${initial.id}`, { method: "PATCH", body: JSON.stringify(payload) });
       } else {
-        await api("/api/campaigns", {
-          method: "POST",
-          body: JSON.stringify({ name, audioId: audioId || null, prompt, webhookUrl, fromNumber }),
-        });
+        await api("/api/campaigns", { method: "POST", body: JSON.stringify(payload) });
       }
       toast("Saved", "ok");
       onSaved();
@@ -120,45 +149,55 @@ function CampaignEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4">
-      <Card className="w-full max-w-xl">
-        <div className="text-lg font-semibold mb-3">{initial ? "Edit campaign" : "New campaign"}</div>
-        <div className="space-y-3">
-          <div>
-            <Label>Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day-1 outreach" />
-          </div>
-          <div>
-            <Label>Audio</Label>
-            <Select value={audioId} onChange={(e) => setAudioId(e.target.value)}>
-              <option value="">— None (fallback day1.mp3) —</option>
-              {audios.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.label}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div>
-            <Label>Press-1 webhook URL (optional — falls back to PABBLY_WEBHOOK_URL)</Label>
-            <Input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://connect.pabbly.com/..." />
-          </div>
-          <div>
-            <Label>From number (optional — falls back to PLIVO_FROM_NUMBER)</Label>
-            <Input value={fromNumber} onChange={(e) => setFromNumber(e.target.value)} placeholder="+918031340818" />
-          </div>
-          <div>
-            <Label>Prompt spoken after audio</Label>
-            <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 mt-4">
+    <Modal
+      open
+      onClose={onClose}
+      title={initial ? "Edit campaign" : "New campaign"}
+      footer={
+        <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} disabled={busy || !name.trim()}>
-            {busy ? "Saving…" : "Save"}
+          <Button onClick={save} disabled={!name.trim()} loading={busy}>
+            {initial ? "Save changes" : "Create campaign"}
           </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <Label>Name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day-1 outreach" />
         </div>
-      </Card>
-    </div>
+        <div>
+          <Label hint={audios.length ? `${audios.length} available` : "Audios tab to add"}>Audio</Label>
+          <Select value={audioId} onChange={(e) => setAudioId(e.target.value)}>
+            <option value="">— None (fallback day1.mp3) —</option>
+            {audios.map((a) => (
+              <option key={a.id} value={a.id}>{a.label}</option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label hint="optional">Press-1 webhook URL</Label>
+          <Input
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://connect.pabbly.com/..."
+          />
+          <div className="text-xs text-muted mt-1">Blank = use PABBLY_WEBHOOK_URL env var.</div>
+        </div>
+        <div>
+          <Label hint="optional">From number</Label>
+          <Input
+            value={fromNumber}
+            onChange={(e) => setFromNumber(e.target.value)}
+            placeholder="+918031340818"
+          />
+        </div>
+        <div>
+          <Label>Prompt spoken after audio</Label>
+          <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        </div>
+      </div>
+    </Modal>
   );
 }
