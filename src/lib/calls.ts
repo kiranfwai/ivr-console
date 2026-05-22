@@ -41,16 +41,40 @@ export async function updateCallStatus(uuid: string, status: CallStatus, extra: 
 export interface ListOpts {
   limit?: number;
   offset?: number;
-  day?: string;          // yyyy-mm-dd
+  day?: string;          // single day yyyy-mm-dd
+  from?: string;         // range start yyyy-mm-dd inclusive
+  to?: string;           // range end yyyy-mm-dd inclusive
   campaignId?: string;
+}
+
+function dayRangeMs(day: string): [number, number] {
+  const start = Date.parse(`${day}T00:00:00.000Z`);
+  return [start, start + 24 * 60 * 60 * 1000 - 1];
 }
 
 export async function listCalls(opts: ListOpts = {}): Promise<CallRecord[]> {
   const r = redis();
-  const limit = opts.limit ?? 50;
-  const offset = opts.offset ?? 0;
-  const zset = opts.day ? ZDAY(opts.day) : opts.campaignId ? ZCAMPAIGN(opts.campaignId) : ZALL;
-  const ids = (await r.zrange(zset, offset, offset + limit - 1, { rev: true })) as string[];
+  const limit = opts.limit ?? 500;
+
+  // Pick source zset (per-campaign or all)
+  const zset = opts.campaignId ? ZCAMPAIGN(opts.campaignId) : ZALL;
+
+  let ids: string[];
+  if (opts.from || opts.to || opts.day) {
+    const fromDay = opts.day || opts.from!;
+    const toDay = opts.day || opts.to || opts.from!;
+    const [minScore] = dayRangeMs(fromDay);
+    const [, maxScore] = dayRangeMs(toDay);
+    ids = (await r.zrange(zset, maxScore, minScore, {
+      byScore: true,
+      rev: true,
+      offset: opts.offset ?? 0,
+      count: limit,
+    })) as string[];
+  } else {
+    ids = (await r.zrange(zset, opts.offset ?? 0, (opts.offset ?? 0) + limit - 1, { rev: true })) as string[];
+  }
+
   if (!ids.length) return [];
   const rows = await Promise.all(ids.map((id) => r.get<CallRecord>(KEY(id))));
   return rows.filter((x): x is CallRecord => !!x);
