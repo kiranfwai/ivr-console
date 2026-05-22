@@ -21,10 +21,12 @@ export async function POST(req: NextRequest) {
   const to = normalizePhone(String(phone));
   const base = publicBaseUrl(req);
 
-  // request_uuid won't exist yet — we use a placeholder id, then update once Plivo responds.
-  const tempId = `pending_${Math.random().toString(36).slice(2, 10)}`;
-  const answerUrl = `${base}/api/answer/${campaign.id}?req=${tempId}`;
-  const hangupUrl = `${base}/api/hangup?req=${tempId}`;
+  // Mint our own id BEFORE placing the call and use it as the canonical key everywhere
+  // (URL query `req`, Redis record key, bulk row link). Plivo's request_uuid/CallUUID
+  // arrive later via the answer webhook and get aliased to this id.
+  const internalId = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}`;
+  const hangupUrl = `${base}/api/hangup?req=${internalId}`;
 
   const result = await placeCall({
     to,
@@ -34,10 +36,10 @@ export async function POST(req: NextRequest) {
     fromNumber: campaign.fromNumber || undefined,
   });
 
-  const requestUuid = (result.body && (result.body as any).request_uuid) || tempId;
+  const plivoRequestUuid = result.body && (result.body as any).request_uuid;
 
   const record: CallRecord = {
-    callUuid: requestUuid,
+    callUuid: internalId,
     campaignId: campaign.id,
     campaignName: campaign.name,
     to,
@@ -54,7 +56,7 @@ export async function POST(req: NextRequest) {
   if (bulkJobId && typeof bulkRowIndex === "number") {
     await updateBulkRow(bulkJobId, bulkRowIndex, {
       status: result.ok ? "ok" : "failed",
-      callUuid: requestUuid,
+      callUuid: internalId,
       attemptedAt: record.triggeredAt,
       error: result.ok ? undefined : `Plivo ${result.status}`,
     });
@@ -64,7 +66,8 @@ export async function POST(req: NextRequest) {
     ok: result.ok,
     status: result.status,
     to,
-    callUuid: requestUuid,
+    callUuid: internalId,
+    plivoRequestUuid,
     answerUrl,
     plivo: result.body,
   });
