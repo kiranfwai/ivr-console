@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { background: #0b0d10; color: #e7ecf2; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #1d232c; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #2a323d; }
+
+input, textarea, select, button { font: inherit; }
