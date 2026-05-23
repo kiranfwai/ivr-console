@@ -215,9 +215,8 @@ export async function GET(req: NextRequest) {
   }
 
   // Each section gets a guaranteed CHART_ROWS-row vertical block so the chart
-  // anchor (which is 18 rows tall for pies, 18 rows for bars) doesn't overlap
-  // the next section's data table or header.
-  const CHART_ROWS = 22;
+  // anchor doesn't overlap the next section's data table or header.
+  const CHART_ROWS = 16;
 
   function padToSectionEnd(sectionStart: number) {
     while (charts.rowCount < sectionStart + CHART_ROWS) charts.addRow([]);

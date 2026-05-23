@@ -122,7 +122,7 @@ ${drawingRels.join("\n")}
 // Chart XML builders
 // ============================================================
 function buildChartXml(c: ChartSpec): string {
-  const inner = c.type === "pie" ? buildPieChartXml(c) : buildBarChartXml(c);
+  const parts = c.type === "pie" ? buildPieChartXml(c) : buildBarChartXml(c);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <c:roundedCorners val="0"/>
@@ -134,26 +134,47 @@ function buildChartXml(c: ChartSpec): string {
     <c:autoTitleDeleted val="0"/>
     <c:plotArea>
       <c:layout/>
-      ${inner}
+      ${parts.plotArea}
     </c:plotArea>
+    ${parts.legend}
     <c:plotVisOnly val="1"/>
     <c:dispBlanksAs val="gap"/>
   </c:chart>
 </c:chartSpace>`;
 }
 
-function buildPieChartXml(c: PieSpec): string {
+interface ChartParts {
+  plotArea: string;
+  legend: string;
+}
+
+function buildPieChartXml(c: PieSpec): ChartParts {
   const dataRef = (range: string) => `${quoteSheet(c.dataSheet)}!${absoluteRange(range)}`;
   const colorPts = (c.colors || []).map((hex, i) =>
-    `<c:dPt><c:idx val="${i}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${hex.toUpperCase()}"/></a:solidFill></c:spPr></c:dPt>`
+    `<c:dPt><c:idx val="${i}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${hex.toUpperCase()}"/></a:solidFill><a:ln w="12700"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`
   ).join("");
 
-  return `<c:pieChart>
+  // Data labels on each slice: value + percent, white bold text centered.
+  const dataLabels = `<c:dLbls>
+            <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>
+            <c:dLblPos val="ctr"/>
+            <c:showLegendKey val="0"/>
+            <c:showVal val="1"/>
+            <c:showCatName val="0"/>
+            <c:showSerName val="0"/>
+            <c:showPercent val="1"/>
+            <c:showBubbleSize val="0"/>
+            <c:separator>  ·  </c:separator>
+          </c:dLbls>`;
+
+  return {
+    plotArea: `<c:pieChart>
         <c:varyColors val="1"/>
         <c:ser>
           <c:idx val="0"/>
           <c:order val="0"/>
           ${colorPts}
+          ${dataLabels}
           <c:cat>
             <c:strRef>
               <c:f>${dataRef(c.labelRange)}</c:f>
@@ -166,20 +187,35 @@ function buildPieChartXml(c: PieSpec): string {
           </c:val>
         </c:ser>
         <c:firstSliceAng val="0"/>
-      </c:pieChart>
-      <c:legend>
-        <c:legendPos val="r"/>
-        <c:overlay val="0"/>
-      </c:legend>`;
+      </c:pieChart>`,
+    legend: `<c:legend>
+      <c:legendPos val="r"/>
+      <c:overlay val="0"/>
+      <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>
+    </c:legend>`,
+  };
 }
 
-function buildBarChartXml(c: BarSpec): string {
+function buildBarChartXml(c: BarSpec): ChartParts {
   const dataRef = (range: string) => `${quoteSheet(c.dataSheet)}!${absoluteRange(range)}`;
   const direction = c.direction || "col";
   const color = c.color || "5EEAD4";
   const colorFill = `<c:spPr><a:solidFill><a:srgbClr val="${color.toUpperCase()}"/></a:solidFill></c:spPr>`;
 
-  return `<c:barChart>
+  // Show value at the end of each bar
+  const dataLabels = `<c:dLbls>
+            <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900" b="1"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>
+            <c:dLblPos val="outEnd"/>
+            <c:showLegendKey val="0"/>
+            <c:showVal val="1"/>
+            <c:showCatName val="0"/>
+            <c:showSerName val="0"/>
+            <c:showPercent val="0"/>
+            <c:showBubbleSize val="0"/>
+          </c:dLbls>`;
+
+  return {
+    plotArea: `<c:barChart>
         <c:barDir val="${direction}"/>
         <c:grouping val="clustered"/>
         <c:varyColors val="0"/>
@@ -187,6 +223,7 @@ function buildBarChartXml(c: BarSpec): string {
           <c:idx val="0"/>
           <c:order val="0"/>
           ${colorFill}
+          ${dataLabels}
           <c:cat>
             <c:strRef>
               <c:f>${dataRef(c.labelRange)}</c:f>
@@ -198,7 +235,7 @@ function buildBarChartXml(c: BarSpec): string {
             </c:numRef>
           </c:val>
         </c:ser>
-        <c:gapWidth val="100"/>
+        <c:gapWidth val="80"/>
         <c:axId val="111111111"/>
         <c:axId val="222222222"/>
       </c:barChart>
@@ -208,6 +245,7 @@ function buildBarChartXml(c: BarSpec): string {
         <c:delete val="0"/>
         <c:axPos val="${direction === "col" ? "b" : "l"}"/>
         <c:crossAx val="222222222"/>
+        <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>
       </c:catAx>
       <c:valAx>
         <c:axId val="222222222"/>
@@ -215,7 +253,11 @@ function buildBarChartXml(c: BarSpec): string {
         <c:delete val="0"/>
         <c:axPos val="${direction === "col" ? "l" : "b"}"/>
         <c:crossAx val="111111111"/>
-      </c:valAx>`;
+        <c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="900"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>
+      </c:valAx>`,
+    // Bars usually don't need a legend (axis labels do the job), so omit it.
+    legend: ``,
+  };
 }
 
 // ============================================================
