@@ -1,9 +1,8 @@
 import { NextRequest } from "next/server";
 import ExcelJS from "exceljs";
-import { Resvg } from "@resvg/resvg-js";
 import { listCalls } from "@/lib/calls";
 import { deriveOutcome } from "@/lib/outcome";
-import { pieSvg, barSvg, type Slice, type Bar } from "@/lib/svg-charts";
+import { injectCharts, type ChartSpec } from "@/lib/xlsx-charts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,15 +16,17 @@ const OUTCOME_LABEL: Record<string, string> = {
   error: "Carrier error",
   "in-progress": "In progress",
 };
+// no-# hex for the chart XML
 const OUTCOME_COLOR_HEX: Record<string, string> = {
-  press1: "#22c55e",
-  connected: "#6366f1",
-  busy: "#f59e0b",
-  "no-answer": "#fbbf24",
-  rejected: "#ef4444",
-  error: "#dc2626",
-  "in-progress": "#7a8597",
+  press1: "22C55E",
+  connected: "6366F1",
+  busy: "F59E0B",
+  "no-answer": "FBBF24",
+  rejected: "EF4444",
+  error: "DC2626",
+  "in-progress": "7A8597",
 };
+// ARGB for cell styling
 const OUTCOME_COLOR_ARGB: Record<string, string> = {
   press1: "FF22C55E",
   connected: "FF6366F1",
@@ -35,14 +36,6 @@ const OUTCOME_COLOR_ARGB: Record<string, string> = {
   error: "FFDC2626",
   "in-progress": "FF7A8597",
 };
-
-function svgToPng(svg: string, width: number): Buffer {
-  const resvg = new Resvg(svg, {
-    fitTo: { mode: "width", value: width * 2 },
-    background: "rgba(15,18,24,1)",
-  });
-  return resvg.render().asPng();
-}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -80,38 +73,8 @@ export async function GET(req: NextRequest) {
   const avgDuration = answered ? Math.round(totalDuration / answered) : 0;
   const lifted = (outcomeCounts.press1 || 0) + (outcomeCounts.connected || 0);
   const notLifted = (outcomeCounts.busy || 0) + (outcomeCounts["no-answer"] || 0);
+  const other = Math.max(0, calls.length - lifted - notLifted);
   const press1Count = outcomeCounts.press1 || 0;
-
-  // ----- chart PNGs -----
-  const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
-
-  const liftedSlices: Slice[] = [
-    { label: "Lifted", value: lifted, color: "#22c55e" },
-    { label: "Not lifted", value: notLifted, color: "#f59e0b" },
-    { label: "Other", value: calls.length - lifted - notLifted, color: "#7a8597" },
-  ].filter((s) => s.value > 0);
-  const pieLifted = svgToPng(pieSvg("Lifted vs not lifted", liftedSlices), 640);
-
-  const outcomeSlices: Slice[] = outcomeOrder
-    .filter((o) => outcomeCounts[o])
-    .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
-  const pieOutcomes = svgToPng(pieSvg("Outcome breakdown", outcomeSlices), 640);
-
-  const hourBars: Bar[] = [];
-  for (let h = 0; h < 24; h++) {
-    const key = String(h).padStart(2, "0");
-    if (hourCounts[key]) hourBars.push({ label: `${key}:00`, value: hourCounts[key] });
-  }
-  const barHour = svgToPng(barSvg("Calls by hour (UTC)", hourBars), 1280);
-
-  const campEntries = Object.entries(campaignCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const campBars: Bar[] = campEntries.map(([name, value]) => ({ label: name, value }));
-  const barCamp = svgToPng(barSvg("Calls by campaign", campBars), 1280);
-
-  const outcomeBars: Bar[] = outcomeOrder
-    .filter((o) => outcomeCounts[o])
-    .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
-  const barOutcomes = svgToPng(barSvg("Outcomes (bar view)", outcomeBars), 1280);
 
   // ----- build workbook -----
   const wb = new ExcelJS.Workbook();
@@ -119,7 +82,7 @@ export async function GET(req: NextRequest) {
   wb.created = new Date();
 
   // ============================================================
-  // SHEET 1 — CALL LOGS  (one row per call, all detail)
+  // SHEET 1 — CALL LOGS
   // ============================================================
   const logs = wb.addWorksheet("Call Logs", {
     views: [{ state: "frozen", ySplit: 1, showGridLines: false }],
@@ -142,7 +105,6 @@ export async function GET(req: NextRequest) {
     { header: "Bulk job",        key: "bulk",      width: 22 },
   ];
 
-  // Header row styling
   const hdr = logs.getRow(1);
   hdr.font = { bold: true, color: { argb: "FFE8ECF3" } };
   hdr.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
@@ -175,13 +137,6 @@ export async function GET(req: NextRequest) {
       row.getCell("outcome").fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb + "33" } };
       row.getCell("outcome").font = { color: { argb }, bold: true };
     }
-    // Subtle zebra stripe
-    if (row.number % 2 === 0) {
-      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-        if (colNumber === 5) return; // don't override the outcome fill
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
-      });
-    }
   }
 
   logs.autoFilter = {
@@ -190,155 +145,207 @@ export async function GET(req: NextRequest) {
   };
 
   // ============================================================
-  // SHEET 2 — GRAPHS  (KPI strip on top, charts laid out below)
+  // SHEET 2 — GRAPHS
+  //   Layout: title + KPIs at top, then DATA TABLES (which charts reference),
+  //   then real native chart objects anchored next to / under each table.
   // ============================================================
-  const charts = wb.addWorksheet("Graphs", {
-    views: [{ showGridLines: false }],
-  });
+  const charts = wb.addWorksheet("Graphs", { views: [{ showGridLines: false }] });
+  charts.columns = Array.from({ length: 14 }, () => ({ width: 14 }));
 
-  // Column widths — used as a layout grid for image positioning
-  charts.columns = [
-    { width: 22 }, { width: 14 }, { width: 14 }, { width: 14 },
-    { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
-    { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
-  ];
-
-  // Title block
+  // --- Title block ---
   const titleRow = charts.addRow(["IVR Console — Report"]);
   titleRow.font = { bold: true, size: 18, color: { argb: "FFE8ECF3" } };
   titleRow.height = 30;
-  charts.mergeCells(titleRow.number, 1, titleRow.number, 13);
+  charts.mergeCells(titleRow.number, 1, titleRow.number, 14);
 
-  const subRow = charts.addRow([`Range: ${day || (from && to ? `${from} → ${to}` : "all")}  ·  Campaign: ${campaignId || "all"}  ·  Generated ${new Date().toISOString()}`]);
+  const subRow = charts.addRow([
+    `Range: ${day || (from && to ? `${from} → ${to}` : "all")}  ·  Campaign: ${campaignId || "all"}  ·  Generated ${new Date().toISOString()}`,
+  ]);
   subRow.font = { size: 11, color: { argb: "FF7A8597" } };
-  charts.mergeCells(subRow.number, 1, subRow.number, 13);
-
+  charts.mergeCells(subRow.number, 1, subRow.number, 14);
   charts.addRow([]);
 
-  // KPI strip — 5 boxes across
+  // --- KPI strip ---
   const kpis: { label: string; value: number | string; argb: string }[] = [
-    { label: "TOTAL CALLS",      value: calls.length, argb: "FF5EEAD4" },
-    { label: "LIFTED",           value: lifted,        argb: "FF22C55E" },
-    { label: "PRESS 1",          value: press1Count,   argb: "FF22C55E" },
-    { label: "NOT LIFTED",       value: notLifted,     argb: "FFF59E0B" },
-    { label: "AVG DURATION",     value: `${avgDuration}s`, argb: "FFB8C0CF" },
+    { label: "TOTAL CALLS",  value: calls.length, argb: "FF5EEAD4" },
+    { label: "LIFTED",       value: lifted,       argb: "FF22C55E" },
+    { label: "PRESS 1",      value: press1Count,  argb: "FF22C55E" },
+    { label: "NOT LIFTED",   value: notLifted,    argb: "FFF59E0B" },
+    { label: "AVG DURATION", value: `${avgDuration}s`, argb: "FFB8C0CF" },
   ];
-
-  const kpiLabelRow = charts.addRow([]);
-  const kpiValueRow = charts.addRow([]);
-  kpiLabelRow.height = 18;
-  kpiValueRow.height = 38;
-
+  const kpiLabelRow = charts.addRow([]); kpiLabelRow.height = 18;
+  const kpiValueRow = charts.addRow([]); kpiValueRow.height = 38;
   let colStart = 1;
-  const kpiColSpan = 2; // each KPI spans 2 columns
+  const span = 2;
   for (const k of kpis) {
-    // Label
-    charts.mergeCells(kpiLabelRow.number, colStart, kpiLabelRow.number, colStart + kpiColSpan);
-    const labelCell = charts.getCell(kpiLabelRow.number, colStart);
-    labelCell.value = k.label;
-    labelCell.font = { size: 10, color: { argb: "FF7A8597" }, bold: true };
-    labelCell.alignment = { vertical: "middle", horizontal: "center" };
-    labelCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
-    labelCell.border = topBottom("FF1F2531");
-    // Value
-    charts.mergeCells(kpiValueRow.number, colStart, kpiValueRow.number, colStart + kpiColSpan);
-    const valueCell = charts.getCell(kpiValueRow.number, colStart);
-    valueCell.value = k.value;
-    valueCell.font = { size: 22, color: { argb: k.argb }, bold: true };
-    valueCell.alignment = { vertical: "middle", horizontal: "center" };
-    valueCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
-    valueCell.border = topBottom("FF1F2531");
-    colStart += kpiColSpan + 1; // 1-col gap between KPIs
+    charts.mergeCells(kpiLabelRow.number, colStart, kpiLabelRow.number, colStart + span);
+    const l = charts.getCell(kpiLabelRow.number, colStart);
+    l.value = k.label;
+    l.font = { size: 10, color: { argb: "FF7A8597" }, bold: true };
+    l.alignment = { vertical: "middle", horizontal: "center" };
+    l.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
+
+    charts.mergeCells(kpiValueRow.number, colStart, kpiValueRow.number, colStart + span);
+    const v = charts.getCell(kpiValueRow.number, colStart);
+    v.value = k.value;
+    v.font = { size: 22, color: { argb: k.argb }, bold: true };
+    v.alignment = { vertical: "middle", horizontal: "center" };
+    v.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
+    colStart += span + 1;
   }
+  charts.addRow([]); charts.addRow([]);
 
-  // Spacer
-  charts.addRow([]);
-  charts.addRow([]);
-
-  // Section header helper
-  function sectionHeader(text: string) {
+  // ============================================================
+  // DATA TABLES (charts reference these cells by range)
+  // We append each table tracking its starting row so we can build refs.
+  // ============================================================
+  function addSectionHeader(text: string): number {
     const r = charts.addRow([text]);
     r.font = { bold: true, size: 13, color: { argb: "FF5EEAD4" } };
     r.height = 22;
-    charts.mergeCells(r.number, 1, r.number, 13);
-    charts.addRow([]); // breathing room
+    charts.mergeCells(r.number, 1, r.number, 14);
     return r.number;
   }
 
-  // ─── Section 1: two pies side by side ─────────────────────
-  sectionHeader("Outcome distribution");
-  const pieRowStart = charts.rowCount; // 0-indexed reference for image placement
+  function addTableHeader(): number {
+    const r = charts.addRow(["Label", "Count"]);
+    r.font = { bold: true, color: { argb: "FFE8ECF3" } };
+    r.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
+    return r.number;
+  }
 
-  // Reserve rows for the pies
-  for (let i = 0; i < 17; i++) charts.addRow([]);
+  // --- Table 1: Lifted vs not (3 rows) ---
+  addSectionHeader("Lifted vs not lifted");
+  const t1Header = addTableHeader();
+  const t1Rows = [
+    ["Lifted", lifted],
+    ["Not lifted", notLifted],
+    ["Other", other],
+  ].filter((r) => (r[1] as number) > 0) as [string, number][];
+  for (const r of t1Rows) charts.addRow(r);
+  const t1First = t1Header + 1;
+  const t1Last = t1First + t1Rows.length - 1;
 
-  const pieLiftedId = wb.addImage({ buffer: pieLifted as any, extension: "png" });
-  charts.addImage(pieLiftedId, {
-    tl: { col: 0, row: pieRowStart },
-    ext: { width: 480, height: 280 },
-  });
-  const pieOutcomesId = wb.addImage({ buffer: pieOutcomes as any, extension: "png" });
-  charts.addImage(pieOutcomesId, {
-    tl: { col: 7, row: pieRowStart },
-    ext: { width: 480, height: 280 },
-  });
+  charts.addRow([]); charts.addRow([]);
 
-  charts.addRow([]);
+  // --- Table 2: Outcome breakdown ---
+  const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
+  const t2Rows = outcomeOrder
+    .filter((o) => outcomeCounts[o])
+    .map((o) => ({ key: o, label: OUTCOME_LABEL[o], value: outcomeCounts[o] }));
 
-  // ─── Section 2: outcomes bar (full width) ─────────────────
-  sectionHeader("Outcomes — bar view");
-  const barOutcomesRowStart = charts.rowCount;
-  for (let i = 0; i < 16; i++) charts.addRow([]);
-  const barOutcomesId = wb.addImage({ buffer: barOutcomes as any, extension: "png" });
-  charts.addImage(barOutcomesId, {
-    tl: { col: 0, row: barOutcomesRowStart },
-    ext: { width: 960, height: 285 },
-  });
+  addSectionHeader("Outcome breakdown");
+  const t2Header = addTableHeader();
+  for (const r of t2Rows) {
+    const row = charts.addRow([r.label, r.value]);
+    row.getCell(1).font = { color: { argb: OUTCOME_COLOR_ARGB[r.key] }, bold: true };
+  }
+  const t2First = t2Header + 1;
+  const t2Last = t2First + t2Rows.length - 1;
 
-  charts.addRow([]);
+  charts.addRow([]); charts.addRow([]);
 
-  // ─── Section 3: hourly bar (full width) ───────────────────
-  sectionHeader("Calls by hour (UTC)");
-  const barHourRowStart = charts.rowCount;
-  for (let i = 0; i < 16; i++) charts.addRow([]);
-  const barHourId = wb.addImage({ buffer: barHour as any, extension: "png" });
-  charts.addImage(barHourId, {
-    tl: { col: 0, row: barHourRowStart },
-    ext: { width: 960, height: 285 },
-  });
+  // --- Table 3: Calls by hour ---
+  addSectionHeader("Calls by hour (UTC)");
+  const t3Header = charts.addRow(["Hour", "Calls"]);
+  t3Header.font = { bold: true, color: { argb: "FFE8ECF3" } };
+  t3Header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
+  const t3Rows: [string, number][] = [];
+  for (let h = 0; h < 24; h++) {
+    const key = String(h).padStart(2, "0");
+    if (hourCounts[key]) t3Rows.push([`${key}:00`, hourCounts[key]]);
+  }
+  for (const r of t3Rows) charts.addRow(r);
+  const t3First = t3Header.number + 1;
+  const t3Last = t3First + t3Rows.length - 1;
 
-  charts.addRow([]);
+  charts.addRow([]); charts.addRow([]);
 
-  // ─── Section 4: campaigns bar (full width) ────────────────
-  sectionHeader("Calls by campaign");
-  const barCampRowStart = charts.rowCount;
-  for (let i = 0; i < 16; i++) charts.addRow([]);
-  const barCampId = wb.addImage({ buffer: barCamp as any, extension: "png" });
-  charts.addImage(barCampId, {
-    tl: { col: 0, row: barCampRowStart },
-    ext: { width: 960, height: 285 },
-  });
+  // --- Table 4: Calls by campaign ---
+  addSectionHeader("Calls by campaign");
+  const t4Header = charts.addRow(["Campaign", "Calls"]);
+  t4Header.font = { bold: true, color: { argb: "FFE8ECF3" } };
+  t4Header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
+  const t4Rows = Object.entries(campaignCounts).sort((a, b) => b[1] - a[1]).slice(0, 10) as [string, number][];
+  for (const r of t4Rows) charts.addRow(r);
+  const t4First = t4Header.number + 1;
+  const t4Last = t4First + t4Rows.length - 1;
 
-  // Ensure tab order
+  // ============================================================
+  // Build chart specs that reference the tables above.
+  // Charts anchor in columns D..N (to the right of each data table).
+  // ============================================================
+  // Helper: build "A2:A4" style ranges from row indexes for col A (labels) and B (values)
+  function r(col: "A" | "B", first: number, last: number) {
+    return `${col}${first}:${col}${last}`;
+  }
+
+  const chartSpecs: ChartSpec[] = [];
+  // Native chart pixel sizes are controlled by the anchor cell range; bigger
+  // span = bigger chart. Roughly 5 columns × 14 rows ≈ a comfortable mid-size.
+  if (t1Rows.length) {
+    chartSpecs.push({
+      type: "pie",
+      title: "Lifted vs not lifted",
+      dataSheet: "Graphs",
+      labelRange: r("A", t1First, t1Last),
+      valueRange: r("B", t1First, t1Last),
+      anchor: { fromCol: 4, fromRow: t1Header - 1, toCol: 9, toRow: t1Header + 13 },
+      colors: ["22C55E", "F59E0B", "7A8597"].slice(0, t1Rows.length),
+    });
+  }
+  if (t2Rows.length) {
+    chartSpecs.push({
+      type: "pie",
+      title: "Outcome breakdown",
+      dataSheet: "Graphs",
+      labelRange: r("A", t2First, t2Last),
+      valueRange: r("B", t2First, t2Last),
+      anchor: { fromCol: 4, fromRow: t2Header - 1, toCol: 9, toRow: t2Header + 13 },
+      colors: t2Rows.map((r) => OUTCOME_COLOR_HEX[r.key]),
+    });
+  }
+  if (t3Rows.length) {
+    chartSpecs.push({
+      type: "bar",
+      title: "Calls by hour",
+      dataSheet: "Graphs",
+      labelRange: r("A", t3First, t3Last),
+      valueRange: r("B", t3First, t3Last),
+      anchor: { fromCol: 4, fromRow: t3Header.number - 1, toCol: 13, toRow: t3Header.number + 15 },
+      direction: "col",
+      color: "5EEAD4",
+    });
+  }
+  if (t4Rows.length) {
+    chartSpecs.push({
+      type: "bar",
+      title: "Calls by campaign",
+      dataSheet: "Graphs",
+      labelRange: r("A", t4First, t4Last),
+      valueRange: r("B", t4First, t4Last),
+      anchor: { fromCol: 4, fromRow: t4Header.number - 1, toCol: 13, toRow: t4Header.number + 15 },
+      direction: "bar",
+      color: "5EEAD4",
+    });
+  }
+
+  // ensure tab order
   wb.worksheets.sort((a, b) => {
     const order = ["Call Logs", "Graphs"];
     return order.indexOf(a.name) - order.indexOf(b.name);
   });
 
-  const buf = await wb.xlsx.writeBuffer();
+  // Write base workbook, then splice in real chart objects
+  const baseBuf = await wb.xlsx.writeBuffer();
+  const finalBuf = await injectCharts(baseBuf as ArrayBuffer, "Graphs", chartSpecs);
+
   const filenameRange = day || (from && to ? `${from}_to_${to}` : "all");
-  return new Response(buf, {
+  return new Response(finalBuf, {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename="ivr-report-${filenameRange}.xlsx"`,
     },
   });
-}
-
-function topBottom(argb: string): Partial<ExcelJS.Borders> {
-  return {
-    top: { style: "thin", color: { argb } },
-    bottom: { style: "thin", color: { argb } },
-  };
 }
