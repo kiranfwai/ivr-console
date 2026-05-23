@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import ExcelJS from "exceljs";
+import { Resvg } from "@resvg/resvg-js";
 import { listCalls } from "@/lib/calls";
 import { deriveOutcome } from "@/lib/outcome";
+import { pieSvg, barSvg, type Slice, type Bar } from "@/lib/svg-charts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +17,15 @@ const OUTCOME_LABEL: Record<string, string> = {
   error: "Carrier error",
   "in-progress": "In progress",
 };
-// ARGB hex (ExcelJS expects this format: alpha + RGB, no #)
+const OUTCOME_COLOR_HEX: Record<string, string> = {
+  press1: "#22c55e",
+  connected: "#6366f1",
+  busy: "#f59e0b",
+  "no-answer": "#fbbf24",
+  rejected: "#ef4444",
+  error: "#dc2626",
+  "in-progress": "#7a8597",
+};
 const OUTCOME_COLOR_ARGB: Record<string, string> = {
   press1: "FF22C55E",
   connected: "FF6366F1",
@@ -26,6 +36,14 @@ const OUTCOME_COLOR_ARGB: Record<string, string> = {
   "in-progress": "FF7A8597",
 };
 
+function svgToPng(svg: string, width = 720): Buffer {
+  const resvg = new Resvg(svg, {
+    fitTo: { mode: "width", value: width * 2 }, // 2x for retina-crisp
+    background: "rgba(15,18,24,1)",
+  });
+  return resvg.render().asPng();
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const day = url.searchParams.get("day") || undefined;
@@ -35,7 +53,6 @@ export async function GET(req: NextRequest) {
 
   const calls = await listCalls({ limit: 5000, day, from, to, campaignId });
 
-  // ----- enrich + aggregate -----
   const enriched = calls.map((c) => ({
     ...c,
     outcome: c.hangupAt || c.status === "failed"
@@ -43,6 +60,7 @@ export async function GET(req: NextRequest) {
       : "in-progress",
   }));
 
+  // ----- aggregates -----
   const outcomeCounts: Record<string, number> = {};
   const hourCounts: Record<string, number> = {};
   const campaignCounts: Record<string, number> = {};
@@ -63,15 +81,46 @@ export async function GET(req: NextRequest) {
   const lifted = (outcomeCounts.press1 || 0) + (outcomeCounts.connected || 0);
   const notLifted = (outcomeCounts.busy || 0) + (outcomeCounts["no-answer"] || 0);
 
+  // ----- build PNGs for charts -----
+  const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
+  const pieSlices: Slice[] = outcomeOrder
+    .filter((o) => outcomeCounts[o])
+    .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
+  const outcomePiePng = svgToPng(pieSvg("Outcome breakdown", pieSlices), 720);
+
+  const liftedVsNotPng = svgToPng(
+    pieSvg("Lifted vs not lifted", [
+      { label: "Lifted",     value: lifted,    color: "#22c55e" },
+      { label: "Not lifted", value: notLifted, color: "#f59e0b" },
+      { label: "Other",      value: calls.length - lifted - notLifted, color: "#7a8597" },
+    ]),
+    720
+  );
+
+  const hourBars: Bar[] = [];
+  for (let h = 0; h < 24; h++) {
+    const key = String(h).padStart(2, "0");
+    if (hourCounts[key]) hourBars.push({ label: `${key}:00`, value: hourCounts[key] });
+  }
+  const hourPng = svgToPng(barSvg("Calls by hour (UTC)", hourBars), 900);
+
+  const campEntries = Object.entries(campaignCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const campBars: Bar[] = campEntries.map(([name, value]) => ({ label: name, value }));
+  const campPng = svgToPng(barSvg("Calls by campaign", campBars), 900);
+
+  const outcomeBars: Bar[] = outcomeOrder
+    .filter((o) => outcomeCounts[o])
+    .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
+  const outcomeBarPng = svgToPng(barSvg("Outcomes (bar view)", outcomeBars), 900);
+
   // ----- build workbook -----
   const wb = new ExcelJS.Workbook();
   wb.creator = "IVR Console";
   wb.created = new Date();
 
-  // === SUMMARY SHEET ===
+  // === SUMMARY ===
   const sum = wb.addWorksheet("Summary");
   sum.columns = [{ width: 32 }, { width: 22 }];
-
   styleHeader(sum.addRow(["IVR Console — Report"]));
   sum.addRow([]);
   sum.addRow(["Range", day || (from && to ? `${from} → ${to}` : "all")]);
@@ -79,7 +128,6 @@ export async function GET(req: NextRequest) {
   sum.addRow(["Generated", new Date().toISOString()]);
   sum.addRow(["Total calls", calls.length]);
   sum.addRow([]);
-
   styleHeader(sum.addRow(["KPIs"]));
   sum.addRow(["Lifted", lifted]);
   sum.addRow(["Lift rate (%)", calls.length ? Math.round((lifted / calls.length) * 100) : 0]);
@@ -90,19 +138,11 @@ export async function GET(req: NextRequest) {
   sum.addRow(["Avg duration (sec)", avgDuration]);
   sum.addRow([]);
 
-  styleHeader(sum.addRow(["Outcome breakdown"]));
-  const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
-  for (const o of outcomeOrder) {
-    if (!outcomeCounts[o]) continue;
-    const row = sum.addRow([OUTCOME_LABEL[o], outcomeCounts[o]]);
-    row.getCell(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: OUTCOME_COLOR_ARGB[o] + "33" }, // 20% alpha tint
-    };
-  }
+  // Embed the lifted-vs-not pie on the summary sheet
+  const liftedId = wb.addImage({ buffer: liftedVsNotPng as any, extension: "png" });
+  sum.addImage(liftedId, { tl: { col: 3, row: 1 }, ext: { width: 540, height: 320 } });
 
-  // === CALLS SHEET ===
+  // === CALLS (table) ===
   const calls_ = wb.addWorksheet("Calls");
   calls_.columns = [
     { header: "Triggered (UTC)", key: "triggered", width: 22 },
@@ -121,7 +161,6 @@ export async function GET(req: NextRequest) {
     { header: "Bulk job", key: "bulk", width: 20 },
   ];
   styleHeaderRow(calls_.getRow(1));
-
   for (const c of enriched) {
     const row = calls_.addRow({
       triggered: c.triggeredAt,
@@ -139,86 +178,56 @@ export async function GET(req: NextRequest) {
       uuid: c.callUuid,
       bulk: c.bulkJobId ?? "",
     });
-    // Color-code the outcome cell
     const argb = OUTCOME_COLOR_ARGB[c.outcome];
     if (argb) {
-      row.getCell("outcome").fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: argb + "33" },
-      };
+      row.getCell("outcome").fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb + "33" } };
       row.getCell("outcome").font = { color: { argb }, bold: true };
     }
   }
-  calls_.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: 1, column: calls_.columns.length },
-  };
+  calls_.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: calls_.columns.length } };
   calls_.views = [{ state: "frozen", ySplit: 1 }];
 
-  // === OUTCOMES SHEET (with bar chart-style colored cells; ExcelJS lacks real
-  //     chart objects, so we render a horizontal bar via conditional widths. Each
-  //     row's "bar" cell uses a wide fill proportional to count.) ===
+  // === OUTCOMES (pie + bar) ===
   const oc = wb.addWorksheet("Outcomes");
-  oc.columns = [
-    { header: "Outcome", key: "label", width: 24 },
-    { header: "Count", key: "count", width: 10 },
-    { header: "Share %", key: "pct", width: 10 },
-    { header: "Bar (visual)", key: "bar", width: 50 },
-  ];
-  styleHeaderRow(oc.getRow(1));
-  const maxOutcome = Math.max(1, ...Object.values(outcomeCounts));
+  oc.columns = [{ width: 24 }, { width: 10 }, { width: 10 }];
+  styleHeaderRow(oc.addRow(["Outcome", "Count", "Share %"]));
+  const maxOc = Math.max(1, ...Object.values(outcomeCounts));
   for (const o of outcomeOrder) {
     if (!outcomeCounts[o]) continue;
     const cnt = outcomeCounts[o];
     const pct = calls.length ? Math.round((cnt / calls.length) * 100) : 0;
-    const barLen = Math.max(1, Math.round((cnt / maxOutcome) * 40));
-    const row = oc.addRow({
-      label: OUTCOME_LABEL[o],
-      count: cnt,
-      pct,
-      bar: "█".repeat(barLen),
-    });
-    row.getCell("bar").font = { color: { argb: OUTCOME_COLOR_ARGB[o] }, name: "Consolas" };
+    const row = oc.addRow([OUTCOME_LABEL[o], cnt, pct]);
+    row.getCell(1).font = { color: { argb: OUTCOME_COLOR_ARGB[o] }, bold: true };
   }
+  const ocPieId = wb.addImage({ buffer: outcomePiePng as any, extension: "png" });
+  oc.addImage(ocPieId, { tl: { col: 4, row: 0 }, ext: { width: 540, height: 320 } });
+  const ocBarId = wb.addImage({ buffer: outcomeBarPng as any, extension: "png" });
+  oc.addImage(ocBarId, { tl: { col: 4, row: 18 }, ext: { width: 680, height: 285 } });
 
-  // === HOURLY SHEET ===
+  // === HOURLY (bar) ===
   const hr = wb.addWorksheet("Hourly");
-  hr.columns = [
-    { header: "Hour (UTC)", key: "hour", width: 12 },
-    { header: "Calls", key: "calls", width: 10 },
-    { header: "Bar", key: "bar", width: 50 },
-  ];
-  styleHeaderRow(hr.getRow(1));
-  const maxHour = Math.max(1, ...Object.values(hourCounts));
+  hr.columns = [{ width: 12 }, { width: 10 }];
+  styleHeaderRow(hr.addRow(["Hour (UTC)", "Calls"]));
   for (let h = 0; h < 24; h++) {
     const key = String(h).padStart(2, "0");
     const cnt = hourCounts[key] || 0;
     if (cnt === 0) continue;
-    const barLen = Math.max(1, Math.round((cnt / maxHour) * 40));
-    const row = hr.addRow({ hour: `${key}:00`, calls: cnt, bar: "█".repeat(barLen) });
-    row.getCell("bar").font = { color: { argb: "FF5EEAD4" }, name: "Consolas" };
+    hr.addRow([`${key}:00`, cnt]);
   }
+  const hrBarId = wb.addImage({ buffer: hourPng as any, extension: "png" });
+  hr.addImage(hrBarId, { tl: { col: 3, row: 0 }, ext: { width: 680, height: 285 } });
 
-  // === CAMPAIGNS SHEET ===
+  // === CAMPAIGNS (bar) ===
   const cmp = wb.addWorksheet("Campaigns");
-  cmp.columns = [
-    { header: "Campaign", key: "name", width: 24 },
-    { header: "Calls", key: "calls", width: 10 },
-    { header: "Share %", key: "pct", width: 10 },
-    { header: "Bar", key: "bar", width: 50 },
-  ];
-  styleHeaderRow(cmp.getRow(1));
-  const campEntries = Object.entries(campaignCounts).sort((a, b) => b[1] - a[1]);
-  const maxCamp = Math.max(1, ...campEntries.map(([, v]) => v));
+  cmp.columns = [{ width: 24 }, { width: 10 }, { width: 10 }];
+  styleHeaderRow(cmp.addRow(["Campaign", "Calls", "Share %"]));
   for (const [name, cnt] of campEntries) {
     const pct = calls.length ? Math.round((cnt / calls.length) * 100) : 0;
-    const barLen = Math.max(1, Math.round((cnt / maxCamp) * 40));
-    const row = cmp.addRow({ name, calls: cnt, pct, bar: "█".repeat(barLen) });
-    row.getCell("bar").font = { color: { argb: "FF5EEAD4" }, name: "Consolas" };
+    cmp.addRow([name, cnt, pct]);
   }
+  const cmpBarId = wb.addImage({ buffer: campPng as any, extension: "png" });
+  cmp.addImage(cmpBarId, { tl: { col: 4, row: 0 }, ext: { width: 680, height: 285 } });
 
-  // Re-order so Summary is first (it already is, but ensure)
   wb.worksheets.sort((a, b) => {
     const order = ["Summary", "Calls", "Outcomes", "Hourly", "Campaigns"];
     return order.indexOf(a.name) - order.indexOf(b.name);
