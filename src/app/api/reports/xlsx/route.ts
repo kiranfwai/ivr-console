@@ -36,9 +36,9 @@ const OUTCOME_COLOR_ARGB: Record<string, string> = {
   "in-progress": "FF7A8597",
 };
 
-function svgToPng(svg: string, width = 720): Buffer {
+function svgToPng(svg: string, width: number): Buffer {
   const resvg = new Resvg(svg, {
-    fitTo: { mode: "width", value: width * 2 }, // 2x for retina-crisp
+    fitTo: { mode: "width", value: width * 2 },
     background: "rgba(15,18,24,1)",
   });
   return resvg.render().asPng();
@@ -80,89 +80,80 @@ export async function GET(req: NextRequest) {
   const avgDuration = answered ? Math.round(totalDuration / answered) : 0;
   const lifted = (outcomeCounts.press1 || 0) + (outcomeCounts.connected || 0);
   const notLifted = (outcomeCounts.busy || 0) + (outcomeCounts["no-answer"] || 0);
+  const press1Count = outcomeCounts.press1 || 0;
 
-  // ----- build PNGs for charts -----
+  // ----- chart PNGs -----
   const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
-  const pieSlices: Slice[] = outcomeOrder
+
+  const liftedSlices: Slice[] = [
+    { label: "Lifted", value: lifted, color: "#22c55e" },
+    { label: "Not lifted", value: notLifted, color: "#f59e0b" },
+    { label: "Other", value: calls.length - lifted - notLifted, color: "#7a8597" },
+  ].filter((s) => s.value > 0);
+  const pieLifted = svgToPng(pieSvg("Lifted vs not lifted", liftedSlices), 640);
+
+  const outcomeSlices: Slice[] = outcomeOrder
     .filter((o) => outcomeCounts[o])
     .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
-  const outcomePiePng = svgToPng(pieSvg("Outcome breakdown", pieSlices), 720);
-
-  const liftedVsNotPng = svgToPng(
-    pieSvg("Lifted vs not lifted", [
-      { label: "Lifted",     value: lifted,    color: "#22c55e" },
-      { label: "Not lifted", value: notLifted, color: "#f59e0b" },
-      { label: "Other",      value: calls.length - lifted - notLifted, color: "#7a8597" },
-    ]),
-    720
-  );
+  const pieOutcomes = svgToPng(pieSvg("Outcome breakdown", outcomeSlices), 640);
 
   const hourBars: Bar[] = [];
   for (let h = 0; h < 24; h++) {
     const key = String(h).padStart(2, "0");
     if (hourCounts[key]) hourBars.push({ label: `${key}:00`, value: hourCounts[key] });
   }
-  const hourPng = svgToPng(barSvg("Calls by hour (UTC)", hourBars), 900);
+  const barHour = svgToPng(barSvg("Calls by hour (UTC)", hourBars), 1280);
 
   const campEntries = Object.entries(campaignCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
   const campBars: Bar[] = campEntries.map(([name, value]) => ({ label: name, value }));
-  const campPng = svgToPng(barSvg("Calls by campaign", campBars), 900);
+  const barCamp = svgToPng(barSvg("Calls by campaign", campBars), 1280);
 
   const outcomeBars: Bar[] = outcomeOrder
     .filter((o) => outcomeCounts[o])
     .map((o) => ({ label: OUTCOME_LABEL[o], value: outcomeCounts[o], color: OUTCOME_COLOR_HEX[o] }));
-  const outcomeBarPng = svgToPng(barSvg("Outcomes (bar view)", outcomeBars), 900);
+  const barOutcomes = svgToPng(barSvg("Outcomes (bar view)", outcomeBars), 1280);
 
   // ----- build workbook -----
   const wb = new ExcelJS.Workbook();
   wb.creator = "IVR Console";
   wb.created = new Date();
 
-  // === SUMMARY ===
-  const sum = wb.addWorksheet("Summary");
-  sum.columns = [{ width: 32 }, { width: 22 }];
-  styleHeader(sum.addRow(["IVR Console — Report"]));
-  sum.addRow([]);
-  sum.addRow(["Range", day || (from && to ? `${from} → ${to}` : "all")]);
-  sum.addRow(["Campaign filter", campaignId || "all"]);
-  sum.addRow(["Generated", new Date().toISOString()]);
-  sum.addRow(["Total calls", calls.length]);
-  sum.addRow([]);
-  styleHeader(sum.addRow(["KPIs"]));
-  sum.addRow(["Lifted", lifted]);
-  sum.addRow(["Lift rate (%)", calls.length ? Math.round((lifted / calls.length) * 100) : 0]);
-  sum.addRow(["Press 1", outcomeCounts.press1 || 0]);
-  sum.addRow(["Press-1 rate (%)", calls.length ? Math.round(((outcomeCounts.press1 || 0) / calls.length) * 100) : 0]);
-  sum.addRow(["Not lifted (busy + no-answer)", notLifted]);
-  sum.addRow(["Answered", answered]);
-  sum.addRow(["Avg duration (sec)", avgDuration]);
-  sum.addRow([]);
+  // ============================================================
+  // SHEET 1 — CALL LOGS  (one row per call, all detail)
+  // ============================================================
+  const logs = wb.addWorksheet("Call Logs", {
+    views: [{ state: "frozen", ySplit: 1, showGridLines: false }],
+  });
 
-  // Embed the lifted-vs-not pie on the summary sheet
-  const liftedId = wb.addImage({ buffer: liftedVsNotPng as any, extension: "png" });
-  sum.addImage(liftedId, { tl: { col: 3, row: 1 }, ext: { width: 540, height: 320 } });
-
-  // === CALLS (table) ===
-  const calls_ = wb.addWorksheet("Calls");
-  calls_.columns = [
+  logs.columns = [
     { header: "Triggered (UTC)", key: "triggered", width: 22 },
-    { header: "To", key: "to", width: 16 },
-    { header: "From", key: "from", width: 16 },
-    { header: "Campaign", key: "campaign", width: 22 },
-    { header: "Outcome", key: "outcome", width: 20 },
-    { header: "Status", key: "status", width: 12 },
-    { header: "Digit", key: "digit", width: 7 },
-    { header: "Duration (s)", key: "duration", width: 12 },
-    { header: "Answered at", key: "answered", width: 22 },
-    { header: "Hangup at", key: "hangup", width: 22 },
-    { header: "Hangup cause", key: "cause", width: 24 },
-    { header: "Pabbly status", key: "pabbly", width: 13 },
-    { header: "Call UUID", key: "uuid", width: 36 },
-    { header: "Bulk job", key: "bulk", width: 20 },
+    { header: "To",              key: "to",        width: 16 },
+    { header: "From",            key: "from",      width: 16 },
+    { header: "Campaign",        key: "campaign",  width: 22 },
+    { header: "Outcome",         key: "outcome",   width: 22 },
+    { header: "Status",          key: "status",    width: 12 },
+    { header: "Digit",           key: "digit",     width: 7 },
+    { header: "Duration (s)",    key: "duration",  width: 12 },
+    { header: "Answered at",     key: "answered",  width: 22 },
+    { header: "Hangup at",       key: "hangup",    width: 22 },
+    { header: "Hangup cause",    key: "cause",     width: 26 },
+    { header: "Pabbly status",   key: "pabbly",    width: 13 },
+    { header: "Call UUID",       key: "uuid",      width: 36 },
+    { header: "Bulk job",        key: "bulk",      width: 22 },
   ];
-  styleHeaderRow(calls_.getRow(1));
+
+  // Header row styling
+  const hdr = logs.getRow(1);
+  hdr.font = { bold: true, color: { argb: "FFE8ECF3" } };
+  hdr.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
+  hdr.alignment = { vertical: "middle", horizontal: "left" };
+  hdr.height = 26;
+  hdr.eachCell((cell) => {
+    cell.border = { bottom: { style: "medium", color: { argb: "FF5EEAD4" } } };
+  });
+
   for (const c of enriched) {
-    const row = calls_.addRow({
+    const row = logs.addRow({
       triggered: c.triggeredAt,
       to: c.to,
       from: c.from,
@@ -178,58 +169,159 @@ export async function GET(req: NextRequest) {
       uuid: c.callUuid,
       bulk: c.bulkJobId ?? "",
     });
+    row.alignment = { vertical: "middle" };
     const argb = OUTCOME_COLOR_ARGB[c.outcome];
     if (argb) {
       row.getCell("outcome").fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb + "33" } };
       row.getCell("outcome").font = { color: { argb }, bold: true };
     }
+    // Subtle zebra stripe
+    if (row.number % 2 === 0) {
+      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        if (colNumber === 5) return; // don't override the outcome fill
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+      });
+    }
   }
-  calls_.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: calls_.columns.length } };
-  calls_.views = [{ state: "frozen", ySplit: 1 }];
 
-  // === OUTCOMES (pie + bar) ===
-  const oc = wb.addWorksheet("Outcomes");
-  oc.columns = [{ width: 24 }, { width: 10 }, { width: 10 }];
-  styleHeaderRow(oc.addRow(["Outcome", "Count", "Share %"]));
-  const maxOc = Math.max(1, ...Object.values(outcomeCounts));
-  for (const o of outcomeOrder) {
-    if (!outcomeCounts[o]) continue;
-    const cnt = outcomeCounts[o];
-    const pct = calls.length ? Math.round((cnt / calls.length) * 100) : 0;
-    const row = oc.addRow([OUTCOME_LABEL[o], cnt, pct]);
-    row.getCell(1).font = { color: { argb: OUTCOME_COLOR_ARGB[o] }, bold: true };
+  logs.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: logs.columns.length },
+  };
+
+  // ============================================================
+  // SHEET 2 — GRAPHS  (KPI strip on top, charts laid out below)
+  // ============================================================
+  const charts = wb.addWorksheet("Graphs", {
+    views: [{ showGridLines: false }],
+  });
+
+  // Column widths — used as a layout grid for image positioning
+  charts.columns = [
+    { width: 22 }, { width: 14 }, { width: 14 }, { width: 14 },
+    { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
+    { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
+  ];
+
+  // Title block
+  const titleRow = charts.addRow(["IVR Console — Report"]);
+  titleRow.font = { bold: true, size: 18, color: { argb: "FFE8ECF3" } };
+  titleRow.height = 30;
+  charts.mergeCells(titleRow.number, 1, titleRow.number, 13);
+
+  const subRow = charts.addRow([`Range: ${day || (from && to ? `${from} → ${to}` : "all")}  ·  Campaign: ${campaignId || "all"}  ·  Generated ${new Date().toISOString()}`]);
+  subRow.font = { size: 11, color: { argb: "FF7A8597" } };
+  charts.mergeCells(subRow.number, 1, subRow.number, 13);
+
+  charts.addRow([]);
+
+  // KPI strip — 5 boxes across
+  const kpis: { label: string; value: number | string; argb: string }[] = [
+    { label: "TOTAL CALLS",      value: calls.length, argb: "FF5EEAD4" },
+    { label: "LIFTED",           value: lifted,        argb: "FF22C55E" },
+    { label: "PRESS 1",          value: press1Count,   argb: "FF22C55E" },
+    { label: "NOT LIFTED",       value: notLifted,     argb: "FFF59E0B" },
+    { label: "AVG DURATION",     value: `${avgDuration}s`, argb: "FFB8C0CF" },
+  ];
+
+  const kpiLabelRow = charts.addRow([]);
+  const kpiValueRow = charts.addRow([]);
+  kpiLabelRow.height = 18;
+  kpiValueRow.height = 38;
+
+  let colStart = 1;
+  const kpiColSpan = 2; // each KPI spans 2 columns
+  for (const k of kpis) {
+    // Label
+    charts.mergeCells(kpiLabelRow.number, colStart, kpiLabelRow.number, colStart + kpiColSpan);
+    const labelCell = charts.getCell(kpiLabelRow.number, colStart);
+    labelCell.value = k.label;
+    labelCell.font = { size: 10, color: { argb: "FF7A8597" }, bold: true };
+    labelCell.alignment = { vertical: "middle", horizontal: "center" };
+    labelCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
+    labelCell.border = topBottom("FF1F2531");
+    // Value
+    charts.mergeCells(kpiValueRow.number, colStart, kpiValueRow.number, colStart + kpiColSpan);
+    const valueCell = charts.getCell(kpiValueRow.number, colStart);
+    valueCell.value = k.value;
+    valueCell.font = { size: 22, color: { argb: k.argb }, bold: true };
+    valueCell.alignment = { vertical: "middle", horizontal: "center" };
+    valueCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F1218" } };
+    valueCell.border = topBottom("FF1F2531");
+    colStart += kpiColSpan + 1; // 1-col gap between KPIs
   }
-  const ocPieId = wb.addImage({ buffer: outcomePiePng as any, extension: "png" });
-  oc.addImage(ocPieId, { tl: { col: 4, row: 0 }, ext: { width: 540, height: 320 } });
-  const ocBarId = wb.addImage({ buffer: outcomeBarPng as any, extension: "png" });
-  oc.addImage(ocBarId, { tl: { col: 4, row: 18 }, ext: { width: 680, height: 285 } });
 
-  // === HOURLY (bar) ===
-  const hr = wb.addWorksheet("Hourly");
-  hr.columns = [{ width: 12 }, { width: 10 }];
-  styleHeaderRow(hr.addRow(["Hour (UTC)", "Calls"]));
-  for (let h = 0; h < 24; h++) {
-    const key = String(h).padStart(2, "0");
-    const cnt = hourCounts[key] || 0;
-    if (cnt === 0) continue;
-    hr.addRow([`${key}:00`, cnt]);
+  // Spacer
+  charts.addRow([]);
+  charts.addRow([]);
+
+  // Section header helper
+  function sectionHeader(text: string) {
+    const r = charts.addRow([text]);
+    r.font = { bold: true, size: 13, color: { argb: "FF5EEAD4" } };
+    r.height = 22;
+    charts.mergeCells(r.number, 1, r.number, 13);
+    charts.addRow([]); // breathing room
+    return r.number;
   }
-  const hrBarId = wb.addImage({ buffer: hourPng as any, extension: "png" });
-  hr.addImage(hrBarId, { tl: { col: 3, row: 0 }, ext: { width: 680, height: 285 } });
 
-  // === CAMPAIGNS (bar) ===
-  const cmp = wb.addWorksheet("Campaigns");
-  cmp.columns = [{ width: 24 }, { width: 10 }, { width: 10 }];
-  styleHeaderRow(cmp.addRow(["Campaign", "Calls", "Share %"]));
-  for (const [name, cnt] of campEntries) {
-    const pct = calls.length ? Math.round((cnt / calls.length) * 100) : 0;
-    cmp.addRow([name, cnt, pct]);
-  }
-  const cmpBarId = wb.addImage({ buffer: campPng as any, extension: "png" });
-  cmp.addImage(cmpBarId, { tl: { col: 4, row: 0 }, ext: { width: 680, height: 285 } });
+  // ─── Section 1: two pies side by side ─────────────────────
+  sectionHeader("Outcome distribution");
+  const pieRowStart = charts.rowCount; // 0-indexed reference for image placement
 
+  // Reserve rows for the pies
+  for (let i = 0; i < 17; i++) charts.addRow([]);
+
+  const pieLiftedId = wb.addImage({ buffer: pieLifted as any, extension: "png" });
+  charts.addImage(pieLiftedId, {
+    tl: { col: 0, row: pieRowStart },
+    ext: { width: 480, height: 280 },
+  });
+  const pieOutcomesId = wb.addImage({ buffer: pieOutcomes as any, extension: "png" });
+  charts.addImage(pieOutcomesId, {
+    tl: { col: 7, row: pieRowStart },
+    ext: { width: 480, height: 280 },
+  });
+
+  charts.addRow([]);
+
+  // ─── Section 2: outcomes bar (full width) ─────────────────
+  sectionHeader("Outcomes — bar view");
+  const barOutcomesRowStart = charts.rowCount;
+  for (let i = 0; i < 16; i++) charts.addRow([]);
+  const barOutcomesId = wb.addImage({ buffer: barOutcomes as any, extension: "png" });
+  charts.addImage(barOutcomesId, {
+    tl: { col: 0, row: barOutcomesRowStart },
+    ext: { width: 960, height: 285 },
+  });
+
+  charts.addRow([]);
+
+  // ─── Section 3: hourly bar (full width) ───────────────────
+  sectionHeader("Calls by hour (UTC)");
+  const barHourRowStart = charts.rowCount;
+  for (let i = 0; i < 16; i++) charts.addRow([]);
+  const barHourId = wb.addImage({ buffer: barHour as any, extension: "png" });
+  charts.addImage(barHourId, {
+    tl: { col: 0, row: barHourRowStart },
+    ext: { width: 960, height: 285 },
+  });
+
+  charts.addRow([]);
+
+  // ─── Section 4: campaigns bar (full width) ────────────────
+  sectionHeader("Calls by campaign");
+  const barCampRowStart = charts.rowCount;
+  for (let i = 0; i < 16; i++) charts.addRow([]);
+  const barCampId = wb.addImage({ buffer: barCamp as any, extension: "png" });
+  charts.addImage(barCampId, {
+    tl: { col: 0, row: barCampRowStart },
+    ext: { width: 960, height: 285 },
+  });
+
+  // Ensure tab order
   wb.worksheets.sort((a, b) => {
-    const order = ["Summary", "Calls", "Outcomes", "Hourly", "Campaigns"];
+    const order = ["Call Logs", "Graphs"];
     return order.indexOf(a.name) - order.indexOf(b.name);
   });
 
@@ -244,12 +336,9 @@ export async function GET(req: NextRequest) {
   });
 }
 
-function styleHeader(row: ExcelJS.Row) {
-  row.font = { bold: true, size: 12, color: { argb: "FF5EEAD4" } };
-}
-function styleHeaderRow(row: ExcelJS.Row) {
-  row.font = { bold: true, color: { argb: "FFE8ECF3" } };
-  row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2531" } };
-  row.alignment = { vertical: "middle" };
-  row.height = 22;
+function topBottom(argb: string): Partial<ExcelJS.Borders> {
+  return {
+    top: { style: "thin", color: { argb } },
+    bottom: { style: "thin", color: { argb } },
+  };
 }
