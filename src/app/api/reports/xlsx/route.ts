@@ -214,7 +214,17 @@ export async function GET(req: NextRequest) {
     return r.number;
   }
 
-  // --- Table 1: Lifted vs not (3 rows) ---
+  // Each section gets a guaranteed CHART_ROWS-row vertical block so the chart
+  // anchor (which is 18 rows tall for pies, 18 rows for bars) doesn't overlap
+  // the next section's data table or header.
+  const CHART_ROWS = 22;
+
+  function padToSectionEnd(sectionStart: number) {
+    while (charts.rowCount < sectionStart + CHART_ROWS) charts.addRow([]);
+  }
+
+  // --- Section 1: Lifted vs not lifted ---
+  const s1Start = charts.rowCount + 1;
   addSectionHeader("Lifted vs not lifted");
   const t1Header = addTableHeader();
   const t1Rows = [
@@ -225,15 +235,15 @@ export async function GET(req: NextRequest) {
   for (const r of t1Rows) charts.addRow(r);
   const t1First = t1Header + 1;
   const t1Last = t1First + t1Rows.length - 1;
+  padToSectionEnd(s1Start);
 
-  charts.addRow([]); charts.addRow([]);
-
-  // --- Table 2: Outcome breakdown ---
+  // --- Section 2: Outcome breakdown ---
   const outcomeOrder = ["press1", "connected", "busy", "no-answer", "rejected", "error", "in-progress"];
   const t2Rows = outcomeOrder
     .filter((o) => outcomeCounts[o])
     .map((o) => ({ key: o, label: OUTCOME_LABEL[o], value: outcomeCounts[o] }));
 
+  const s2Start = charts.rowCount + 1;
   addSectionHeader("Outcome breakdown");
   const t2Header = addTableHeader();
   for (const r of t2Rows) {
@@ -242,10 +252,10 @@ export async function GET(req: NextRequest) {
   }
   const t2First = t2Header + 1;
   const t2Last = t2First + t2Rows.length - 1;
+  padToSectionEnd(s2Start);
 
-  charts.addRow([]); charts.addRow([]);
-
-  // --- Table 3: Calls by hour ---
+  // --- Section 3: Calls by hour ---
+  const s3Start = charts.rowCount + 1;
   addSectionHeader("Calls by hour (UTC)");
   const t3Header = charts.addRow(["Hour", "Calls"]);
   t3Header.font = { bold: true, color: { argb: "FFE8ECF3" } };
@@ -258,10 +268,10 @@ export async function GET(req: NextRequest) {
   for (const r of t3Rows) charts.addRow(r);
   const t3First = t3Header.number + 1;
   const t3Last = t3First + t3Rows.length - 1;
+  padToSectionEnd(s3Start);
 
-  charts.addRow([]); charts.addRow([]);
-
-  // --- Table 4: Calls by campaign ---
+  // --- Section 4: Calls by campaign ---
+  const s4Start = charts.rowCount + 1;
   addSectionHeader("Calls by campaign");
   const t4Header = charts.addRow(["Campaign", "Calls"]);
   t4Header.font = { bold: true, color: { argb: "FFE8ECF3" } };
@@ -270,6 +280,7 @@ export async function GET(req: NextRequest) {
   for (const r of t4Rows) charts.addRow(r);
   const t4First = t4Header.number + 1;
   const t4Last = t4First + t4Rows.length - 1;
+  padToSectionEnd(s4Start);
 
   // ============================================================
   // Build chart specs that reference the tables above.
@@ -281,8 +292,10 @@ export async function GET(req: NextRequest) {
   }
 
   const chartSpecs: ChartSpec[] = [];
-  // Native chart pixel sizes are controlled by the anchor cell range; bigger
-  // span = bigger chart. Roughly 5 columns × 14 rows ≈ a comfortable mid-size.
+  // Anchor charts so they span the entire section block (CHART_ROWS rows tall).
+  // Pies need square-ish aspect: 8 cols × 21 rows ≈ ~512×316 px (close enough
+  // for Excel to render proper circles after Excel's column-width defaults).
+  // Bars get full width: 10 cols × 21 rows.
   if (t1Rows.length) {
     chartSpecs.push({
       type: "pie",
@@ -290,7 +303,7 @@ export async function GET(req: NextRequest) {
       dataSheet: "Graphs",
       labelRange: r("A", t1First, t1Last),
       valueRange: r("B", t1First, t1Last),
-      anchor: { fromCol: 4, fromRow: t1Header - 1, toCol: 9, toRow: t1Header + 13 },
+      anchor: { fromCol: 4, fromRow: s1Start - 1, toCol: 12, toRow: s1Start + CHART_ROWS - 2 },
       colors: ["22C55E", "F59E0B", "7A8597"].slice(0, t1Rows.length),
     });
   }
@@ -301,7 +314,7 @@ export async function GET(req: NextRequest) {
       dataSheet: "Graphs",
       labelRange: r("A", t2First, t2Last),
       valueRange: r("B", t2First, t2Last),
-      anchor: { fromCol: 4, fromRow: t2Header - 1, toCol: 9, toRow: t2Header + 13 },
+      anchor: { fromCol: 4, fromRow: s2Start - 1, toCol: 12, toRow: s2Start + CHART_ROWS - 2 },
       colors: t2Rows.map((r) => OUTCOME_COLOR_HEX[r.key]),
     });
   }
@@ -312,7 +325,7 @@ export async function GET(req: NextRequest) {
       dataSheet: "Graphs",
       labelRange: r("A", t3First, t3Last),
       valueRange: r("B", t3First, t3Last),
-      anchor: { fromCol: 4, fromRow: t3Header.number - 1, toCol: 13, toRow: t3Header.number + 15 },
+      anchor: { fromCol: 4, fromRow: s3Start - 1, toCol: 14, toRow: s3Start + CHART_ROWS - 2 },
       direction: "col",
       color: "5EEAD4",
     });
@@ -324,7 +337,7 @@ export async function GET(req: NextRequest) {
       dataSheet: "Graphs",
       labelRange: r("A", t4First, t4Last),
       valueRange: r("B", t4First, t4Last),
-      anchor: { fromCol: 4, fromRow: t4Header.number - 1, toCol: 13, toRow: t4Header.number + 15 },
+      anchor: { fromCol: 4, fromRow: s4Start - 1, toCol: 14, toRow: s4Start + CHART_ROWS - 2 },
       direction: "bar",
       color: "5EEAD4",
     });
