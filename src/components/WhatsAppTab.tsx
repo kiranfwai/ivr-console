@@ -38,6 +38,7 @@ function ModeBtn({ active, onClick, icon, label }: { active: boolean; onClick: (
 function SingleSend() {
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
   const [extra, setExtra] = useState("");
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<any>(null);
@@ -54,7 +55,12 @@ function SingleSend() {
       const r = await fetch("/api/whatsapp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, name: name || undefined, extra: extraObj }),
+        body: JSON.stringify({
+          phone,
+          name: name || undefined,
+          webhookUrl: webhookUrl || undefined,
+          extra: extraObj,
+        }),
       });
       const j = await r.json();
       setLast(j);
@@ -67,7 +73,7 @@ function SingleSend() {
 
   return (
     <>
-      <Card title="Send a single WhatsApp" description="Fires PABBLY_WEBHOOK_URL directly, no Plivo involved.">
+      <Card title="Send a single WhatsApp" description="Fires Pabbly directly, no Plivo involved.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <Label>Phone</Label>
@@ -76,6 +82,14 @@ function SingleSend() {
           <div>
             <Label hint="optional">Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Animesh" />
+          </div>
+          <div className="md:col-span-2">
+            <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
+            <Input
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder="https://connect.pabbly.com/webhook-listener/..."
+            />
           </div>
           <div className="md:col-span-2">
             <Label hint="optional · merged into payload">Extra JSON</Label>
