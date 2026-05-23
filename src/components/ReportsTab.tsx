@@ -103,6 +103,13 @@ export default function ReportsTab() {
     if (campaign) csvQs.set("campaign", campaign);
     window.open(`/api/reports/csv?${csvQs.toString()}`, "_blank");
   }
+  function downloadXlsx() {
+    const xQs = new URLSearchParams();
+    if (from) xQs.set("from", from);
+    if (to) xQs.set("to", to);
+    if (campaign) xQs.set("campaign", campaign);
+    window.open(`/api/reports/xlsx?${xQs.toString()}`, "_blank");
+  }
 
   const isToday = from === todayKey() && to === todayKey();
   const isYesterday = from === offsetDay(-1) && to === offsetDay(-1);
@@ -157,8 +164,11 @@ export default function ReportsTab() {
             <Button variant="ghost" onClick={reload} loading={loading} leftIcon={!loading && <RefreshCw size={14} />}>
               Refresh
             </Button>
-            <Button onClick={downloadCsv} disabled={!data?.totals.total} leftIcon={<Download size={14} />}>
+            <Button variant="ghost" onClick={downloadCsv} disabled={!data?.totals.total} leftIcon={<Download size={14} />}>
               CSV
+            </Button>
+            <Button onClick={downloadXlsx} disabled={!data?.totals.total} leftIcon={<Download size={14} />}>
+              Excel
             </Button>
           </div>
         </div>
