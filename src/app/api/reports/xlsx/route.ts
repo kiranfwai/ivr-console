@@ -44,7 +44,13 @@ export async function GET(req: NextRequest) {
   const to = url.searchParams.get("to") || undefined;
   const campaignId = url.searchParams.get("campaign") || undefined;
 
-  const calls = await listCalls({ limit: 5000, day, from, to, campaignId });
+  // Row-level export must materialize records (unlike the counter-based KPIs).
+  // Cap to keep the function within memory/time limits; narrow the range for more.
+  const EXPORT_CAP = 50000;
+  const calls = await listCalls({ limit: EXPORT_CAP, day, from, to, campaignId });
+  if (calls.length >= EXPORT_CAP) {
+    console.warn(`[reports/xlsx] export hit ${EXPORT_CAP}-row cap for range ${from || day}..${to || day}`);
+  }
 
   const enriched = calls.map((c) => ({
     ...c,

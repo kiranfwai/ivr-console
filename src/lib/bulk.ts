@@ -44,20 +44,56 @@ export async function listBulkJobs(limit = 20): Promise<BulkJob[]> {
   return rows.filter((x): x is BulkJob => !!x);
 }
 
+/**
+ * Atomically merge `patch` into a single bulk row.
+ *
+ * This MUST be atomic: the browser driver (firing /api/call) and Plivo's async
+ * /api/hangup callbacks write to the same job blob concurrently. A naive
+ * get-modify-set loses writes — e.g. a row's place-call result ("ok" + callUuid)
+ * gets clobbered by a sibling row's hangup outcome, leaving the row stuck at
+ * "pending" so the driver re-dials it. We run the read-modify-write inside a Lua
+ * script so Redis executes it as one indivisible step.
+ */
+const UPDATE_ROW_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return nil end
+local job = cjson.decode(raw)
+if type(job.rows) ~= 'table' then return raw end
+local i = tonumber(ARGV[1]) + 1
+local row = job.rows[i]
+if type(row) ~= 'table' then return raw end
+local patch = cjson.decode(ARGV[2])
+for k, v in pairs(patch) do row[k] = v end
+local allDone = true
+for _, rw in ipairs(job.rows) do
+  if rw.status ~= 'ok' and rw.status ~= 'failed' then allDone = false break end
+end
+if allDone and (job.completedAt == nil or job.completedAt == false) then
+  job.completedAt = ARGV[3]
+end
+local encoded = cjson.encode(job)
+redis.call('SET', KEYS[1], encoded)
+return encoded
+`;
+
 export async function updateBulkRow(
   jobId: string,
   index: number,
   patch: Partial<BulkRow>
 ): Promise<BulkJob | null> {
+  if (index < 0) return getBulkJob(jobId);
   const r = redis();
-  const job = await r.get<BulkJob>(KEY(jobId));
-  if (!job) return null;
-  if (index < 0 || index >= job.rows.length) return job;
-  job.rows[index] = { ...job.rows[index], ...patch };
-  const allDone = job.rows.every((row) => row.status === "ok" || row.status === "failed");
-  if (allDone && !job.completedAt) job.completedAt = new Date().toISOString();
-  await r.set(KEY(jobId), job);
-  return job;
+  // Drop undefined keys — JSON.stringify omits them, and cjson would otherwise choke.
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) if (v !== undefined) clean[k] = v;
+  const result = await r.eval(
+    UPDATE_ROW_LUA,
+    [KEY(jobId)],
+    [String(index), JSON.stringify(clean), new Date().toISOString()]
+  );
+  if (result == null) return null;
+  // Upstash may return the script's JSON string as-is or auto-deserialize it.
+  return (typeof result === "string" ? JSON.parse(result) : result) as BulkJob;
 }
 
 export async function deleteBulkJob(id: string): Promise<void> {

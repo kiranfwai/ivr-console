@@ -3,6 +3,7 @@ import { getCampaign } from "@/lib/campaigns";
 import { getAudio } from "@/lib/audios";
 import { plivoGuard, publicBaseUrl, parseFormBody } from "@/lib/plivo";
 import { patchCall, getCall } from "@/lib/calls";
+import { recordAnswered } from "@/lib/stats";
 import { redis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,8 @@ async function handleInner(req: NextRequest, id: string) {
   if (req_) {
     const cur = await getCall(req_);
     if (cur) {
+      // Count the answer once, on the first transition only (Plivo may re-POST).
+      if (!cur.answeredAt) await recordAnswered(cur);
       await patchCall(req_, {
         status: "answered",
         answeredAt: new Date().toISOString(),

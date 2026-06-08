@@ -147,7 +147,12 @@ export default function BulkTab() {
           </div>
           <div>
             <Label hint="ms between dials">Delay</Label>
-            <Input type="number" value={delayMs} onChange={(e) => setDelayMs(Number(e.target.value) || 0)} />
+            <Input
+              type="number"
+              min={250}
+              value={delayMs}
+              onChange={(e) => setDelayMs(Math.max(250, Number(e.target.value) || 0))}
+            />
           </div>
           <div className="flex items-end">
             <Button

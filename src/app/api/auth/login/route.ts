@@ -6,7 +6,14 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const { password } = await req.json().catch(() => ({}));
-  const expected = process.env.ADMIN_PASSWORD || "ivr2026";
+  const expected = process.env.ADMIN_PASSWORD;
+  if (!expected) {
+    // Fail closed: never accept a hardcoded default password in any environment.
+    return NextResponse.json(
+      { ok: false, error: "server not configured (ADMIN_PASSWORD unset)" },
+      { status: 500 }
+    );
+  }
   if (typeof password !== "string" || !constantTimeEqual(password, expected)) {
     return NextResponse.json({ ok: false, error: "wrong password" }, { status: 401 });
   }

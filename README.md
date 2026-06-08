@@ -202,3 +202,33 @@ If you want the new Plivo answer URL right now without a Plivo dashboard change,
 - `/api/answer`, `/api/dtmf`, `/api/hangup` declared `runtime = "nodejs"` (need `req.text()` for raw body to verify Plivo signature; edge would also work but Node is fine here).
 - All other routes are default Node runtime (App Router).
 - No build step beyond `next build`. No tests yet — open question for v2.1.
+
+### Reports at scale (counters)
+
+Report KPIs/breakdowns are served from **rolled-up counter hashes in Redis**
+(`stats:d:<istday>` and `stats:dc:<istday>:<campaignId>`), incremented as each call
+progresses (placed → answered → press-1 → finalized). Reads are O(days-in-range),
+independent of call volume — this is what lets the dashboard stay correct past the
+old ~1000-record ceiling at 20k calls/day. Day buckets are **IST (Asia/Kolkata)**,
+so "Today" matches the local wall clock, not UTC midnight.
+
+**Run the backfill once after deploying this version** to populate counters from
+existing call records (otherwise pre-existing days read as zero):
+
+```
+GET (or POST) /api/reports/backfill?from=2026-05-01&to=2026-06-08   # while logged in
+```
+
+It defaults to the last 31 days. It's idempotent (overwrites each day with absolute
+totals), so it doubles as a resync if numbers ever look off. For very large
+histories, backfill a few days at a time to stay within the function time limit.
+
+### Security defaults to flip on
+
+- **Turn on `VERIFY_PLIVO_SIG=1`** once end-to-end is confirmed. The webhook routes
+  (`/api/answer`, `/api/dtmf`, `/api/hangup`) are publicly reachable by design;
+  without the signature they rely only on a guess-resistant `req` id. `/api/dtmf`
+  no longer fires the Pabbly webhook unless it matches a call **we** actually placed
+  (and only to that call's stored number), but signature verification is the real lock.
+- `ADMIN_PASSWORD` and `SESSION_SECRET` are now **required in production** — the app
+  fails closed (no hardcoded `ivr2026` / dev-secret fallback) if either is unset.

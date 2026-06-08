@@ -42,13 +42,20 @@ interface Report {
   plivoRecent: any[];
 }
 
+// Report day buckets are IST (Asia/Kolkata) — match the server. Compute the
+// calendar day by shifting the instant by +5:30 and reading the UTC date.
+const IST_SHIFT_MS = (5 * 60 + 30) * 60 * 1000;
+function istDateKey(ms: number): string {
+  return new Date(ms + IST_SHIFT_MS).toISOString().slice(0, 10);
+}
+function istTimeOfDay(iso: string): string {
+  return new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString().slice(11, 19);
+}
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return istDateKey(Date.now());
 }
 function offsetDay(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return istDateKey(Date.now() + n * 24 * 60 * 60 * 1000);
 }
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -378,7 +385,7 @@ function RecentTable({ rows }: { rows: (CallRecord & { outcome: string | null })
             const o = r.outcome || "pending";
             return (
               <tr key={r.callUuid} className="border-t border-line hover:bg-elev/40 transition-colors">
-                <td className="py-2 px-1 font-mono text-xs text-muted">{r.triggeredAt.slice(11, 19)}</td>
+                <td className="py-2 px-1 font-mono text-xs text-muted">{istTimeOfDay(r.triggeredAt)}</td>
                 <td className="px-1 font-mono text-xs">{r.to}</td>
                 <td className="px-1 truncate max-w-[160px]">{r.campaignName}</td>
                 <td className="px-1">

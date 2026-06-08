@@ -3,6 +3,7 @@ import { plivoGuard, parseFormBody } from "@/lib/plivo";
 import { getCall, patchCall } from "@/lib/calls";
 import { updateBulkRow } from "@/lib/bulk";
 import { deriveOutcome } from "@/lib/outcome";
+import { recordFinalized } from "@/lib/stats";
 import { redis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +53,8 @@ async function handleInner(req: NextRequest) {
     const keepPress1 = cur?.status === "press1";
     const dur = Number(duration) || 0;
     const cause = hangupCause || callStatus;
+    // Finalize the report counters once, on the first hangup only.
+    if (cur && !cur.hangupAt) await recordFinalized(cur, cause, dur);
     await patchCall(internalId, {
       status: keepPress1 ? "press1" : "hangup",
       hangupAt: new Date().toISOString(),

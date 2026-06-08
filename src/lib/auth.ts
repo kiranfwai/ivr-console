@@ -3,7 +3,14 @@ import { hmacBase64Url, constantTimeEqual } from "./hmac";
 const COOKIE = "ivr_session";
 
 function secret(): string {
-  return process.env.SESSION_SECRET || "dev-secret-change-me";
+  const s = process.env.SESSION_SECRET;
+  if (s) return s;
+  // Fail closed in production: a known fallback secret means anyone can forge a
+  // session cookie. Only fall back in non-production (local dev) for convenience.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET is not set — refusing to sign sessions with a default key in production.");
+  }
+  return "dev-secret-change-me";
 }
 
 function randomId(): string {

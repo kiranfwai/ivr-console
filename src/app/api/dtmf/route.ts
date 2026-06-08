@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
 import { getCall, patchCall } from "@/lib/calls";
+import { recordPress1 } from "@/lib/stats";
 import { digitsOnly } from "@/lib/phone";
 import { redis } from "@/lib/redis";
 
@@ -65,11 +66,15 @@ async function handleInner(req: NextRequest) {
   }
 
   if (digits === "1") {
-    // SSRF fix: webhook comes from the *campaign* (stored at call time), never from the URL.
-    const webhook = record?.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "";
+    // Abuse fix: only fire the webhook for a call we actually placed. Without this,
+    // an unauthenticated GET/POST to /api/dtmf?Digits=1&To=<any-number> (signature
+    // verification is off by default) would make us POST the Pabbly webhook to an
+    // arbitrary number. The webhook + recipient come ONLY from the stored record —
+    // never from the request query string.
+    const webhook = record ? (record.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "") : "";
     let pabblyStatus = 0;
-    if (webhook) {
-      const leadPhone = digitsOnly(record?.to || to || "");
+    if (record && webhook) {
+      const leadPhone = digitsOnly(record.to || "");
       try {
         const r = await fetch(webhook, {
           method: "POST",
@@ -77,11 +82,11 @@ async function handleInner(req: NextRequest) {
           body: JSON.stringify({
             phone: leadPhone,
             lead: leadPhone,
-            from: record?.from || from,
-            to: record?.to || to,
+            from: record.from,
+            to: record.to,
             callUuid,
             digit: "1",
-            campaign: record?.campaignName,
+            campaign: record.campaignName,
           }),
         });
         pabblyStatus = r.status;
@@ -89,6 +94,8 @@ async function handleInner(req: NextRequest) {
         pabblyStatus = -1;
       }
     }
+    // Count the press-1 once (Plivo won't normally re-POST, but guard anyway).
+    if (record && record.status !== "press1") await recordPress1(record);
     if (internalId) await patchCall(internalId, { status: "press1", pabblyStatus });
     return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
