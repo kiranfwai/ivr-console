@@ -102,3 +102,43 @@ export async function deleteBulkJob(id: string): Promise<void> {
   await r.del(KEY(id));
   await r.zrem(ZINDEX, id);
 }
+
+// ---------------------------------------------------------------------------
+// Batch-claim: atomically mark up to `n` pending rows as "dialing" and return
+// them so the caller can fire them in parallel without double-dialing.
+// ---------------------------------------------------------------------------
+const CLAIM_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return nil end
+local job = cjson.decode(raw)
+if type(job.rows) ~= 'table' then return '[]' end
+local n = tonumber(ARGV[1])
+local claimed = {}
+local count = 0
+for i, row in ipairs(job.rows) do
+  if count >= n then break end
+  if row.status == 'pending' then
+    row.status = 'dialing'
+    local entry = {index = i - 1, phone = row.phone}
+    if row.name and row.name ~= false and row.name ~= cjson.null then entry.name = row.name end
+    if row.email and row.email ~= false and row.email ~= cjson.null then entry.email = row.email end
+    table.insert(claimed, entry)
+    count = count + 1
+  end
+end
+if count > 0 then
+  redis.call('SET', KEYS[1], cjson.encode(job))
+end
+return cjson.encode(claimed)
+`;
+
+export async function claimBulkRows(
+  jobId: string,
+  n: number,
+): Promise<Array<{ index: number; phone: string; name?: string; email?: string }>> {
+  const r = redis();
+  const result = await r.eval(CLAIM_LUA, [KEY(jobId)], [String(Math.max(1, Math.min(n, 10)))]);
+  if (result == null) return [];
+  const parsed = typeof result === "string" ? JSON.parse(result) : result;
+  return Array.isArray(parsed) ? parsed : [];
+}

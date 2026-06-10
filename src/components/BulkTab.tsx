@@ -35,6 +35,8 @@ function parseRows(csv: string): { phone: string; name?: string; email?: string 
   }).filter((r) => /\d/.test(r.phone));
 }
 
+type Metrics = { cpm: number; dispatched: number; etaSec: number };
+
 export default function BulkTab() {
   const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJob[] }>("/api/bulk");
@@ -43,11 +45,15 @@ export default function BulkTab() {
 
   const [campaignId, setCampaignId] = useState<string>("");
   const [csv, setCsv] = useState<string>("phone,name,email\n");
-  const [delayMs, setDelayMs] = useState<number>(2000);
+  const [delayMs, setDelayMs] = useState<number>(1000);
+  const [concurrency, setConcurrency] = useState<number>(3);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<BulkJob | null>(null);
   const [running, setRunning] = useState(false);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const stopRef = useRef(false);
+  // Store campaignId for the active job so resume() can use it.
+  const activeCampaignIdRef = useRef<string>("");
 
   useEffect(() => {
     if (!activeJobId) return;
@@ -58,7 +64,7 @@ export default function BulkTab() {
       } catch {}
     };
     fn();
-    const h = setInterval(fn, running ? 1500 : 5000);
+    const h = setInterval(fn, running ? 2000 : 6000);
     return () => clearInterval(h);
   }, [activeJobId, running]);
 
@@ -74,37 +80,53 @@ export default function BulkTab() {
       setActiveJob(r.job);
       setCsv("phone,name,email\n");
       reloadJobs();
-      toast(`Queued ${rows.length} calls`, "ok");
-      drive(r.job.id);
+      toast(`Queued ${rows.length} calls · ${concurrency} parallel · ${delayMs}ms between batches`, "ok");
+      activeCampaignIdRef.current = campaignId;
+      drive(r.job.id, campaignId, rows.length);
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
     }
   }
 
-  async function drive(jobId: string) {
+  /**
+   * Server-driven advance loop.
+   * Each iteration calls /advance which atomically claims `concurrency` rows,
+   * fires them as parallel Plivo calls server-side, and returns counts.
+   * The browser only polls once per batch — no per-call round-trips.
+   */
+  async function drive(jobId: string, jobCampaignId: string, totalRows: number) {
     stopRef.current = false;
     setRunning(true);
+    setMetrics(null);
+    const startTime = Date.now();
+    let totalDispatched = 0;
+
     try {
       while (!stopRef.current) {
-        const nx = await api<{ done: boolean; index?: number; campaignId?: string; delayMs?: number }>(`/api/bulk/${jobId}/next`);
-        if (nx.done) break;
-        const j = await api<{ job: BulkJob }>(`/api/bulk/${jobId}`);
-        const row = j.job.rows[nx.index!];
-        await api(`/api/call`, {
-          method: "POST",
-          body: JSON.stringify({
-            phone: row.phone,
-            campaignId: nx.campaignId,
-            callerName: row.name,
-            email: row.email,
-            bulkJobId: jobId,
-            bulkRowIndex: nx.index,
-          }),
-        }).catch(() => {});
-        await sleep(nx.delayMs ?? 2000);
+        const batchStart = Date.now();
+
+        const r = await api<{ done: boolean; claimed?: number; ok?: number; failed?: number }>(
+          `/api/bulk/${jobId}/advance`,
+          { method: "POST", body: JSON.stringify({ n: concurrency, campaignId: jobCampaignId }) },
+        );
+
+        if (r.done || !r.claimed) break;
+
+        totalDispatched += r.claimed;
+        const elapsedSec = Math.max(1, (Date.now() - startTime) / 1000);
+        const cpm = Math.round(totalDispatched / (elapsedSec / 60));
+        const remaining = Math.max(0, totalRows - totalDispatched);
+        const etaSec = cpm > 0 ? Math.round((remaining / cpm) * 60) : 0;
+        setMetrics({ cpm, dispatched: totalDispatched, etaSec });
+
+        // Wait only the remaining time so effective cadence ≈ delayMs per batch.
+        const elapsed = Date.now() - batchStart;
+        const wait = Math.max(0, delayMs - elapsed);
+        if (wait > 0) await sleep(wait);
       }
     } finally {
       setRunning(false);
+      setMetrics(null);
       reloadJobs();
     }
   }
@@ -116,7 +138,16 @@ export default function BulkTab() {
 
   async function resume(jobId: string) {
     setActiveJobId(jobId);
-    drive(jobId);
+    try {
+      const j = await api<{ job: BulkJob }>(`/api/bulk/${jobId}`);
+      setActiveJob(j.job);
+      const cid = j.job.campaignId || activeCampaignIdRef.current;
+      const total = j.job.rows.length;
+      activeCampaignIdRef.current = cid;
+      drive(jobId, cid, total);
+    } catch (e: any) {
+      toast(e.message || "Failed to resume", "danger");
+    }
   }
 
   async function retry(jobId: string) {
@@ -126,7 +157,9 @@ export default function BulkTab() {
       setActiveJob(r.job);
       reloadJobs();
       toast(`Retrying ${r.count} failed rows`, "ok");
-      drive(r.job.id);
+      const cid = r.job.campaignId || activeCampaignIdRef.current;
+      activeCampaignIdRef.current = cid;
+      drive(r.job.id, cid, r.job.rows.length);
     } catch (e: any) {
       toast(e.message || "No retry-able rows", "danger");
     }
@@ -152,8 +185,8 @@ export default function BulkTab() {
   return (
     <Section>
       <Card title="Start a bulk run">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="col-span-2 md:col-span-1">
             <Label>Campaign</Label>
             <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
               <option value="">Choose campaign…</option>
@@ -163,15 +196,25 @@ export default function BulkTab() {
             </Select>
           </div>
           <div>
-            <Label hint="ms between dials">Delay</Label>
+            <Label hint="parallel calls per batch">Concurrency</Label>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={concurrency}
+              onChange={(e) => setConcurrency(Math.min(10, Math.max(1, Number(e.target.value) || 3)))}
+            />
+          </div>
+          <div>
+            <Label hint="ms between batches">Batch delay</Label>
             <Input
               type="number"
               min={250}
               value={delayMs}
-              onChange={(e) => setDelayMs(Math.max(250, Number(e.target.value) || 0))}
+              onChange={(e) => setDelayMs(Math.max(250, Number(e.target.value) || 1000))}
             />
           </div>
-          <div className="flex items-end">
+          <div className="flex items-end col-span-2 md:col-span-1">
             <Button
               onClick={start}
               disabled={!campaignId || !previewCount}
@@ -184,6 +227,23 @@ export default function BulkTab() {
             </Button>
           </div>
         </div>
+        {!running && (
+          <p className="text-xs text-muted mt-3">
+            Est. rate: ~{Math.round((concurrency / Math.max(delayMs, 500)) * 60000)} calls/min ·{" "}
+            {previewCount > 0
+              ? `${Math.ceil(previewCount / Math.max(1, Math.round((concurrency / Math.max(delayMs, 500)) * 60000)))} min for ${previewCount} contacts`
+              : "upload a CSV to see estimate"}
+          </p>
+        )}
+        {running && metrics && (
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-xs">
+            <span className="text-ok font-semibold tabular-nums">{metrics.cpm} calls/min</span>
+            <span className="text-muted">{metrics.dispatched} dispatched</span>
+            {metrics.etaSec > 0 && (
+              <span className="text-muted">ETA ~{metrics.etaSec < 60 ? `${metrics.etaSec}s` : `${Math.round(metrics.etaSec / 60)}m`}</span>
+            )}
+          </div>
+        )}
 
         <div className="mt-5">
           <div className="flex items-center justify-between mb-1.5">
