@@ -76,18 +76,20 @@ async function handleInner(req: NextRequest) {
     if (record && webhook) {
       const leadPhone = digitsOnly(record.to || "");
       try {
+        const payload: any = {
+          phone: leadPhone,
+          lead: leadPhone,
+          from: record.from,
+          to: record.to,
+          callUuid,
+          digit: "1",
+          campaign: record.campaignName,
+        };
+        if (record.email) payload.email = record.email;
         const r = await fetch(webhook, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            phone: leadPhone,
-            lead: leadPhone,
-            from: record.from,
-            to: record.to,
-            callUuid,
-            digit: "1",
-            campaign: record.campaignName,
-          }),
+          body: JSON.stringify(payload),
         });
         pabblyStatus = r.status;
       } catch {

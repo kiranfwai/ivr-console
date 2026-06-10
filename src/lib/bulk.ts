@@ -8,7 +8,7 @@ export async function createBulkJob(input: {
   kind?: BulkKind;
   campaignId?: string;
   webhookUrl?: string;
-  rows: { phone: string; name?: string }[];
+  rows: { phone: string; name?: string; email?: string }[];
   delayMs?: number;
   jitterPct?: number;
 }): Promise<BulkJob> {
@@ -22,6 +22,7 @@ export async function createBulkJob(input: {
     rows: input.rows.map((r) => ({
       phone: r.phone,
       name: r.name,
+      email: r.email,
       status: "pending" as BulkRowStatus,
     })),
     createdAt: new Date().toISOString(),

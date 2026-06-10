@@ -5,7 +5,7 @@ import { updateBulkRow } from "@/lib/bulk";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const { phone, name, webhookUrl, extra, bulkJobId, bulkRowIndex } = await req.json();
+  const { phone, name, email, webhookUrl, extra, bulkJobId, bulkRowIndex } = await req.json();
   if (!phone) return NextResponse.json({ error: "phone required" }, { status: 400 });
 
   const hook = webhookUrl || process.env.PABBLY_WEBHOOK_URL;
@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
   const payload: any = {
     phone: digitsOnly(String(phone)),
     ...(name ? { name } : {}),
+    ...(email ? { email } : {}),
     ...(extra || {}),
   };
 

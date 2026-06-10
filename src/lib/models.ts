@@ -30,6 +30,7 @@ export interface CallRecord {
   campaignName: string;
   to: string;
   from: string;
+  email?: string;
   audioId: string | null;
   webhookUrl: string;
   status: CallStatus;
@@ -59,6 +60,7 @@ export type BulkRowStatus =
 export interface BulkRow {
   phone: string;
   name?: string;
+  email?: string;
   status: BulkRowStatus;
   callUuid?: string;
   error?: string;

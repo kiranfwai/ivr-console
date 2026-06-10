@@ -6,17 +6,33 @@ import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Sectio
 import { useFetch, api } from "./useData";
 import type { BulkJob, Campaign } from "@/lib/models";
 
-function parseRows(csv: string): { phone: string; name?: string }[] {
-  return csv
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [phone, ...rest] = line.split(",");
-      const name = rest.join(",").trim();
-      return { phone: phone.trim(), name: name || undefined };
-    })
-    .filter((r) => /\d/.test(r.phone));
+const PHONE_KEYS = ["phone", "mobile", "number", "contact", "tel", "mob", "msisdn"];
+const NAME_KEYS  = ["name", "full name", "fullname", "lead", "first name", "firstname"];
+const EMAIL_KEYS = ["email", "email address", "e-mail", "emailid", "email id"];
+
+function parseRows(csv: string): { phone: string; name?: string; email?: string }[] {
+  const lines = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const firstLower = lines[0].toLowerCase();
+  if (PHONE_KEYS.some((k) => firstLower.includes(k))) {
+    const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+    const pIdx = header.findIndex((h) => PHONE_KEYS.includes(h));
+    const nIdx = header.findIndex((h) => NAME_KEYS.includes(h));
+    const eIdx = header.findIndex((h) => EMAIL_KEYS.includes(h));
+    return lines.slice(1).map((line) => {
+      const cols = line.split(",").map((c) => c.trim());
+      const phone = (pIdx >= 0 ? cols[pIdx] : cols[0] || "").trim();
+      return {
+        phone,
+        name: nIdx >= 0 ? cols[nIdx] || undefined : undefined,
+        email: eIdx >= 0 ? cols[eIdx] || undefined : undefined,
+      };
+    }).filter((r) => /\d/.test(r.phone));
+  }
+  return lines.map((line) => {
+    const [phone, ...rest] = line.split(",");
+    return { phone: phone.trim(), name: rest.join(",").trim() || undefined };
+  }).filter((r) => /\d/.test(r.phone));
 }
 
 export default function BulkTab() {
@@ -26,7 +42,7 @@ export default function BulkTab() {
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
   const [campaignId, setCampaignId] = useState<string>("");
-  const [csv, setCsv] = useState<string>("phone,name\n");
+  const [csv, setCsv] = useState<string>("phone,name,email\n");
   const [delayMs, setDelayMs] = useState<number>(2000);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<BulkJob | null>(null);
@@ -56,7 +72,7 @@ export default function BulkTab() {
       });
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
-      setCsv("phone,name\n");
+      setCsv("phone,name,email\n");
       reloadJobs();
       toast(`Queued ${rows.length} calls`, "ok");
       drive(r.job.id);
@@ -80,6 +96,7 @@ export default function BulkTab() {
             phone: row.phone,
             campaignId: nx.campaignId,
             callerName: row.name,
+            email: row.email,
             bulkJobId: jobId,
             bulkRowIndex: nx.index,
           }),
@@ -170,12 +187,12 @@ export default function BulkTab() {
 
         <div className="mt-5">
           <div className="flex items-center justify-between mb-1.5">
-            <Label>Numbers · one per line, optional &quot;,name&quot;</Label>
+            <Label>Numbers · CSV with headers phone, name, email</Label>
             <div className="flex items-center gap-2 text-xs text-muted">
               <span className="tabular-nums">{previewCount} recipients</span>
               <CsvFilePicker onLoad={setCsv} />
               <button
-                onClick={() => setCsv("phone,name\n")}
+                onClick={() => setCsv("phone,name,email\n")}
                 className="px-2 py-1 rounded-md bg-elev/60 hover:bg-elev text-ink2 hover:text-ink border border-line transition-colors"
               >
                 Clear
@@ -186,7 +203,7 @@ export default function BulkTab() {
             rows={6}
             value={csv}
             onChange={(e) => setCsv(e.target.value)}
-            placeholder={"phone,name\n9876543210,Animesh\n9123456789,Test"}
+            placeholder={"phone,name,email\n9876543210,Animesh,animesh@example.com\n9123456789,Test,"}
           />
         </div>
       </Card>

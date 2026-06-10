@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  const { phone, campaignId, callerName, bulkJobId, bulkRowIndex } = body;
+  const { phone, campaignId, callerName, email, bulkJobId, bulkRowIndex } = body;
 
   if (!phone) return NextResponse.json({ error: "phone required" }, { status: 400 });
   if (!campaignId) return NextResponse.json({ error: "campaignId required" }, { status: 400 });
@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     campaignName: campaign.name,
     to,
     from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
+    email: email || undefined,
     audioId: campaign.audioId,
     webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
     status: result.ok ? "queued" : "failed",

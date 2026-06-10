@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     kind,
     campaignId,
     webhookUrl,
-    rows: rows.map((r: any) => ({ phone: String(r.phone || ""), name: r.name })),
+    rows: rows.map((r: any) => ({ phone: String(r.phone || ""), name: r.name, email: r.email || undefined })),
     delayMs: typeof delayMs === "number" ? delayMs : 2000,
     jitterPct: typeof jitterPct === "number" ? jitterPct : undefined,
   });
