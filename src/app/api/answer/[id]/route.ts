@@ -84,15 +84,12 @@ async function handleInner(req: NextRequest, id: string) {
   }
 
   const dtmfAction = `${base}/api/dtmf?req=${encodeURIComponent(req_)}`;
-  const prompt = campaign.prompt || "Press 1 to receive your WhatsApp message.";
 
   return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <GetDigits action="${esc(dtmfAction)}" method="POST" timeout="20" numDigits="1" retries="3" validDigits="0123456789" playBeep="true" redirect="true">
     <Play>${esc(audioUrl)}</Play>
-    <Speak voice="WOMAN" language="en-IN">${esc(prompt)}</Speak>
   </GetDigits>
-  <Speak voice="WOMAN" language="en-IN">We did not receive any input. Goodbye.</Speak>
   <Hangup/>
 </Response>`);
 }

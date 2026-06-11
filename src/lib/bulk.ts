@@ -142,3 +142,32 @@ export async function claimBulkRows(
   const parsed = typeof result === "string" ? JSON.parse(result) : result;
   return Array.isArray(parsed) ? parsed : [];
 }
+
+// ---------------------------------------------------------------------------
+// Recovery: reset any rows stuck in "dialing" back to "pending" so a resumed
+// job can re-claim and re-dial them. Called before resume/retry to prevent
+// rows from being permanently lost when an advance batch crashes mid-flight.
+// ---------------------------------------------------------------------------
+const RESET_DIALING_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local job = cjson.decode(raw)
+if type(job.rows) ~= 'table' then return 0 end
+local count = 0
+for i, row in ipairs(job.rows) do
+  if row.status == 'dialing' then
+    row.status = 'pending'
+    count = count + 1
+  end
+end
+if count > 0 then
+  redis.call('SET', KEYS[1], cjson.encode(job))
+end
+return count
+`;
+
+export async function resetDialingRows(jobId: string): Promise<number> {
+  const r = redis();
+  const result = await r.eval(RESET_DIALING_LUA, [KEY(jobId)], []);
+  return typeof result === "number" ? result : Number(result ?? 0);
+}

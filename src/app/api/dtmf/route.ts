@@ -101,7 +101,6 @@ async function handleInner(req: NextRequest) {
     if (internalId) await patchCall(internalId, { status: "press1", pabblyStatus });
     return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="WOMAN" language="en-IN">Thank you. Your WhatsApp message is on its way. Goodbye.</Speak>
   <Hangup/>
 </Response>`);
   }
