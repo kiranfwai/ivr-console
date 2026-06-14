@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { claimBulkRows, getBulkJob, updateBulkRow } from "@/lib/bulk";
+import { claimBulkRows, getBulkJob, resetDialingRows, updateBulkRow } from "@/lib/bulk";
 import { getCampaign } from "@/lib/campaigns";
 import { placeCall, publicBaseUrl } from "@/lib/plivo";
 import { normalizePhone } from "@/lib/phone";
@@ -7,8 +7,8 @@ import { recordCall } from "@/lib/calls";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-// Allow up to 60s so parallel Plivo calls never hit a serverless timeout.
-export const maxDuration = 60;
+// Allow up to 300 s — 20 parallel Plivo calls + Redis round-trips need headroom.
+export const maxDuration = 300;
 
 /**
  * POST /api/bulk/[id]/advance
@@ -33,6 +33,10 @@ export async function POST(
     if (!campaignId) {
       return NextResponse.json({ error: "campaignId required" }, { status: 400 });
     }
+
+    // Recover any rows that were left in "dialing" by a previous crashed run
+    // before claiming new ones — prevents them from being permanently lost.
+    await resetDialingRows(params.id);
 
     // Resolve campaign and claim rows in parallel — one Redis read each.
     const [campaign, claimed] = await Promise.all([

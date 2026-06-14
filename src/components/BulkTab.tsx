@@ -39,7 +39,7 @@ type Metrics = { cpm: number; dispatched: number; etaSec: number };
 
 export default function BulkTab() {
   const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
-  const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJob[] }>("/api/bulk");
+  const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: Array<BulkJob & { _counts?: Record<string, number> }> }>("/api/bulk");
   const campaigns = cdata?.campaigns ?? [];
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
@@ -49,18 +49,22 @@ export default function BulkTab() {
   const [concurrency, setConcurrency] = useState<number>(3);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<BulkJob | null>(null);
+  const [activeCounts, setActiveCounts] = useState<Record<string, number> | null>(null);
   const [running, setRunning] = useState(false);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const stopRef = useRef(false);
   // Store campaignId for the active job so resume() can use it.
   const activeCampaignIdRef = useRef<string>("");
 
+  // Poll the lightweight stats endpoint instead of the full job blob.
+  // A single HGETALL on a small counter hash (~11 fields) instead of
+  // deserialising 1.7 MB of row JSON on every tick.
   useEffect(() => {
     if (!activeJobId) return;
     const fn = async () => {
       try {
-        const j = await api<{ job: BulkJob }>(`/api/bulk/${activeJobId}`);
-        setActiveJob(j.job);
+        const c = await api<Record<string, number>>(`/api/bulk/${activeJobId}/stats`);
+        setActiveCounts(c);
       } catch {}
     };
     fn();
@@ -167,7 +171,12 @@ export default function BulkTab() {
     }
   }
 
-  const counts = activeJob ? tally(activeJob) : null;
+  // Prefer live counter hash over iterating all rows in the job blob.
+  const counts = activeCounts
+    ? countsToTally(activeCounts)
+    : activeJob
+    ? tally(activeJob)
+    : null;
   const previewCount = parseRows(csv).length;
 
   if (!campaigns.length) {
@@ -409,21 +418,46 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "ok"
   );
 }
 
-function tally(job: BulkJob) {
+// Build tally from the lightweight counter hash (O(1), no row iteration).
+function countsToTally(c: Record<string, number>) {
+  const press1    = c.press1 ?? 0;
+  const connected = c.connected ?? 0;
+  const okCount   = c.ok ?? 0;
+  const failed    = c.failed ?? 0;
+  const noAnswer  = c["no-answer"] ?? 0;
+  const busy      = c.busy ?? 0;
+  const rejected  = c.rejected ?? 0;
+  const error     = c.error ?? 0;
+  const retryable = noAnswer + busy + error + failed;
+  return {
+    press1, connected, noAnswer, busy, rejected, error, failed,
+    okCount,
+    pending:  c.pending ?? 0,
+    dialing:  c.dialing ?? 0,
+    retryable,
+    ok:       press1 + connected + okCount,
+    failedAll: retryable + rejected,
+    total:    c.total ?? 0,
+  };
+}
+
+// Fallback for legacy jobs (no :counts key) or jobs loaded before first poll tick.
+function tally(job: BulkJob & { _counts?: Record<string, number> }) {
+  if (job._counts) return countsToTally(job._counts);
   let press1 = 0, connected = 0, noAnswer = 0, busy = 0, rejected = 0,
       errorCount = 0, failedCount = 0, okCount = 0, pending = 0, dialing = 0;
   for (const r of job.rows) {
     switch (r.status) {
-      case "press1": press1++; break;
-      case "connected": connected++; break;
-      case "no-answer": noAnswer++; break;
-      case "busy": busy++; break;
-      case "rejected": rejected++; break;
-      case "error": errorCount++; break;
-      case "failed": failedCount++; break;
-      case "ok": okCount++; break;
-      case "dialing": dialing++; break;
-      default: pending++;
+      case "press1":    press1++;     break;
+      case "connected": connected++;  break;
+      case "no-answer": noAnswer++;   break;
+      case "busy":      busy++;       break;
+      case "rejected":  rejected++;   break;
+      case "error":     errorCount++; break;
+      case "failed":    failedCount++;break;
+      case "ok":        okCount++;    break;
+      case "dialing":   dialing++;    break;
+      default:          pending++;
     }
   }
   const retryable = noAnswer + busy + errorCount + failedCount;
