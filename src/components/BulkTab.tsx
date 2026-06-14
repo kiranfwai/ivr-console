@@ -197,22 +197,25 @@ export default function BulkTab() {
           </div>
           <div>
             <Label hint="parallel calls per batch">Concurrency</Label>
-            <Input
-              type="number"
-              min={1}
-              max={10}
-              value={concurrency}
-              onChange={(e) => setConcurrency(Math.min(10, Math.max(1, Number(e.target.value) || 3)))}
-            />
+            <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
+              {[1, 3, 10, 20, 30, 50, 100].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </Select>
           </div>
           <div>
             <Label hint="ms between batches">Batch delay</Label>
-            <Input
-              type="number"
-              min={250}
-              value={delayMs}
-              onChange={(e) => setDelayMs(Math.max(250, Number(e.target.value) || 1000))}
-            />
+            <Select value={delayMs} onChange={(e) => setDelayMs(Number(e.target.value))}>
+              {[150, 200, 250, 500, 1000, 2000, 5000].map((v) => (
+                <option key={v} value={v}>{v} ms</option>
+              ))}
+            </Select>
+            {delayMs < 250 && (
+              <div className="flex items-start gap-1 mt-1.5 text-xs text-warn">
+                <AlertCircle size={12} className="shrink-0 mt-0.5" />
+                <span>Delays below 250 ms increase risk of rate limiting from your telephony provider (e.g. Plivo). Use with caution.</span>
+              </div>
+            )}
           </div>
           <div className="flex items-end col-span-2 md:col-span-1">
             <Button
@@ -229,9 +232,9 @@ export default function BulkTab() {
         </div>
         {!running && (
           <p className="text-xs text-muted mt-3">
-            Est. rate: ~{Math.round((concurrency / Math.max(delayMs, 500)) * 60000)} calls/min ·{" "}
+            Est. rate: ~{Math.round((concurrency / Math.max(delayMs, 150)) * 60000)} calls/min ·{" "}
             {previewCount > 0
-              ? `${Math.ceil(previewCount / Math.max(1, Math.round((concurrency / Math.max(delayMs, 500)) * 60000)))} min for ${previewCount} contacts`
+              ? `${Math.ceil(previewCount / Math.max(1, Math.round((concurrency / Math.max(delayMs, 150)) * 60000)))} min for ${previewCount} contacts`
               : "upload a CSV to see estimate"}
           </p>
         )}

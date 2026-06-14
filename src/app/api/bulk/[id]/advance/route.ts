@@ -18,7 +18,7 @@ export const maxDuration = 60;
  * The browser driver calls this once per batch interval instead of making
  * individual round-trips per contact — removing the per-call network overhead.
  *
- * Body: { n?: number (1-10, default 3), campaignId: string }
+ * Body: { n?: number (1-100, default 3), campaignId: string }
  * Response: { done: boolean, claimed: number, ok: number, failed: number, cpmHint?: number }
  */
 export async function POST(
@@ -26,7 +26,7 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   const body = await req.json().catch(() => ({}));
-  const n = Math.min(Math.max(1, Number(body.n) || 3), 10);
+  const n = Math.min(Math.max(1, Number(body.n) || 3), 100);
   const campaignId: string = body.campaignId || "";
 
   if (!campaignId) {
