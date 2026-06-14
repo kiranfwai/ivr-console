@@ -1,28 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { createAudio } from "@/lib/audios";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function findBlobToken(): string | undefined {
-  const env = process.env;
-  if (env.BLOB_READ_WRITE_TOKEN) return env.BLOB_READ_WRITE_TOKEN;
-  // Vercel may prefix the token name when multiple blob stores are connected,
-  // e.g. IVR_AUDIOS_READ_WRITE_TOKEN.
-  for (const k of Object.keys(env)) {
-    if (k.endsWith("_READ_WRITE_TOKEN") || k.endsWith("_BLOB_READ_WRITE_TOKEN")) {
-      return env[k];
-    }
-  }
-  return undefined;
-}
-
 export async function POST(req: NextRequest) {
-  const token = findBlobToken();
-  if (!token) {
+  const bucket = process.env.S3_BUCKET;
+  const region = process.env.AWS_REGION || "ap-southeast-1";
+
+  if (!bucket) {
     return NextResponse.json(
-      { error: "No Vercel Blob token found. Add BLOB_READ_WRITE_TOKEN (or connect a Blob store to this project), or use 'Paste URL' instead." },
+      { error: "No S3 bucket configured. Set S3_BUCKET (and AWS_REGION), or use 'Paste URL' instead." },
       { status: 400 }
     );
   }
@@ -35,12 +24,20 @@ export async function POST(req: NextRequest) {
   }
 
   const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "_").toLowerCase();
-  const blob = await put(`audios/${Date.now()}-${safeName}`, file, {
-    access: "public",
-    contentType: file.type || "audio/mpeg",
-    token,
-  });
+  const key = `audios/${Date.now()}-${safeName}`;
+  const body = Buffer.from(await file.arrayBuffer());
 
-  const audio = await createAudio({ label, url: blob.url, source: "blob" });
+  const s3 = new S3Client({ region });
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: file.type || "audio/mpeg",
+    })
+  );
+
+  const url = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+  const audio = await createAudio({ label, url, source: "url" });
   return NextResponse.json({ audio });
 }
