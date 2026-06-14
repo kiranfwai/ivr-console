@@ -50,51 +50,31 @@ export async function listBulkJobs(limit = 20): Promise<BulkJob[]> {
  *
  * This MUST be atomic: the browser driver (firing /api/call) and Plivo's async
  * /api/hangup callbacks write to the same job blob concurrently. A naive
- * get-modify-set loses writes — e.g. a row's place-call result ("ok" + callUuid)
- * gets clobbered by a sibling row's hangup outcome, leaving the row stuck at
- * "pending" so the driver re-dials it. We run the read-modify-write inside a Lua
- * script so Redis executes it as one indivisible step.
+ * get-modify-set loses writes. We run the read-modify-write under a row lock
+ * (`SELECT ... FOR UPDATE` on the kv row) so it executes as one indivisible step.
  */
-const UPDATE_ROW_LUA = `
-local raw = redis.call('GET', KEYS[1])
-if not raw then return nil end
-local job = cjson.decode(raw)
-if type(job.rows) ~= 'table' then return raw end
-local i = tonumber(ARGV[1]) + 1
-local row = job.rows[i]
-if type(row) ~= 'table' then return raw end
-local patch = cjson.decode(ARGV[2])
-for k, v in pairs(patch) do row[k] = v end
-local allDone = true
-for _, rw in ipairs(job.rows) do
-  if rw.status ~= 'ok' and rw.status ~= 'failed' then allDone = false break end
-end
-if allDone and (job.completedAt == nil or job.completedAt == false) then
-  job.completedAt = ARGV[3]
-end
-local encoded = cjson.encode(job)
-redis.call('SET', KEYS[1], encoded)
-return encoded
-`;
-
 export async function updateBulkRow(
   jobId: string,
   index: number,
   patch: Partial<BulkRow>
 ): Promise<BulkJob | null> {
   if (index < 0) return getBulkJob(jobId);
-  const r = redis();
-  // Drop undefined keys — JSON.stringify omits them, and cjson would otherwise choke.
+  // Drop undefined keys so they don't clobber existing values.
   const clean: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) clean[k] = v;
-  const result = await r.eval(
-    UPDATE_ROW_LUA,
-    [KEY(jobId)],
-    [String(index), JSON.stringify(clean), new Date().toISOString()]
-  );
-  if (result == null) return null;
-  // Upstash may return the script's JSON string as-is or auto-deserialize it.
-  return (typeof result === "string" ? JSON.parse(result) : result) as BulkJob;
+
+  return redis().withLock<BulkJob | null>(KEY(jobId), (job: any) => {
+    if (!job) return { ret: null };
+    if (!Array.isArray(job.rows)) return { ret: job as BulkJob };
+    const row = job.rows[index];
+    if (!row || typeof row !== "object") return { ret: job as BulkJob };
+    Object.assign(row, clean);
+    const allDone = job.rows.every(
+      (rw: any) => rw.status === "ok" || rw.status === "failed"
+    );
+    if (allDone && !job.completedAt) job.completedAt = new Date().toISOString();
+    return { next: job, ret: job as BulkJob };
+  });
 }
 
 export async function deleteBulkJob(id: string): Promise<void> {
@@ -107,40 +87,32 @@ export async function deleteBulkJob(id: string): Promise<void> {
 // Batch-claim: atomically mark up to `n` pending rows as "dialing" and return
 // them so the caller can fire them in parallel without double-dialing.
 // ---------------------------------------------------------------------------
-const CLAIM_LUA = `
-local raw = redis.call('GET', KEYS[1])
-if not raw then return nil end
-local job = cjson.decode(raw)
-if type(job.rows) ~= 'table' then return '[]' end
-local n = tonumber(ARGV[1])
-local claimed = {}
-local count = 0
-for i, row in ipairs(job.rows) do
-  if count >= n then break end
-  if row.status == 'pending' then
-    row.status = 'dialing'
-    local entry = {index = i - 1, phone = row.phone}
-    if row.name and row.name ~= false and row.name ~= cjson.null then entry.name = row.name end
-    if row.email and row.email ~= false and row.email ~= cjson.null then entry.email = row.email end
-    table.insert(claimed, entry)
-    count = count + 1
-  end
-end
-if count > 0 then
-  redis.call('SET', KEYS[1], cjson.encode(job))
-end
-return cjson.encode(claimed)
-`;
-
 export async function claimBulkRows(
   jobId: string,
   n: number,
 ): Promise<Array<{ index: number; phone: string; name?: string; email?: string }>> {
-  const r = redis();
-  const result = await r.eval(CLAIM_LUA, [KEY(jobId)], [String(Math.max(1, Math.min(n, 100)))]);
-  if (result == null) return [];
-  const parsed = typeof result === "string" ? JSON.parse(result) : result;
-  return Array.isArray(parsed) ? parsed : [];
+  const want = Math.max(1, Math.min(n, 100));
+  return redis().withLock<Array<{ index: number; phone: string; name?: string; email?: string }>>(
+    KEY(jobId),
+    (job: any) => {
+      if (!job || !Array.isArray(job.rows)) return { ret: [] };
+      const claimed: Array<{ index: number; phone: string; name?: string; email?: string }> = [];
+      for (let i = 0; i < job.rows.length && claimed.length < want; i++) {
+        const row = job.rows[i];
+        if (row && row.status === "pending") {
+          row.status = "dialing";
+          const entry: { index: number; phone: string; name?: string; email?: string } = {
+            index: i,
+            phone: row.phone,
+          };
+          if (row.name) entry.name = row.name;
+          if (row.email) entry.email = row.email;
+          claimed.push(entry);
+        }
+      }
+      return claimed.length > 0 ? { next: job, ret: claimed } : { ret: claimed };
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -148,26 +120,16 @@ export async function claimBulkRows(
 // job can re-claim and re-dial them. Called before resume/retry to prevent
 // rows from being permanently lost when an advance batch crashes mid-flight.
 // ---------------------------------------------------------------------------
-const RESET_DIALING_LUA = `
-local raw = redis.call('GET', KEYS[1])
-if not raw then return 0 end
-local job = cjson.decode(raw)
-if type(job.rows) ~= 'table' then return 0 end
-local count = 0
-for i, row in ipairs(job.rows) do
-  if row.status == 'dialing' then
-    row.status = 'pending'
-    count = count + 1
-  end
-end
-if count > 0 then
-  redis.call('SET', KEYS[1], cjson.encode(job))
-end
-return count
-`;
-
 export async function resetDialingRows(jobId: string): Promise<number> {
-  const r = redis();
-  const result = await r.eval(RESET_DIALING_LUA, [KEY(jobId)], []);
-  return typeof result === "number" ? result : Number(result ?? 0);
+  return redis().withLock<number>(KEY(jobId), (job: any) => {
+    if (!job || !Array.isArray(job.rows)) return { ret: 0 };
+    let count = 0;
+    for (const row of job.rows) {
+      if (row && row.status === "dialing") {
+        row.status = "pending";
+        count++;
+      }
+    }
+    return count > 0 ? { next: job, ret: count } : { ret: count };
+  });
 }
