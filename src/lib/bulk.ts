@@ -137,7 +137,7 @@ export async function claimBulkRows(
   n: number,
 ): Promise<Array<{ index: number; phone: string; name?: string; email?: string }>> {
   const r = redis();
-  const result = await r.eval(CLAIM_LUA, [KEY(jobId)], [String(Math.max(1, Math.min(n, 10)))]);
+  const result = await r.eval(CLAIM_LUA, [KEY(jobId)], [String(Math.max(1, Math.min(n, 100)))]);
   if (result == null) return [];
   const parsed = typeof result === "string" ? JSON.parse(result) : result;
   return Array.isArray(parsed) ? parsed : [];

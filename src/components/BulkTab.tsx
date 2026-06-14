@@ -124,6 +124,8 @@ export default function BulkTab() {
         const wait = Math.max(0, delayMs - elapsed);
         if (wait > 0) await sleep(wait);
       }
+    } catch (e: any) {
+      toast(e.message || "Batch error — run stopped", "danger");
     } finally {
       setRunning(false);
       setMetrics(null);

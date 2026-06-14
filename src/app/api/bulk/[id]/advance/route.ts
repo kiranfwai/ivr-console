@@ -25,95 +25,100 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const body = await req.json().catch(() => ({}));
-  const n = Math.min(Math.max(1, Number(body.n) || 3), 100);
-  const campaignId: string = body.campaignId || "";
+  try {
+    const body = await req.json().catch(() => ({}));
+    const n = Math.min(Math.max(1, Number(body.n) || 3), 100);
+    const campaignId: string = body.campaignId || "";
 
-  if (!campaignId) {
-    return NextResponse.json({ error: "campaignId required" }, { status: 400 });
-  }
+    if (!campaignId) {
+      return NextResponse.json({ error: "campaignId required" }, { status: 400 });
+    }
 
-  // Resolve campaign and claim rows in parallel — one Redis read each.
-  const [campaign, claimed] = await Promise.all([
-    getCampaign(campaignId),
-    claimBulkRows(params.id, n),
-  ]);
+    // Resolve campaign and claim rows in parallel — one Redis read each.
+    const [campaign, claimed] = await Promise.all([
+      getCampaign(campaignId),
+      claimBulkRows(params.id, n),
+    ]);
 
-  if (!campaign) {
-    return NextResponse.json({ error: "campaign not found" }, { status: 404 });
-  }
+    if (!campaign) {
+      return NextResponse.json({ error: "campaign not found" }, { status: 404 });
+    }
 
-  // No more pending rows — job is done.
-  if (!claimed.length) {
-    return NextResponse.json({ done: true, claimed: 0, ok: 0, failed: 0 });
-  }
+    // No more pending rows — job is done.
+    if (!claimed.length) {
+      return NextResponse.json({ done: true, claimed: 0, ok: 0, failed: 0 });
+    }
 
-  const base = publicBaseUrl(req);
-  const triggeredAt = new Date().toISOString();
+    const base = publicBaseUrl(req);
+    const triggeredAt = new Date().toISOString();
 
-  // Fire all claimed rows in parallel — this is the main throughput win.
-  const results = await Promise.all(
-    claimed.map(async (row) => {
-      const to = normalizePhone(row.phone);
-      if (!to) {
-        await updateBulkRow(params.id, row.index, {
-          status: "failed",
-          error: "invalid phone",
-          attemptedAt: triggeredAt,
-        });
-        return { index: row.index, ok: false };
-      }
+    // Fire all claimed rows in parallel — this is the main throughput win.
+    const results = await Promise.all(
+      claimed.map(async (row) => {
+        const to = normalizePhone(row.phone);
+        if (!to) {
+          await updateBulkRow(params.id, row.index, {
+            status: "failed",
+            error: "invalid phone",
+            attemptedAt: triggeredAt,
+          });
+          return { index: row.index, ok: false };
+        }
 
-      // Use enough entropy to survive concurrent ID generation in the same ms.
-      const internalId = `c_${Date.now().toString(36)}${Math.random()
-        .toString(36)
-        .slice(2, 12)}`;
-      const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}`;
-      const hangupUrl = `${base}/api/hangup?req=${internalId}`;
+        // Use enough entropy to survive concurrent ID generation in the same ms.
+        const internalId = `c_${Date.now().toString(36)}${Math.random()
+          .toString(36)
+          .slice(2, 12)}`;
+        const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}`;
+        const hangupUrl = `${base}/api/hangup?req=${internalId}`;
 
-      const result = await placeCall({
-        to,
-        answerUrl,
-        hangupUrl,
-        callerName: row.name,
-        fromNumber: campaign.fromNumber || undefined,
-      });
-
-      // Write call record and bulk-row status in parallel (both are independent).
-      await Promise.all([
-        recordCall({
-          callUuid: internalId,
-          campaignId: campaign.id,
-          campaignName: campaign.name,
+        const result = await placeCall({
           to,
-          from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
-          email: row.email,
-          audioId: campaign.audioId,
-          webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
-          status: result.ok ? "queued" : "failed",
-          digit: "",
-          triggeredAt,
-          bulkJobId: params.id,
-        }),
-        updateBulkRow(params.id, row.index, {
-          status: result.ok ? "ok" : "failed",
-          callUuid: internalId,
-          attemptedAt: triggeredAt,
-          error: result.ok ? undefined : `Plivo ${result.status}`,
-        }),
-      ]);
+          answerUrl,
+          hangupUrl,
+          callerName: row.name,
+          fromNumber: campaign.fromNumber || undefined,
+        });
 
-      return { index: row.index, ok: result.ok, to };
-    }),
-  );
+        // Write call record and bulk-row status in parallel (both are independent).
+        await Promise.all([
+          recordCall({
+            callUuid: internalId,
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            to,
+            from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
+            email: row.email,
+            audioId: campaign.audioId,
+            webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
+            status: result.ok ? "queued" : "failed",
+            digit: "",
+            triggeredAt,
+            bulkJobId: params.id,
+          }),
+          updateBulkRow(params.id, row.index, {
+            status: result.ok ? "ok" : "failed",
+            callUuid: internalId,
+            attemptedAt: triggeredAt,
+            error: result.ok ? undefined : `Plivo ${result.status}`,
+          }),
+        ]);
 
-  const okCount = results.filter((r) => r.ok).length;
-  const failedCount = results.length - okCount;
+        return { index: row.index, ok: result.ok, to };
+      }),
+    );
 
-  return NextResponse.json({
-    done: false,
-    claimed: claimed.length,
-    ok: okCount,
-    failed: failedCount,
-  });
+    const okCount = results.filter((r) => r.ok).length;
+    const failedCount = results.length - okCount;
+
+    return NextResponse.json({
+      done: false,
+      claimed: claimed.length,
+      ok: okCount,
+      failed: failedCount,
+    });
+  } catch (e: any) {
+    console.error("[advance] unhandled error:", e);
+    return NextResponse.json({ error: e?.message || "internal error" }, { status: 500 });
+  }
 }
