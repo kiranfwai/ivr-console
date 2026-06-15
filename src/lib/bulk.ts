@@ -372,8 +372,11 @@ export async function migrateBulkJobsFromKv(): Promise<{ migrated: number; rows:
     const exists = await query(`SELECT 1 FROM bulk_job WHERE id=$1`, [id]);
     if (exists.rows.length) continue;
 
-    const allDone = job.rows.every((r: any) => r.status === "ok" || r.status === "failed");
-    const status: BulkJobStatus = job.paused ? "paused" : allDone ? "completed" : "running";
+    // Safety: never auto-start a migrated job. Anything still incomplete becomes
+    // 'paused' so a deploy can't surprise-dial old numbers — the operator resumes
+    // the specific job they want. Only fully-finished jobs migrate as 'completed'.
+    const hasPending = job.rows.some((r: any) => r.status === "pending" || r.status === "dialing");
+    const status: BulkJobStatus = hasPending ? "paused" : "completed";
     const createdAt = job.createdAt ? new Date(job.createdAt) : new Date();
 
     await withTx(async (c) => {
