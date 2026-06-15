@@ -17,6 +17,13 @@ export interface PlaceCallOptions {
   answerMethod?: "GET" | "POST";
 }
 
+// A single hung Plivo request must never wedge a whole batch: at high
+// concurrency, fireBatch does Promise.all over many placeCall()s, so one
+// fetch that never settles would stall the worker and leave rows stuck in
+// "dialing". We bound every call with an AbortController timeout and turn any
+// failure into a normal { ok:false } result instead of a throw.
+const CALL_TIMEOUT_MS = Number(process.env.PLIVO_CALL_TIMEOUT_MS) || 25000;
+
 export async function placeCall(opts: PlaceCallOptions) {
   const body = {
     from: opts.fromNumber || DEFAULT_FROM(),
@@ -27,17 +34,27 @@ export async function placeCall(opts: PlaceCallOptions) {
     hangup_method: "POST",
     caller_name: opts.callerName,
   };
-  const res = await fetch(`https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: authHeader() },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let json: any = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
   try {
-    json = JSON.parse(text);
-  } catch {}
-  return { ok: res.ok, status: res.status, body: json ?? text };
+    const res = await fetch(`https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authHeader() },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(text);
+    } catch {}
+    return { ok: res.ok, status: res.status, body: json ?? text };
+  } catch (e: any) {
+    const status = e?.name === "AbortError" ? 408 : 0;
+    return { ok: false, status, body: e?.name === "AbortError" ? "timeout" : e?.message || "fetch error" };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function fetchCallDetail(callUuid: string) {

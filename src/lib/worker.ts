@@ -26,22 +26,27 @@ import { fireBatch } from "./bulk-runner";
 
 const TICK_MS = 300; // how often we look for batches to fire across all jobs
 const ERROR_BACKOFF_MS = 5000; // pause a job briefly after an unexpected batch error
+// Hard cap on parallel calls per batch. The box is a 1 GiB t3.micro; 100 parallel
+// Plivo fetches + their DB writes is what made it fall over. Override per box.
+const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 30;
 
 const inFlight = new Set<string>(); // jobs with a batch currently firing
 const nextAt = new Map<string, number>(); // jobId -> earliest time its next batch may fire
 
-let started = false;
-let timer: ReturnType<typeof setInterval> | null = null;
+// Next.js can load this module twice (instrumentation bundle vs route bundle),
+// each with its own module scope. Guard the singleton on globalThis so we never
+// run two tickers racing to claim the same job.
+const G = globalThis as unknown as { __ivrWorkerStarted?: boolean };
 
 export async function startWorker(): Promise<void> {
-  if (started) return;
-  started = true;
+  if (G.__ivrWorkerStarted) return;
+  G.__ivrWorkerStarted = true;
   try {
     await recover();
   } catch (e) {
     console.error("[worker] recovery failed:", e);
   }
-  timer = setInterval(() => {
+  const timer = setInterval(() => {
     void tick();
   }, TICK_MS);
   // Don't keep the process alive solely for the ticker.
@@ -108,7 +113,7 @@ async function runJobBatch(id: string): Promise<void> {
       return;
     }
 
-    const n = Math.min(Math.max(1, meta.concurrency ?? 3), 100);
+    const n = Math.min(Math.max(1, meta.concurrency ?? 3), MAX_CONCURRENCY);
     const r = await fireBatch(id, campaign, n, publicBaseUrl());
 
     if (!r.claimed) {
