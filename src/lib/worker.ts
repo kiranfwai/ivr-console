@@ -1,131 +1,140 @@
 import {
-  getBulkJob,
-  listActiveJobIds,
-  markActive,
-  markInactive,
-  peekBulkJobMeta,
+  claimBulkRows,
+  countPending,
+  listRunningJobs,
+  migrateBulkJobsFromKv,
   resetDialingRows,
+  setJobStatus,
 } from "./bulk";
 import { getCampaign } from "./campaigns";
 import { publicBaseUrl } from "./plivo";
-import { fireBatch } from "./bulk-runner";
+import { fireOne } from "./bulk-runner";
 
 /**
- * In-process bulk-call worker.
+ * In-process bulk-call worker — a per-job concurrency pump.
  *
- * Bulk calls used to be driven by the browser: the open tab ran a while-loop
- * hitting /advance, so closing the tab stopped the campaign. This worker moves
- * that loop into the long-lived `next start` server process. Submitting a job
- * just enqueues it (createBulkJob adds it to the `bulk:active` set); this ticker
- * drains every active job server-side and the UI only polls for progress.
+ * Campaigns are dialed entirely server-side: submitting a job just inserts rows
+ * with status 'running'; this pump keeps up to `concurrency` calls in flight per
+ * job by claiming pending rows (FOR UPDATE SKIP LOCKED) and firing each one
+ * independently. Closing the browser has no effect. State lives in Postgres, so
+ * the worker is crash-safe: on boot it migrates any legacy blob jobs, resets
+ * rows stuck in 'dialing', and resumes 'running' jobs where they left off.
  *
- * State lives entirely in Postgres, so the worker is crash-safe: on (re)start it
- * recovers any rows stuck in "dialing" and re-registers unfinished jobs, then
- * continues where it left off — surviving deploys and restarts.
+ * Stop = set job status 'paused' (worker stops claiming next tick; in-flight
+ * calls finish). Resume = status 'running'. Both are durable in the DB.
  */
 
-const TICK_MS = 300; // how often we look for batches to fire across all jobs
-const ERROR_BACKOFF_MS = 5000; // pause a job briefly after an unexpected batch error
-// Hard cap on parallel calls per batch. The box is a 1 GiB t3.micro; 100 parallel
-// Plivo fetches + their DB writes is what made it fall over. Override per box.
-const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 30;
+const TICK_MS = 200;
+// Hard ceiling on parallel calls per job regardless of the job's setting — the
+// box is a 1 GiB t3.micro. Raise via env on a bigger instance.
+const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 40;
 
-const inFlight = new Set<string>(); // jobs with a batch currently firing
-const nextAt = new Map<string, number>(); // jobId -> earliest time its next batch may fire
-
-// Next.js can load this module twice (instrumentation bundle vs route bundle),
-// each with its own module scope. Guard the singleton on globalThis so we never
-// run two tickers racing to claim the same job.
+const inFlight = new Map<string, number>();   // jobId -> calls currently in flight
+const nextClaimAt = new Map<string, number>(); // jobId -> earliest next claim (delay pacing)
 const G = globalThis as unknown as { __ivrWorkerStarted?: boolean };
 
 export async function startWorker(): Promise<void> {
   if (G.__ivrWorkerStarted) return;
   G.__ivrWorkerStarted = true;
   try {
+    const m = await migrateBulkJobsFromKv();
+    if (m.migrated) console.log(`[worker] migrated ${m.migrated} legacy job(s), ${m.rows} rows`);
+  } catch (e) {
+    console.error("[worker] migration failed:", e);
+  }
+  try {
     await recover();
   } catch (e) {
     console.error("[worker] recovery failed:", e);
   }
-  const timer = setInterval(() => {
-    void tick();
-  }, TICK_MS);
-  // Don't keep the process alive solely for the ticker.
+  const timer = setInterval(() => void tick(), TICK_MS);
   if (timer && typeof (timer as any).unref === "function") (timer as any).unref();
   console.log("[worker] started");
 }
 
-/**
- * On boot, recover only jobs already in the active set — i.e. jobs the new
- * system enqueued or the operator explicitly resumed. For each, reset rows left
- * "dialing" by the crash/restart back to "pending" so they get re-dialed, then
- * re-validate membership. We deliberately do NOT sweep historical jobs: a job
- * with stray pending rows from before this feature must be resumed explicitly
- * (Resume button) so a deploy never surprise-dials abandoned numbers.
- */
 async function recover(): Promise<void> {
-  const ids = await listActiveJobIds();
-  for (const id of ids) {
-    const reset = await resetDialingRows(id);
-    const job = await getBulkJob(id);
-    const hasPending = job?.rows.some((r) => r.status === "pending");
-    if (job && (job.kind ?? "call") === "call" && !job.paused && hasPending) {
-      await markActive(id);
-    } else {
-      await markInactive(id);
-    }
-    if (reset) console.log(`[worker] recovered ${reset} dialing rows for ${id}`);
+  for (const job of await listRunningJobs()) {
+    const n = await resetDialingRows(job.id);
+    if (n) console.log(`[worker] recovered ${n} dialing rows for ${job.id}`);
   }
 }
 
 async function tick(): Promise<void> {
-  let ids: string[];
+  let jobs;
   try {
-    ids = await listActiveJobIds();
+    jobs = await listRunningJobs();
   } catch (e) {
-    console.error("[worker] tick: listActiveJobIds failed:", e);
+    console.error("[worker] tick: listRunningJobs failed:", e);
     return;
   }
   const now = Date.now();
-  for (const id of ids) {
-    if (inFlight.has(id)) continue;
-    if ((nextAt.get(id) ?? 0) > now) continue;
-    inFlight.add(id);
-    // Fire jobs concurrently; each paces itself via nextAt.
-    void runJobBatch(id).finally(() => inFlight.delete(id));
+  for (const job of jobs) {
+    if (job.kind !== "call") continue; // WhatsApp jobs are browser-paced, not pumped here
+    void pumpJob(job, now);
   }
 }
 
-async function runJobBatch(id: string): Promise<void> {
+async function pumpJob(
+  job: { id: string; campaignId: string; concurrency: number; delayMs: number },
+  now: number,
+): Promise<void> {
+  const cur = inFlight.get(job.id) ?? 0;
+  const cap = Math.min(Math.max(1, job.concurrency), MAX_CONCURRENCY);
+  const budget = cap - cur;
+
+  // Optional pacing between claims (delayMs=0 → run at full concurrency).
+  if (job.delayMs && (nextClaimAt.get(job.id) ?? 0) > now) {
+    await maybeComplete(job.id, cur);
+    return;
+  }
+  if (budget <= 0) return;
+
+  let claimed;
   try {
-    // Cheap metadata read — does NOT load the full rows blob into memory.
-    const meta = await peekBulkJobMeta(id);
-    if (!meta || meta.kind !== "call" || meta.paused || !meta.hasPending) {
-      await markInactive(id);
-      nextAt.delete(id);
-      return;
-    }
-    const campaign = await getCampaign(meta.campaignId);
-    if (!campaign) {
-      // Can't dial without a campaign — drop it from the active set and log loudly.
-      console.error(`[worker] job ${id}: campaign ${meta.campaignId} not found, removing from queue`);
-      await markInactive(id);
-      nextAt.delete(id);
-      return;
-    }
-
-    const n = Math.min(Math.max(1, meta.concurrency ?? 3), MAX_CONCURRENCY);
-    const r = await fireBatch(id, campaign, n, publicBaseUrl());
-
-    if (!r.claimed) {
-      // Someone else drained the last rows between our check and the claim.
-      await markInactive(id);
-      nextAt.delete(id);
-      return;
-    }
-    nextAt.set(id, Date.now() + (meta.delayMs ?? 1000));
+    claimed = await claimBulkRows(job.id, budget);
   } catch (e) {
-    // Transient error (e.g. Plivo/DB hiccup): keep the job queued, back off briefly.
-    console.error(`[worker] job ${id} batch error:`, e);
-    nextAt.set(id, Date.now() + ERROR_BACKOFF_MS);
+    console.error(`[worker] claim failed for ${job.id}:`, e);
+    return;
+  }
+  if (!claimed.length) {
+    await maybeComplete(job.id, cur);
+    return;
+  }
+
+  const campaign = await getCampaign(job.campaignId);
+  if (!campaign) {
+    console.error(`[worker] job ${job.id}: campaign ${job.campaignId} not found — pausing`);
+    // Put the claimed rows back and pause so it stops trying.
+    await resetDialingRows(job.id);
+    await setJobStatus(job.id, "paused");
+    return;
+  }
+
+  inFlight.set(job.id, cur + claimed.length);
+  if (job.delayMs) nextClaimAt.set(job.id, Date.now() + job.delayMs);
+  const base = publicBaseUrl();
+
+  for (const row of claimed) {
+    void fireOne(job.id, row, campaign, base)
+      .catch((e) => console.error(`[worker] fireOne error ${job.id}#${row.index}:`, e))
+      .finally(() => {
+        const n = (inFlight.get(job.id) ?? 1) - 1;
+        if (n <= 0) inFlight.delete(job.id);
+        else inFlight.set(job.id, n);
+      });
+  }
+}
+
+/** Mark a job completed once nothing is pending and nothing is in flight. */
+async function maybeComplete(jobId: string, cur: number): Promise<void> {
+  if (cur > 0) return;
+  try {
+    if ((await countPending(jobId)) === 0) {
+      await setJobStatus(jobId, "completed");
+      nextClaimAt.delete(jobId);
+      console.log(`[worker] job ${jobId} completed`);
+    }
+  } catch (e) {
+    console.error(`[worker] completion check failed for ${jobId}:`, e);
   }
 }

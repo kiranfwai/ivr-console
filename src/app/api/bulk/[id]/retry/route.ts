@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBulkJob, createBulkJob } from "@/lib/bulk";
+import { getBulkJob, getRetryableRows, createBulkJob } from "@/lib/bulk";
 import { startWorker } from "@/lib/worker";
-import { RETRY_STATUSES } from "@/lib/outcome";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +14,7 @@ export async function POST(_: NextRequest, { params }: { params: { id: string } 
   const job = await getBulkJob(params.id);
   if (!job) return NextResponse.json({ error: "job not found" }, { status: 404 });
 
-  const failedRows = job.rows.filter((r) => RETRY_STATUSES.has(r.status));
+  const failedRows = await getRetryableRows(params.id);
   if (!failedRows.length) {
     return NextResponse.json({ error: "no retry-able rows in this job" }, { status: 400 });
   }
@@ -27,9 +26,9 @@ export async function POST(_: NextRequest, { params }: { params: { id: string } 
     delayMs: job.delayMs,
     jitterPct: job.jitterPct,
     concurrency: job.concurrency,
-    rows: failedRows.map((r) => ({ phone: r.phone, name: r.name })),
+    rows: failedRows,
   });
-  if ((job.kind ?? "call") === "call") await startWorker();
+  if (job.kind === "call") await startWorker();
 
   return NextResponse.json({ job: child, retriedFrom: job.id, count: failedRows.length });
 }

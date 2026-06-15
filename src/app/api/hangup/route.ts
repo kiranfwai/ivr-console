@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
 import { getCall, patchCall } from "@/lib/calls";
-import { updateBulkRow } from "@/lib/bulk";
+import { updateBulkRowByCallUuid } from "@/lib/bulk";
 import { deriveOutcome } from "@/lib/outcome";
 import { recordFinalized } from "@/lib/stats";
 import { redis } from "@/lib/redis";
@@ -62,27 +62,18 @@ async function handleInner(req: NextRequest) {
       hangupCause: cause,
     });
 
-    // Propagate outcome to the parent bulk row so the Bulk tab can show
-    // accurate per-call results (not just "was the place-call request accepted").
+    // Propagate the outcome to the parent bulk row by call UUID — a single
+    // indexed update (no whole-job scan), so high call volume doesn't contend.
     if (cur?.bulkJobId) {
-      const bulkIndex = await findBulkRowIndex(cur.bulkJobId, internalId);
-      if (bulkIndex !== -1) {
-        const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
-        await updateBulkRow(cur.bulkJobId, bulkIndex, {
-          status: outcome,
-          hangupCause: cause,
-          durationSec: dur,
-        });
-      }
+      const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
+      await updateBulkRowByCallUuid(internalId, {
+        status: outcome,
+        hangupCause: cause,
+        durationSec: dur,
+      });
     }
   }
   return NextResponse.json({ ok: true });
-}
-
-async function findBulkRowIndex(jobId: string, callUuid: string): Promise<number> {
-  const job = await redis().get<{ rows: { callUuid?: string }[] }>(`bulk:${jobId}`);
-  if (!job) return -1;
-  return job.rows.findIndex((r) => r.callUuid === callUuid);
 }
 
 export const GET = handle;

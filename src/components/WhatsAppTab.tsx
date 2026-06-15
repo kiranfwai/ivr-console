@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
 import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
 import { useFetch, api } from "./useData";
-import type { BulkJob } from "@/lib/models";
+import type { BulkJobWithCounts } from "@/lib/models";
 
 type Mode = "single" | "bulk";
 
@@ -152,7 +152,7 @@ function delayMsForRate(ratePerMin: number, jitterPct: number): number {
 }
 
 function BulkSend() {
-  const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJob[] }>("/api/bulk");
+  const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJobWithCounts[] }>("/api/bulk");
   const jobs = (jdata?.jobs ?? []).filter((j) => j.kind === "whatsapp");
 
   const [csv, setCsv] = useState<string>("phone,name,email\n");
@@ -160,7 +160,7 @@ function BulkSend() {
   const [rate, setRate] = useState(6);
   const [jitterPct, setJitterPct] = useState(30);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [activeJob, setActiveJob] = useState<BulkJob | null>(null);
+  const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   const [running, setRunning] = useState(false);
   const stopRef = useRef(false);
 
@@ -168,7 +168,7 @@ function BulkSend() {
     if (!activeJobId) return;
     const fn = async () => {
       try {
-        const j = await api<{ job: BulkJob }>(`/api/bulk/${activeJobId}`);
+        const j = await api<{ job: BulkJobWithCounts }>(`/api/bulk/${activeJobId}`);
         setActiveJob(j.job);
       } catch {}
     };
@@ -181,7 +181,7 @@ function BulkSend() {
     const rows = parseRows(csv);
     if (!rows.length) return;
     try {
-      const r = await api<{ job: BulkJob }>("/api/bulk", {
+      const r = await api<{ job: BulkJobWithCounts }>("/api/bulk", {
         method: "POST",
         body: JSON.stringify({
           kind: "whatsapp",
@@ -201,22 +201,24 @@ function BulkSend() {
     }
   }
 
+  // WhatsApp stays a browser-paced trickle (anti-ban). /next returns the next
+  // pending row inline; the row state itself lives in the per-row backend store.
   async function drive(jobId: string, hookOverride: string) {
     stopRef.current = false;
     setRunning(true);
     try {
       while (!stopRef.current) {
-        const nx = await api<{ done: boolean; index?: number }>(`/api/bulk/${jobId}/next`);
-        if (nx.done) break;
-        const j = await api<{ job: BulkJob }>(`/api/bulk/${jobId}`);
-        const row = j.job.rows[nx.index!];
-        const hookForRow = hookOverride || j.job.webhookUrl || undefined;
+        const nx = await api<{ done: boolean; index?: number; row?: { phone: string; name?: string; email?: string }; webhookUrl?: string }>(
+          `/api/bulk/${jobId}/next`,
+        );
+        if (nx.done || !nx.row) break;
+        const hookForRow = hookOverride || nx.webhookUrl || undefined;
         await api(`/api/whatsapp/send`, {
           method: "POST",
           body: JSON.stringify({
-            phone: row.phone,
-            name: row.name,
-            email: row.email,
+            phone: nx.row.phone,
+            name: nx.row.name,
+            email: nx.row.email,
             webhookUrl: hookForRow,
             bulkJobId: jobId,
             bulkRowIndex: nx.index,
@@ -400,20 +402,14 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "ok"
   );
 }
 
-function tally(job: BulkJob) {
-  let ok = 0, failed = 0, pending = 0, dialing = 0;
-  for (const r of job.rows) {
-    if (r.status === "ok") ok++;
-    else if (r.status === "failed") failed++;
-    else if (r.status === "dialing") dialing++;
-    else pending++;
-  }
+function tally(job: BulkJobWithCounts) {
+  const c = job.counts || {};
   return {
-    ok,
-    failedAll: failed,
-    pending,
-    dialing,
-    total: job.rows.length,
+    ok: c.ok ?? 0,
+    failedAll: c.failed ?? 0,
+    pending: c.pending ?? 0,
+    dialing: c.dialing ?? 0,
+    total: job.total || 0,
   };
 }
 

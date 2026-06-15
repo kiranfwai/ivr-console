@@ -24,8 +24,12 @@ function makePool(): Pool {
       ? { rejectUnauthorized: false }
       : undefined;
 
+  // Pool size matters for the bulk-call worker: at high concurrency, claims +
+  // per-call record writes + Plivo hangup callbacks all draw connections. Default
+  // 25; override with PGPOOL_MAX (keep below the DB's max_connections headroom).
+  const max = Number(process.env.PGPOOL_MAX) || 25;
   if (conn) {
-    return new Pool({ connectionString: conn, ssl, max: 10 });
+    return new Pool({ connectionString: conn, ssl, max });
   }
   return new Pool({
     host: process.env.PGHOST,
@@ -34,7 +38,7 @@ function makePool(): Pool {
     database: process.env.PGDATABASE,
     port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
     ssl,
-    max: 10,
+    max,
   });
 }
 
@@ -109,6 +113,42 @@ async function bootstrap(): Promise<void> {
       v       text NOT NULL,
       PRIMARY KEY (k, field)
     );
+
+    -- Bulk campaigns: a per-row work-queue. Replaces the old single-JSON-blob
+    -- storage so claims/updates/hangup callbacks touch one row, not the whole
+    -- job, and the worker can drain with FOR UPDATE SKIP LOCKED.
+    CREATE TABLE IF NOT EXISTS bulk_job (
+      id           text PRIMARY KEY,
+      kind         text NOT NULL DEFAULT 'call',     -- 'call' | 'whatsapp'
+      campaign_id  text,
+      webhook_url  text,
+      concurrency  int  NOT NULL DEFAULT 30,
+      delay_ms     int  NOT NULL DEFAULT 0,
+      jitter_pct   int,
+      status       text NOT NULL DEFAULT 'running',  -- running | paused | completed
+      total        int  NOT NULL DEFAULT 0,
+      created_at   timestamptz NOT NULL DEFAULT now(),
+      started_at   timestamptz,
+      completed_at timestamptz
+    );
+    CREATE TABLE IF NOT EXISTS bulk_row (
+      job_id       text NOT NULL,
+      idx          int  NOT NULL,
+      phone        text NOT NULL,
+      name         text,
+      email        text,
+      status       text NOT NULL DEFAULT 'pending',  -- pending|dialing|ok|failed|press1|connected|busy|no-answer|rejected|error
+      call_uuid    text,
+      error        text,
+      hangup_cause text,
+      duration_sec int,
+      attempted_at timestamptz,
+      PRIMARY KEY (job_id, idx)
+    );
+    CREATE INDEX IF NOT EXISTS bulk_row_pending  ON bulk_row (job_id) WHERE status='pending';
+    CREATE INDEX IF NOT EXISTS bulk_row_calluuid ON bulk_row (call_uuid) WHERE call_uuid IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS bulk_job_running  ON bulk_job (status) WHERE status='running';
+    CREATE INDEX IF NOT EXISTS bulk_job_created  ON bulk_job (created_at DESC);
   `;
   await pool().query(sql);
 }

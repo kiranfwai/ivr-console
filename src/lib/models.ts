@@ -58,6 +58,7 @@ export type BulkRowStatus =
   | "error";      // carrier / Plivo error reaching answer URL
 
 export interface BulkRow {
+  idx?: number;              // row index within the job (stable, 0-based)
   phone: string;
   name?: string;
   email?: string;
@@ -71,17 +72,31 @@ export interface BulkRow {
 
 export type BulkKind = "call" | "whatsapp";
 
+export type BulkJobStatus = "running" | "paused" | "completed";
+
+/**
+ * A bulk job is now metadata only — the recipient rows live in their own
+ * `bulk_row` table (a per-row work-queue), not inline. Use tallyJob()/getRows()
+ * to read counts and rows. `BulkJob` is kept as the meta type for callers.
+ */
 export interface BulkJob {
   id: string;
   kind: BulkKind;
-  campaignId: string;       // for "call" kind. For "whatsapp" use webhookUrl below; campaignId may be "".
+  campaignId: string;        // for "call" kind. For "whatsapp" use webhookUrl; campaignId may be "".
   webhookUrl?: string;       // WhatsApp bulk: optional Pabbly override (falls back to env)
-  rows: BulkRow[];
-  delayMs: number;           // base delay in ms (effective delay is delayMs ± jitter)
+  concurrency: number;       // call-jobs: max parallel calls the backend worker keeps in flight
+  delayMs: number;           // optional pacing between claims (0 = run at full concurrency)
   jitterPct?: number;        // 0-80, WhatsApp-only pacing randomness
-  concurrency?: number;      // call-jobs: parallel calls the backend worker fires per batch
-  paused?: boolean;          // call-jobs: when true the worker skips this job (Stop button)
+  status: BulkJobStatus;     // running | paused (Stop) | completed
+  total: number;             // number of recipient rows
   createdAt: string;
-  startedAt?: string;        // first time the worker fired a batch for this job
+  startedAt?: string;
   completedAt?: string;
+}
+
+/** Count of rows in each status for a job (only non-zero buckets are present). */
+export type BulkJobCounts = Partial<Record<BulkRowStatus, number>>;
+
+export interface BulkJobWithCounts extends BulkJob {
+  counts: BulkJobCounts;
 }
