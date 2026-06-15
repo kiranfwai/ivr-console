@@ -7,9 +7,23 @@ import {
   TextareaHTMLAttributes,
   ReactNode,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { Check, X, AlertCircle, Info, Inbox, Upload } from "lucide-react";
+
+/* -------------------- Field messages (shared) -------------------- */
+function FieldMessages({ error, hint }: { error?: string; hint?: string }) {
+  if (!error && !hint) return null;
+  return error ? (
+    <div className="mt-1 text-xs text-danger flex items-center gap-1">
+      <AlertCircle size={12} />
+      {error}
+    </div>
+  ) : (
+    <div className="mt-1 text-xs text-muted">{hint}</div>
+  );
+}
 
 /* -------------------- Button -------------------- */
 type Variant = "primary" | "ghost" | "danger" | "outline" | "subtle";
@@ -66,6 +80,8 @@ export function IconButton({
   variant = "subtle",
   size = "md",
   className = "",
+  "aria-label": ariaLabel,
+  title,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   icon: ReactNode;
@@ -84,46 +100,103 @@ export function IconButton({
     danger: "text-danger hover:bg-danger/10",
   }[variant];
   const sizeCls = { sm: "p-1.5", md: "p-2", lg: "p-2.5" }[size];
-  return <button className={`${base} ${variantCls} ${sizeCls} ${className}`} {...rest}>{icon}</button>;
+  return (
+    <button
+      className={`${base} ${variantCls} ${sizeCls} ${className}`}
+      aria-label={ariaLabel ?? title}
+      title={title}
+      {...rest}
+    >
+      {icon}
+    </button>
+  );
 }
 
 /* -------------------- Inputs -------------------- */
-export function Input({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({
+  className = "",
+  error,
+  hint,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { error?: string; hint?: string }) {
+  const borderCls = error
+    ? "border-danger/60 focus:border-danger"
+    : "border-line hover:border-line2 focus:border-brand/60";
   return (
-    <input
-      className={`w-full bg-bg/60 border border-line rounded-lg px-3 py-2 text-sm outline-none transition-colors
-        placeholder:text-muted hover:border-line2 focus:border-brand/60 focus:bg-bg ${className}`}
-      {...rest}
-    />
+    <div>
+      <input
+        aria-invalid={error ? true : undefined}
+        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
+          placeholder:text-muted focus:bg-bg ${borderCls} ${className}`}
+        {...rest}
+      />
+      <FieldMessages error={error} hint={hint} />
+    </div>
   );
 }
 
-export function Textarea({ className = "", ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({
+  className = "",
+  error,
+  hint,
+  ...rest
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { error?: string; hint?: string }) {
+  const borderCls = error
+    ? "border-danger/60 focus:border-danger"
+    : "border-line hover:border-line2 focus:border-brand/60";
   return (
-    <textarea
-      className={`w-full bg-bg/60 border border-line rounded-lg px-3 py-2 text-sm font-mono outline-none transition-colors
-        placeholder:text-muted hover:border-line2 focus:border-brand/60 focus:bg-bg ${className}`}
-      {...rest}
-    />
+    <div>
+      <textarea
+        aria-invalid={error ? true : undefined}
+        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm font-mono outline-none transition-colors
+          placeholder:text-muted focus:bg-bg ${borderCls} ${className}`}
+        {...rest}
+      />
+      <FieldMessages error={error} hint={hint} />
+    </div>
   );
 }
 
-export function Select({ className = "", children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({
+  className = "",
+  children,
+  error,
+  hint,
+  ...rest
+}: SelectHTMLAttributes<HTMLSelectElement> & { error?: string; hint?: string }) {
+  const borderCls = error
+    ? "border-danger/60 focus:border-danger"
+    : "border-line hover:border-line2 focus:border-brand/60";
   return (
-    <select
-      className={`w-full bg-bg/60 border border-line rounded-lg px-3 py-2 text-sm outline-none transition-colors
-        hover:border-line2 focus:border-brand/60 focus:bg-bg cursor-pointer ${className}`}
-      {...rest}
-    >
-      {children}
-    </select>
+    <div>
+      <select
+        aria-invalid={error ? true : undefined}
+        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
+          focus:bg-bg cursor-pointer ${borderCls} ${className}`}
+        {...rest}
+      >
+        {children}
+      </select>
+      <FieldMessages error={error} hint={hint} />
+    </div>
   );
 }
 
-export function Label({ children, hint }: { children: ReactNode; hint?: string }) {
+export function Label({
+  children,
+  hint,
+  required,
+}: {
+  children: ReactNode;
+  hint?: string;
+  required?: boolean;
+}) {
   return (
     <div className="flex items-center justify-between mb-1.5">
-      <div className="text-xs font-medium text-ink2 uppercase tracking-wider">{children}</div>
+      <div className="text-xs font-medium text-ink2 uppercase tracking-wider">
+        {children}
+        {required && <span className="text-danger ml-0.5" aria-hidden="true">*</span>}
+      </div>
       {hint && <div className="text-xs text-muted">{hint}</div>}
     </div>
   );
@@ -250,21 +323,40 @@ export function KPI({
 /* -------------------- File picker -------------------- */
 export function CsvFilePicker({ onLoad }: { onLoad: (text: string) => void }) {
   const [fileName, setFileName] = useState<string>("");
+  const [dragOver, setDragOver] = useState(false);
+
+  async function handleFile(f: File | undefined | null) {
+    if (!f) return;
+    const text = await f.text();
+    setFileName(f.name);
+    onLoad(text);
+  }
+
   return (
-    <label className="cursor-pointer px-2.5 py-1.5 rounded-md bg-elev/80 hover:bg-elev border border-line hover:border-line2 text-ink inline-flex items-center gap-1.5 text-xs transition-colors">
+    <label
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        handleFile(e.dataTransfer.files?.[0]);
+      }}
+      className={`cursor-pointer px-2.5 py-1.5 rounded-md border text-ink inline-flex items-center gap-1.5 text-xs transition-colors ${
+        dragOver
+          ? "bg-brand/10 border-brand/40"
+          : "bg-elev/80 hover:bg-elev border-line hover:border-line2"
+      }`}
+    >
       <Upload size={12} />
-      <span>{fileName || "Choose CSV"}</span>
+      <span>{fileName || (dragOver ? "Drop CSV here" : "Choose CSV")}</span>
       <input
         type="file"
         accept=".csv,text/csv,text/plain"
         className="hidden"
-        onChange={async (e) => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          const text = await f.text();
-          setFileName(f.name);
-          onLoad(text);
-        }}
+        onChange={(e) => handleFile(e.target.files?.[0])}
       />
     </label>
   );
@@ -319,26 +411,63 @@ export function Spinner({ size = 16 }: { size?: number }) {
 }
 
 /* -------------------- Toasts -------------------- */
-type Toast = { id: number; tone: "ok" | "danger" | "info"; text: string };
+type Toast = { id: number; tone: "ok" | "danger" | "info"; text: string; duration: number };
 let toastCounter = 1;
 const listeners = new Set<(t: Toast) => void>();
 
-export function toast(text: string, tone: Toast["tone"] = "info") {
-  const t: Toast = { id: toastCounter++, tone, text };
+export function toast(
+  text: string,
+  tone: Toast["tone"] = "info",
+  duration = 4000,
+) {
+  const t: Toast = { id: toastCounter++, tone, text, duration };
   listeners.forEach((fn) => fn(t));
 }
 
 export function Toaster() {
   const [items, setItems] = useState<Toast[]>([]);
+  // Track per-toast remaining time and timers so we can pause/resume on hover.
+  const timers = useRef<Map<number, { handle: ReturnType<typeof setTimeout>; remaining: number; start: number }>>(
+    new Map(),
+  );
+
+  const dismiss = (id: number) => {
+    const entry = timers.current.get(id);
+    if (entry) clearTimeout(entry.handle);
+    timers.current.delete(id);
+    setItems((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const schedule = (id: number, ms: number) => {
+    const handle = setTimeout(() => dismiss(id), ms);
+    timers.current.set(id, { handle, remaining: ms, start: Date.now() });
+  };
+
+  const pause = (id: number) => {
+    const entry = timers.current.get(id);
+    if (!entry) return;
+    clearTimeout(entry.handle);
+    entry.remaining = Math.max(0, entry.remaining - (Date.now() - entry.start));
+  };
+
+  const resume = (id: number) => {
+    const entry = timers.current.get(id);
+    if (!entry) return;
+    schedule(id, entry.remaining);
+  };
+
   useEffect(() => {
     const fn = (t: Toast) => {
       setItems((prev) => [...prev, t]);
-      setTimeout(() => setItems((prev) => prev.filter((p) => p.id !== t.id)), 4000);
+      schedule(t.id, t.duration);
     };
     listeners.add(fn);
     return () => {
       listeners.delete(fn);
+      timers.current.forEach((e) => clearTimeout(e.handle));
+      timers.current.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
     <div className="fixed bottom-4 right-4 space-y-2 z-50 pointer-events-none">
@@ -352,6 +481,9 @@ export function Toaster() {
         return (
           <div
             key={t.id}
+            role="status"
+            onMouseEnter={() => pause(t.id)}
+            onMouseLeave={() => resume(t.id)}
             className={`px-3 py-2.5 rounded-lg shadow-elev border text-sm flex items-center gap-2 animate-slide-up pointer-events-auto backdrop-blur ${cls}`}
           >
             <Icon size={16} />
@@ -364,13 +496,16 @@ export function Toaster() {
 }
 
 /* -------------------- Modal -------------------- */
+const MODAL_SIZES = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-3xl" } as const;
+
 export function Modal({
   open,
   onClose,
   title,
   children,
   footer,
-  maxWidth = "max-w-xl",
+  maxWidth,
+  size = "md",
 }: {
   open: boolean;
   onClose: () => void;
@@ -378,21 +513,70 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   maxWidth?: string;
+  size?: "sm" | "md" | "lg";
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    // Move focus into the dialog on open.
+    const prevFocus = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => !el.hasAttribute("disabled"));
+    (focusables()[0] ?? panel)?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key === "Tab") {
+        const els = focusables();
+        if (els.length === 0) return;
+        const first = els[0];
+        const last = els[els.length - 1];
+        const activeEl = document.activeElement;
+        if (e.shiftKey && activeEl === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && activeEl === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      prevFocus?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
+  const widthCls = maxWidth ?? MODAL_SIZES[size];
   return (
     <div
       className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full ${maxWidth} bg-panel border border-line rounded-2xl shadow-elev animate-slide-up`}
+        className={`w-full ${widthCls} bg-panel border border-line rounded-2xl shadow-elev animate-slide-up outline-none`}
       >
         {title && (
           <div className="flex items-center justify-between px-5 py-4 border-b border-line">
             <div className="font-semibold">{title}</div>
-            <IconButton icon={<X size={16} />} onClick={onClose} />
+            <IconButton icon={<X size={16} />} onClick={onClose} aria-label="Close dialog" />
           </div>
         )}
         <div className="p-5">{children}</div>

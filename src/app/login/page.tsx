@@ -2,12 +2,18 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Phone, LogIn } from "lucide-react";
-import { Button, Input, Label } from "@/components/ui";
+import { Phone, LogIn, AlertCircle } from "lucide-react";
+import { Button, Input, Label, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-muted">
+          <Spinner size={20} />
+        </div>
+      }
+    >
       <LoginForm />
     </Suspense>
   );
@@ -17,25 +23,38 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
   const router = useRouter();
   const search = useSearchParams();
   const from = search.get("from") || "/";
+
+  function detectCaps(e: React.KeyboardEvent<HTMLInputElement>) {
+    setCapsLock(e.getModifierState?.("CapsLock") ?? false);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setErr("");
-    const r = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    if (r.ok) {
-      router.replace(from);
-    } else {
-      setErr("Wrong password.");
-      setBusy(false);
+    try {
+      const r = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (r.ok) {
+        router.replace(from);
+        return;
+      }
+      setErr(
+        r.status === 401 || r.status === 403
+          ? "Incorrect password. Please try again."
+          : `Sign-in failed (${r.status}). Please try again.`,
+      );
+    } catch {
+      setErr("Network error — check your connection and try again.");
     }
+    setBusy(false);
   }
 
   return (
@@ -54,20 +73,25 @@ function LoginForm() {
           className="bg-panel border border-line rounded-2xl p-6 shadow-card space-y-4"
         >
           <div>
-            <Label>Admin password</Label>
+            <Label required>Admin password</Label>
             <Input
               type="password"
               autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              onKeyUp={detectCaps}
+              onKeyDown={detectCaps}
               placeholder="Enter password"
+              error={err || undefined}
+              aria-label="Admin password"
             />
+            {capsLock && !err && (
+              <div className="mt-1 text-xs text-warn flex items-center gap-1">
+                <AlertCircle size={12} />
+                Caps Lock is on.
+              </div>
+            )}
           </div>
-          {err && (
-            <div className="text-danger text-sm bg-danger/10 border border-danger/25 rounded-md px-3 py-2">
-              {err}
-            </div>
-          )}
           <Button
             type="submit"
             disabled={!password}

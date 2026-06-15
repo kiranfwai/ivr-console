@@ -1,10 +1,44 @@
 "use client";
 
 import { useState } from "react";
-import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle } from "lucide-react";
-import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, toast } from "./ui";
+import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw } from "lucide-react";
+import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, IconButton, toast } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Campaign } from "@/lib/models";
+
+interface CallResult {
+  ok: boolean;
+  status?: number;
+  to?: string;
+  callUuid?: string;
+}
+
+interface HistoryEntry {
+  id: number;
+  phone: string;       // what the user typed
+  campaignId: string;
+  campaignName: string;
+  at: number;          // epoch ms
+  ok: boolean;
+  to?: string;         // normalized number Plivo dialed
+  callUuid?: string;
+}
+
+// E.164-ish: a leading +<country><number> (8–15 digits), OR a bare 10-digit
+// Indian mobile (we auto-prefix +91 server-side).
+function isValidPhone(raw: string) {
+  const v = raw.trim();
+  if (/^\+[1-9]\d{7,14}$/.test(v)) return true;
+  const digits = v.replace(/\D/g, "");
+  if (/^[6-9]\d{9}$/.test(digits)) return true; // 10-digit Indian mobile
+  return false;
+}
+
+function timeAgo(at: number) {
+  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+let historyCounter = 1;
 
 export default function DialTab() {
   const { data: c } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
@@ -13,26 +47,76 @@ export default function DialTab() {
   const [phone, setPhone] = useState("");
   const [callerName, setCallerName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState<any>(null);
+  const [last, setLast] = useState<CallResult | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [copied, setCopied] = useState(false);
 
   const selectedCampaign = campaigns.find((c) => c.id === campaignId);
+  const phoneValid = isValidPhone(phone);
+  const phoneTouched = phone.trim().length > 0;
+  const canDial = !!campaignId && phoneValid && !busy;
 
-  async function dial() {
-    if (!campaignId || !phone) return;
+  async function dial(overridePhone?: string, overrideCampaignId?: string) {
+    const dialPhone = (overridePhone ?? phone).trim();
+    const dialCampaignId = overrideCampaignId ?? campaignId;
+    const campaign = campaigns.find((c) => c.id === dialCampaignId);
+    if (!dialCampaignId || !isValidPhone(dialPhone)) return;
     setBusy(true);
     try {
-      const r = await api("/api/call", {
+      const r = await api<CallResult>("/api/call", {
         method: "POST",
-        body: JSON.stringify({ phone, campaignId, callerName: callerName || undefined }),
+        body: JSON.stringify({ phone: dialPhone, campaignId: dialCampaignId, callerName: callerName || undefined }),
       });
       setLast(r);
-      toast(`Dialing ${phone}`, "ok");
-      setPhone("");
+      setCopied(false);
+      setHistory((prev) => [
+        {
+          id: historyCounter++,
+          phone: dialPhone,
+          campaignId: dialCampaignId,
+          campaignName: campaign?.name ?? "—",
+          at: Date.now(),
+          ok: r.ok,
+          to: r.to,
+          callUuid: r.callUuid,
+        },
+        ...prev,
+      ].slice(0, 10));
+      toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      if (!overridePhone) setPhone("");
     } catch (e: any) {
+      setHistory((prev) => [
+        {
+          id: historyCounter++,
+          phone: dialPhone,
+          campaignId: dialCampaignId,
+          campaignName: campaign?.name ?? "—",
+          at: Date.now(),
+          ok: false,
+        },
+        ...prev,
+      ].slice(0, 10));
       toast(e.message || "Failed", "danger");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function copyUuid(uuid: string) {
+    try {
+      await navigator.clipboard.writeText(uuid);
+      setCopied(true);
+      toast("Call UUID copied", "ok");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast("Copy failed", "danger");
+    }
+  }
+
+  function redial(h: HistoryEntry) {
+    setPhone(h.phone);
+    setCampaignId(h.campaignId);
+    dial(h.phone, h.campaignId);
   }
 
   if (!campaigns.length) {
@@ -76,13 +160,23 @@ export default function DialTab() {
           </div>
 
           <div>
-            <Label hint="India: auto-prefix +91">Phone</Label>
+            <Label>Phone</Label>
             <Input
               placeholder="9876543210 or +14155551234"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") dial(); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && canDial) dial(); }}
+              className={phoneTouched && !phoneValid ? "border-danger/60 focus:border-danger/60" : ""}
             />
+            {phoneTouched && !phoneValid ? (
+              <div className="text-xs text-danger mt-1">
+                Enter a 10-digit Indian mobile or a +country number.
+              </div>
+            ) : (
+              <div className="text-xs text-muted mt-1">
+                10-digit numbers get +91 auto-added.
+              </div>
+            )}
           </div>
 
           <div>
@@ -96,8 +190,8 @@ export default function DialTab() {
 
           <div className="flex items-end">
             <Button
-              onClick={dial}
-              disabled={!campaignId || !phone}
+              onClick={() => dial()}
+              disabled={!canDial}
               loading={busy}
               leftIcon={<PhoneCall size={14} />}
               className="w-full"
@@ -125,14 +219,59 @@ export default function DialTab() {
                 <div className="text-xs text-muted font-mono truncate flex items-center gap-1.5">
                   <Phone size={11} />
                   {last.to}
-                  <ArrowRight size={11} />
-                  <span className="truncate">{last.callUuid}</span>
+                  {last.callUuid && (
+                    <>
+                      <ArrowRight size={11} />
+                      <button
+                        type="button"
+                        onClick={() => copyUuid(last.callUuid!)}
+                        title="Copy call UUID"
+                        className="inline-flex items-center gap-1 truncate hover:text-ink2 transition-colors"
+                      >
+                        <span className="truncate">{last.callUuid}</span>
+                        {copied ? <Check size={11} className="text-ok shrink-0" /> : <Copy size={11} className="shrink-0" />}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
             <Badge tone={last.ok ? "ok" : "danger"}>
               {last.ok ? "queued" : "failed"}
             </Badge>
+          </div>
+        </Card>
+      )}
+
+      {history.length > 0 && (
+        <Card title={<span className="flex items-center gap-1.5"><History size={14} /> Recent calls</span>} description="This session only — not persisted.">
+          <div className="divide-y divide-line">
+            {history.map((h) => (
+              <div key={h.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    h.ok ? "bg-ok/10 text-ok" : "bg-danger/10 text-danger"
+                  }`}>
+                    {h.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-mono truncate">{h.to ?? h.phone}</div>
+                    <div className="text-xs text-muted truncate">
+                      {h.campaignName} · {timeAgo(h.at)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge tone={h.ok ? "ok" : "danger"}>{h.ok ? "queued" : "failed"}</Badge>
+                  <IconButton
+                    icon={<RotateCcw size={13} />}
+                    onClick={() => redial(h)}
+                    disabled={busy}
+                    title="Redial"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
       )}

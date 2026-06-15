@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import {
   Phone,
   Users,
@@ -44,6 +44,38 @@ export function Shell({
   onLogout: () => void;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [health, setHealth] = useState<"checking" | "ok" | "down">("checking");
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    async function ping() {
+      try {
+        const r = await fetch("/api/campaigns", { method: "GET" });
+        if (!alive) return;
+        setHealth(r.ok ? "ok" : "down");
+      } catch {
+        if (alive) setHealth("down");
+      } finally {
+        if (alive) setCheckedAt(new Date());
+      }
+    }
+    ping();
+    const id = setInterval(ping, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  const statusMeta = {
+    checking: { color: "text-muted", label: "Checking…" },
+    ok: { color: "text-ok", label: "All systems normal" },
+    down: { color: "text-danger", label: "Connection issue" },
+  }[health];
+  const checkedLabel = checkedAt
+    ? checkedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
 
   const groups = Array.from(new Set(NAV.map((n) => n.group)));
 
@@ -73,11 +105,12 @@ export function Shell({
                 return (
                   <button
                     key={item.id}
+                    aria-current={active ? "page" : undefined}
                     onClick={() => {
                       setTab(item.id);
                       setMobileOpen(false);
                     }}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all ${
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${
                       active
                         ? "bg-brand/10 text-brand border border-brand/25"
                         : "text-ink2 hover:text-ink hover:bg-elev/60 border border-transparent"
@@ -95,9 +128,19 @@ export function Shell({
 
       {/* Status + Logout */}
       <div className="border-t border-line p-3 space-y-2">
-        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-elev/50 text-xs">
-          <Circle size={8} fill="currentColor" className="text-ok" />
-          <span className="text-ink2">All systems normal</span>
+        <div
+          className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-elev/50 text-xs"
+          title={checkedLabel ? `Last checked ${checkedLabel}` : undefined}
+        >
+          <Circle
+            size={8}
+            fill="currentColor"
+            className={`${statusMeta.color} ${health === "checking" ? "animate-pulse" : ""}`}
+          />
+          <span className="text-ink2">{statusMeta.label}</span>
+          {checkedLabel && health !== "checking" && (
+            <span className="text-muted ml-auto tabular-nums">{checkedLabel}</span>
+          )}
         </div>
         <button
           onClick={onLogout}

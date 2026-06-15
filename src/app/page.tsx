@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DialTab from "@/components/DialTab";
 import BulkTab from "@/components/BulkTab";
 import CampaignsTab from "@/components/CampaignsTab";
@@ -19,8 +19,27 @@ const META: Record<TabId, { title: string; desc: string }> = {
   whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
 };
 
+const TAB_IDS = Object.keys(META) as TabId[];
+function isTabId(v: string | null): v is TabId {
+  return v !== null && (TAB_IDS as string[]).includes(v);
+}
+
 export default function Page() {
   const [tab, setTab] = useState<TabId>("dial");
+
+  // Read the active tab from the URL on mount (?tab=bulk) so refresh/bookmark sticks.
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("tab");
+    if (isTabId(fromUrl)) setTab(fromUrl);
+  }, []);
+
+  // Keep the URL query in sync when the tab changes (without a navigation/scroll).
+  function changeTab(t: TabId) {
+    setTab(t);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", t);
+    window.history.replaceState(null, "", url);
+  }
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -31,7 +50,7 @@ export default function Page() {
     <>
       <Shell
         tab={tab}
-        setTab={setTab}
+        setTab={changeTab}
         title={META[tab].title}
         description={META[tab].desc}
         onLogout={logout}

@@ -1,10 +1,155 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Link as LinkIcon, Upload, Trash2, Music, Play } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link as LinkIcon, Upload, Trash2, Music, X, Clock } from "lucide-react";
 import { Button, Card, Input, Label, Badge, EmptyState, Section, IconButton, toast } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio } from "@/lib/models";
+
+/* -------------------- helpers -------------------- */
+function fmtDuration(sec: number | null | undefined): string {
+  if (sec == null || !isFinite(sec) || sec <= 0) return "";
+  const s = Math.round(sec);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function fmtBytes(bytes: number | null | undefined): string {
+  if (bytes == null || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+// http(s) and looks like an audio resource (known extension, or a query/path
+// without a conflicting extension — we stay permissive but reject obvious non-audio).
+function validateAudioUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return "Enter a URL.";
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return "That doesn't look like a valid URL.";
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return "URL must start with http:// or https://";
+  }
+  const path = u.pathname.toLowerCase();
+  const audioExt = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm)$/;
+  const nonAudioExt = /\.(html?|php|aspx?|jpe?g|png|gif|svg|pdf|json|txt|mp4|mov|zip)$/;
+  if (nonAudioExt.test(path)) {
+    return "That URL points to a non-audio file.";
+  }
+  if (!audioExt.test(path)) {
+    // No recognizable audio extension — warn but allow (e.g. signed URLs / CDN paths).
+    return "URL has no audio extension (e.g. .mp3). It may not be an audio file.";
+  }
+  return null;
+}
+
+/* -------------------- audio metadata probe -------------------- */
+function useAudioMeta(src: string | null) {
+  const [duration, setDuration] = useState<number | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    setDuration(null);
+    setError(false);
+    if (!src) return;
+    const el = document.createElement("audio");
+    el.preload = "metadata";
+    const onMeta = () => setDuration(el.duration);
+    const onErr = () => setError(true);
+    el.addEventListener("loadedmetadata", onMeta);
+    el.addEventListener("error", onErr);
+    el.src = src;
+    return () => {
+      el.removeEventListener("loadedmetadata", onMeta);
+      el.removeEventListener("error", onErr);
+      el.src = "";
+    };
+  }, [src]);
+
+  return { duration, error };
+}
+
+/* -------------------- library row -------------------- */
+function AudioRow({
+  a,
+  selected,
+  onToggle,
+  onRemove,
+}: {
+  a: Audio;
+  selected: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  const { duration } = useAudioMeta(a.url);
+  return (
+    <Card className="group hover:border-line2 transition-colors">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 flex-1 flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            aria-label={`Select ${a.label}`}
+            className="shrink-0 w-4 h-4 accent-brand cursor-pointer"
+          />
+          <div className="w-9 h-9 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
+            <Music size={15} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="font-medium truncate">{a.label}</div>
+              <Badge tone={a.source === "blob" ? "accent" : "muted"}>{a.source}</Badge>
+              {duration != null && (
+                <span className="inline-flex items-center gap-1 text-xs text-muted tabular-nums">
+                  <Clock size={11} />
+                  {fmtDuration(duration)}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-muted truncate mt-0.5">{a.url}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 sm:shrink-0">
+          <audio controls preload="none" src={a.url} className="h-8 w-full min-w-0 sm:w-[220px]" />
+          <IconButton icon={<Trash2 size={14} />} variant="danger" onClick={onRemove} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* -------------------- preview (URL or file) -------------------- */
+function Preview({ src, label }: { src: string | null; label: string }) {
+  const { duration, error } = useAudioMeta(src);
+  if (!src) return null;
+  return (
+    <div className="md:col-span-3 rounded-lg border border-line bg-bg/40 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-xs font-medium text-ink2 uppercase tracking-wider">Preview</div>
+        <div className="text-xs text-muted tabular-nums flex items-center gap-2">
+          {error ? (
+            <span className="text-warn">Couldn’t read metadata</span>
+          ) : (
+            <>{label}{duration != null && <span className="inline-flex items-center gap-1"><Clock size={11} />{fmtDuration(duration)}</span>}</>
+          )}
+        </div>
+      </div>
+      <audio controls src={src} className="h-9 w-full" />
+    </div>
+  );
+}
 
 export default function AudiosTab() {
   const { data, reload } = useFetch<{ audios: Audio[] }>("/api/audios");
@@ -13,15 +158,53 @@ export default function AudiosTab() {
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null); // 0..100, null = indeterminate while busy
   const fileRef = useRef<HTMLInputElement>(null);
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
+
+  // selected file + its preview object URL
+  const [file, setFile] = useState<File | null>(null);
+  const [fileObjUrl, setFileObjUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setFileObjUrl(null);
+      return;
+    }
+    const u = URL.createObjectURL(file);
+    setFileObjUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  // bulk selection
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    // prune ids that no longer exist after reloads
+    setSel((prev) => {
+      const ids = new Set(audios.map((a) => a.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (ids.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const urlError = useMemo(() => (url.trim() ? validateAudioUrl(url) : null), [url]);
+  // Block only on hard errors; the "no extension" hint is a soft warning.
+  const urlBlocked = !!urlError && !urlError.startsWith("URL has no audio extension");
 
   async function addUrl() {
-    if (!url.trim()) return;
+    const v = url.trim();
+    if (!v || urlBlocked) return;
     setBusy(true);
+    setProgress(null);
     try {
       await api("/api/audios", {
         method: "POST",
-        body: JSON.stringify({ label: label || "Untitled", url }),
+        body: JSON.stringify({ label: label || "Untitled", url: v }),
       });
       setUrl("");
       setLabel("");
@@ -31,43 +214,110 @@ export default function AudiosTab() {
       toast(e.message || "Failed", "danger");
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
-  async function uploadFile() {
-    const file = fileRef.current?.files?.[0];
-    if (!file) return;
+  function uploadFile() {
+    const f = file;
+    if (!f) return;
     setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("label", label || file.name);
-      const r = await fetch("/api/audios/upload", { method: "POST", body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || "Upload failed");
-      setLabel("");
-      if (fileRef.current) fileRef.current.value = "";
-      reload();
-      toast("Audio uploaded", "ok");
-    } catch (e: any) {
-      toast(e.message || "Upload failed", "danger");
-    } finally {
+    setProgress(0);
+
+    const fd = new FormData();
+    fd.append("file", f);
+    fd.append("label", label || f.name);
+
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
+    xhr.open("POST", "/api/audios/upload");
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) setProgress(Math.round((ev.loaded / ev.total) * 100));
+      else setProgress(null); // indeterminate
+    };
+    // Once the body is fully sent, we're waiting on the server (S3 put) — go indeterminate.
+    xhr.upload.onload = () => setProgress(null);
+
+    const finish = () => {
       setBusy(false);
-    }
+      setProgress(null);
+      xhrRef.current = null;
+    };
+
+    xhr.onload = () => {
+      let j: any = null;
+      try {
+        j = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setLabel("");
+        setFile(null);
+        if (fileRef.current) fileRef.current.value = "";
+        reload();
+        toast("Audio uploaded", "ok");
+      } else {
+        toast(j?.error || `Upload failed (HTTP ${xhr.status})`, "danger");
+      }
+      finish();
+    };
+    xhr.onerror = () => {
+      toast("Upload failed — check your connection", "danger");
+      finish();
+    };
+    xhr.onabort = () => {
+      toast("Upload cancelled", "info");
+      finish();
+    };
+
+    xhr.send(fd);
+  }
+
+  function cancelUpload() {
+    xhrRef.current?.abort();
   }
 
   async function remove(id: string) {
     if (!confirm("Delete this audio? Campaigns using it will fall back to default.")) return;
-    await api(`/api/audios/${id}`, { method: "DELETE" });
+    try {
+      await api(`/api/audios/${id}`, { method: "DELETE" });
+      reload();
+      toast("Deleted", "ok");
+    } catch (e: any) {
+      toast(e.message || "Delete failed", "danger");
+    }
+  }
+
+  async function removeSelected() {
+    const ids = [...sel];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} audio${ids.length > 1 ? "s" : ""}? Campaigns using them will fall back to default.`)) return;
+    const results = await Promise.allSettled(ids.map((id) => api(`/api/audios/${id}`, { method: "DELETE" })));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    setSel(new Set());
     reload();
-    toast("Deleted", "ok");
+    if (failed) toast(`Deleted ${ids.length - failed}, ${failed} failed`, "danger");
+    else toast(`Deleted ${ids.length}`, "ok");
+  }
+
+  const allSelected = audios.length > 0 && sel.size === audios.length;
+  function toggleAll() {
+    setSel(allSelected ? new Set() : new Set(audios.map((a) => a.id)));
+  }
+  function toggleOne(id: string) {
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   return (
     <Section>
       <Card
         title="Add audio"
-        description="Paste a public MP3 URL, or upload a file to Vercel Blob."
+        description="Paste a public audio URL, or upload a file to S3."
         action={
           <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
             <button
@@ -99,15 +349,25 @@ export default function AudiosTab() {
           {mode === "url" ? (
             <>
               <div className="md:col-span-2">
-                <Label>Public MP3 URL</Label>
+                <Label>Public audio URL</Label>
                 <Input
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://.../day1.mp3"
+                  error={urlBlocked ? urlError ?? undefined : undefined}
+                  hint={!urlBlocked && urlError ? urlError : undefined}
                 />
               </div>
+
+              {url.trim() && !urlBlocked && <Preview src={url.trim()} label="" />}
+
               <div className="md:col-span-3 flex justify-end">
-                <Button onClick={addUrl} disabled={!url.trim()} loading={busy} leftIcon={<LinkIcon size={14} />}>
+                <Button
+                  onClick={addUrl}
+                  disabled={!url.trim() || urlBlocked}
+                  loading={busy && mode === "url"}
+                  leftIcon={<LinkIcon size={14} />}
+                >
                   Add
                 </Button>
               </div>
@@ -115,22 +375,54 @@ export default function AudiosTab() {
           ) : (
             <>
               <div className="md:col-span-2">
-                <Label>MP3 file</Label>
+                <Label>Audio file</Label>
                 <label className="flex items-center gap-3 px-3 py-2 bg-bg/60 border border-line rounded-lg cursor-pointer hover:border-line2 transition-colors">
-                  <Upload size={14} className="text-muted" />
+                  <Upload size={14} className="text-muted shrink-0" />
                   <input
                     ref={fileRef}
                     type="file"
                     accept="audio/*"
-                    className="text-sm text-ink2 flex-1 outline-none"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    className="text-sm text-ink2 flex-1 min-w-0 outline-none"
                   />
                 </label>
+                {file && (
+                  <div className="mt-1 text-xs text-muted">
+                    {file.name} · {fmtBytes(file.size)}
+                  </div>
+                )}
               </div>
-              <div className="md:col-span-3 flex items-center justify-between gap-3">
-                <div className="text-xs text-muted">
-                  Goes to Vercel Blob (requires <code className="text-brand">BLOB_READ_WRITE_TOKEN</code>).
+
+              {fileObjUrl && <Preview src={fileObjUrl} label={file ? fmtBytes(file.size) : ""} />}
+
+              {busy && mode === "upload" && (
+                <div className="md:col-span-3">
+                  <div className="flex items-center justify-between text-xs text-ink2 mb-1.5">
+                    <span>{progress == null ? "Processing on server…" : `Uploading… ${progress}%`}</span>
+                    <button onClick={cancelUpload} className="text-muted hover:text-danger inline-flex items-center gap-1">
+                      <X size={11} /> Cancel
+                    </button>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-elev overflow-hidden">
+                    {progress == null ? (
+                      <div className="h-full w-1/3 bg-brand/70 rounded-full animate-pulse" />
+                    ) : (
+                      <div className="h-full bg-brand rounded-full transition-all duration-150" style={{ width: `${progress}%` }} />
+                    )}
+                  </div>
                 </div>
-                <Button onClick={uploadFile} disabled={busy} loading={busy} leftIcon={<Upload size={14} />}>
+              )}
+
+              <div className="md:col-span-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-muted">
+                  Goes to S3 (requires <code className="text-brand">S3_BUCKET</code> + AWS credentials).
+                </div>
+                <Button
+                  onClick={uploadFile}
+                  disabled={busy || !file}
+                  loading={busy && mode === "upload"}
+                  leftIcon={<Upload size={14} />}
+                >
                   Upload
                 </Button>
               </div>
@@ -148,28 +440,36 @@ export default function AudiosTab() {
           />
         </Card>
       ) : (
-        <div className="space-y-2">
-          {audios.map((a) => (
-            <Card key={a.id} className="group hover:border-line2 transition-colors">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0 flex-1 flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
-                    <Music size={15} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="font-medium truncate">{a.label}</div>
-                      <Badge tone={a.source === "blob" ? "accent" : "muted"}>{a.source}</Badge>
-                    </div>
-                    <div className="text-xs text-muted truncate mt-0.5">{a.url}</div>
-                  </div>
-                </div>
-                <audio controls src={a.url} className="h-8 max-w-[220px]" />
-                <IconButton icon={<Trash2 size={14} />} variant="danger" onClick={() => remove(a.id)} />
-              </div>
-            </Card>
-          ))}
-        </div>
+        <>
+          <div className="flex items-center justify-between gap-3 px-1">
+            <label className="inline-flex items-center gap-2 text-xs text-muted cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                aria-label="Select all"
+                className="w-4 h-4 accent-brand cursor-pointer"
+              />
+              {sel.size ? `${sel.size} selected` : `${audios.length} audio${audios.length > 1 ? "s" : ""}`}
+            </label>
+            {sel.size > 0 && (
+              <Button variant="danger" size="sm" onClick={removeSelected} leftIcon={<Trash2 size={13} />}>
+                Delete {sel.size}
+              </Button>
+            )}
+          </div>
+          <div className="space-y-2">
+            {audios.map((a) => (
+              <AudioRow
+                key={a.id}
+                a={a}
+                selected={sel.has(a.id)}
+                onToggle={() => toggleOne(a.id)}
+                onRemove={() => remove(a.id)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </Section>
   );
