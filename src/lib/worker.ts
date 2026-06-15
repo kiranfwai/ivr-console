@@ -30,6 +30,7 @@ const TICK_MS = 200;
 const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 40;
 
 const inFlight = new Map<string, number>();   // jobId -> calls currently in flight
+const pumping = new Set<string>();            // jobId -> a pumpJob claim is in progress
 const nextClaimAt = new Map<string, number>(); // jobId -> earliest next claim (delay pacing)
 const G = globalThis as unknown as { __ivrWorkerStarted?: boolean };
 
@@ -70,7 +71,13 @@ async function tick(): Promise<void> {
   const now = Date.now();
   for (const job of jobs) {
     if (job.kind !== "call") continue; // WhatsApp jobs are browser-paced, not pumped here
-    void pumpJob(job, now);
+    // Guard: only one pumpJob may be claiming for a given job at a time. Without
+    // this, ticks every 200ms launch overlapping pumps that each read a stale
+    // in-flight count and over-claim — draining the whole queue into 'dialing'
+    // and blowing past the concurrency cap.
+    if (pumping.has(job.id)) continue;
+    pumping.add(job.id);
+    void pumpJob(job, now).finally(() => pumping.delete(job.id));
   }
 }
 
@@ -110,7 +117,7 @@ async function pumpJob(
     return;
   }
 
-  inFlight.set(job.id, cur + claimed.length);
+  inFlight.set(job.id, (inFlight.get(job.id) ?? 0) + claimed.length);
   if (job.delayMs) nextClaimAt.set(job.id, Date.now() + job.delayMs);
   const base = publicBaseUrl();
 
