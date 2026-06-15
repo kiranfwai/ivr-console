@@ -1,7 +1,6 @@
 import {
   getBulkJob,
   listActiveJobIds,
-  listBulkJobs,
   markActive,
   markInactive,
   resetDialingRows,
@@ -50,18 +49,15 @@ export async function startWorker(): Promise<void> {
 }
 
 /**
- * On boot, reset rows left "dialing" by a crash/restart back to "pending", and
- * re-register any unfinished, un-paused call-jobs so they resume automatically.
+ * On boot, recover only jobs already in the active set — i.e. jobs the new
+ * system enqueued or the operator explicitly resumed. For each, reset rows left
+ * "dialing" by the crash/restart back to "pending" so they get re-dialed, then
+ * re-validate membership. We deliberately do NOT sweep historical jobs: a job
+ * with stray pending rows from before this feature must be resumed explicitly
+ * (Resume button) so a deploy never surprise-dials abandoned numbers.
  */
 async function recover(): Promise<void> {
-  const ids = new Set(await listActiveJobIds());
-  // Also sweep recent jobs so ones created before this feature (or that fell out
-  // of the active set) still resume if they have pending work.
-  for (const j of await listBulkJobs(50)) {
-    if ((j.kind ?? "call") !== "call") continue;
-    if (j.paused) continue;
-    if (j.rows.some((r) => r.status === "pending" || r.status === "dialing")) ids.add(j.id);
-  }
+  const ids = await listActiveJobIds();
   for (const id of ids) {
     const reset = await resetDialingRows(id);
     const job = await getBulkJob(id);
