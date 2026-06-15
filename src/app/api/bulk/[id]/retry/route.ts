@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBulkJob, createBulkJob } from "@/lib/bulk";
+import { startWorker } from "@/lib/worker";
 import { RETRY_STATUSES } from "@/lib/outcome";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 /**
  * Create a new bulk job containing just the failed rows of an existing job.
@@ -24,8 +26,10 @@ export async function POST(_: NextRequest, { params }: { params: { id: string } 
     webhookUrl: job.webhookUrl,
     delayMs: job.delayMs,
     jitterPct: job.jitterPct,
+    concurrency: job.concurrency,
     rows: failedRows.map((r) => ({ phone: r.phone, name: r.name })),
   });
+  if ((job.kind ?? "call") === "call") await startWorker();
 
   return NextResponse.json({ job: child, retriedFrom: job.id, count: failedRows.length });
 }

@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createBulkJob, listBulkJobs } from "@/lib/bulk";
 import { getCampaign } from "@/lib/campaigns";
+import { startWorker } from "@/lib/worker";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET() {
   return NextResponse.json({ jobs: await listBulkJobs() });
 }
 
 export async function POST(req: NextRequest) {
-  const { kind = "call", campaignId, webhookUrl, rows, delayMs, jitterPct } = await req.json();
+  const { kind = "call", campaignId, webhookUrl, rows, delayMs, jitterPct, concurrency } = await req.json();
   if (!Array.isArray(rows) || !rows.length) {
     return NextResponse.json({ error: "rows required" }, { status: 400 });
   }
@@ -27,6 +29,10 @@ export async function POST(req: NextRequest) {
     rows: rows.map((r: any) => ({ phone: String(r.phone || ""), name: r.name, email: r.email || undefined })),
     delayMs: typeof delayMs === "number" ? delayMs : 2000,
     jitterPct: typeof jitterPct === "number" ? jitterPct : undefined,
+    concurrency: typeof concurrency === "number" ? concurrency : undefined,
   });
+  // Make sure the backend worker is running so it starts draining the job even if
+  // the server booted without the instrumentation hook firing for some reason.
+  if (kind === "call") await startWorker();
   return NextResponse.json({ job });
 }

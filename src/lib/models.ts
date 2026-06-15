@@ -79,6 +79,9 @@ export interface BulkJob {
   rows: BulkRow[];
   delayMs: number;           // base delay in ms (effective delay is delayMs ± jitter)
   jitterPct?: number;        // 0-80, WhatsApp-only pacing randomness
+  concurrency?: number;      // call-jobs: parallel calls the backend worker fires per batch
+  paused?: boolean;          // call-jobs: when true the worker skips this job (Stop button)
   createdAt: string;
+  startedAt?: string;        // first time the worker fired a batch for this job
   completedAt?: string;
 }

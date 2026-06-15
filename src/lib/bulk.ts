@@ -3,6 +3,10 @@ import type { BulkJob, BulkKind, BulkRow, BulkRowStatus } from "./models";
 
 const KEY = (id: string) => `bulk:${id}`;
 const ZINDEX = "bulk:zindex";
+// Set of call-job ids the backend worker should keep draining. A job is in this
+// set while it has pending rows and isn't paused. It's only a hint — the worker
+// re-checks each job's real state and prunes finished/paused jobs itself.
+const ACTIVE = "bulk:active";
 
 export async function createBulkJob(input: {
   kind?: BulkKind;
@@ -11,14 +15,18 @@ export async function createBulkJob(input: {
   rows: { phone: string; name?: string; email?: string }[];
   delayMs?: number;
   jitterPct?: number;
+  concurrency?: number;
 }): Promise<BulkJob> {
+  const kind = input.kind ?? "call";
   const j: BulkJob = {
     id: newId("blk"),
-    kind: input.kind ?? "call",
+    kind,
     campaignId: input.campaignId ?? "",
     webhookUrl: input.webhookUrl || undefined,
     delayMs: input.delayMs ?? 2000,
     jitterPct: input.jitterPct,
+    concurrency: input.concurrency,
+    paused: false,
     rows: input.rows.map((r) => ({
       phone: r.phone,
       name: r.name,
@@ -30,7 +38,39 @@ export async function createBulkJob(input: {
   const r = redis();
   await r.set(KEY(j.id), j);
   await r.zadd(ZINDEX, { score: Date.parse(j.createdAt), member: j.id });
+  // Only call-jobs are driven by the backend worker; WhatsApp bulk is paced elsewhere.
+  if (kind === "call") await r.sadd(ACTIVE, j.id);
   return j;
+}
+
+// ---------------------------------------------------------------------------
+// Active-set helpers — used by the backend worker to find jobs to drain without
+// scanning every job blob on every tick.
+// ---------------------------------------------------------------------------
+export async function markActive(id: string): Promise<void> {
+  await redis().sadd(ACTIVE, id);
+}
+export async function markInactive(id: string): Promise<void> {
+  await redis().srem(ACTIVE, id);
+}
+export async function listActiveJobIds(): Promise<string[]> {
+  return redis().smembers(ACTIVE);
+}
+
+/**
+ * Pause or un-pause a job. Pausing leaves pending rows queued (Stop button);
+ * un-pausing re-registers the job so the worker resumes draining it.
+ */
+export async function setJobPaused(jobId: string, paused: boolean): Promise<BulkJob | null> {
+  const job = await redis().withLock<BulkJob | null>(KEY(jobId), (j: any) => {
+    if (!j) return { ret: null };
+    j.paused = paused;
+    return { next: j, ret: j as BulkJob };
+  });
+  if (!job) return null;
+  if (paused) await markInactive(jobId);
+  else await markActive(jobId);
+  return job;
 }
 
 export async function getBulkJob(id: string): Promise<BulkJob | null> {

@@ -49,104 +49,89 @@ export default function BulkTab() {
   const [concurrency, setConcurrency] = useState<number>(3);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<BulkJob | null>(null);
-  const [running, setRunning] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const stopRef = useRef(false);
-  // Store campaignId for the active job so resume() can use it.
-  const activeCampaignIdRef = useRef<string>("");
+  // Rolling sample to estimate calls/min from successive progress polls.
+  const sampleRef = useRef<{ t: number; dispatched: number } | null>(null);
 
+  const counts = activeJob ? tally(activeJob) : null;
+  const previewCount = parseRows(csv).length;
+  // The backend worker drives the job; "running" is derived purely from its state.
+  const running = !!activeJob && !activeJob.paused && !!counts && counts.pending + counts.dialing > 0;
+
+  // Poll the active job for progress. The browser no longer dials anything — the
+  // server-side worker does — so this is display-only and safe to close any time.
   useEffect(() => {
     if (!activeJobId) return;
     const fn = async () => {
       try {
         const j = await api<{ job: BulkJob }>(`/api/bulk/${activeJobId}`);
         setActiveJob(j.job);
+        const t = tally(j.job);
+        const dispatched = t.total - t.pending - t.dialing;
+        const pending = t.pending + t.dialing;
+        const now = Date.now();
+        const prev = sampleRef.current;
+        if (prev && now > prev.t && !j.job.paused && pending > 0) {
+          const dt = (now - prev.t) / 60000;
+          const cpm = dt > 0 ? Math.max(0, Math.round((dispatched - prev.dispatched) / dt)) : 0;
+          const etaSec = cpm > 0 ? Math.round((pending / cpm) * 60) : 0;
+          setMetrics({ cpm, dispatched, etaSec });
+        } else if (j.job.paused || pending === 0) {
+          setMetrics(null);
+        }
+        sampleRef.current = { t: now, dispatched };
       } catch {}
     };
     fn();
-    const h = setInterval(fn, running ? 2000 : 6000);
+    const h = setInterval(fn, running ? 2500 : 7000);
     return () => clearInterval(h);
   }, [activeJobId, running]);
 
   async function start() {
     const rows = parseRows(csv);
     if (!campaignId || !rows.length) return;
+    setSubmitting(true);
     try {
       const r = await api<{ job: BulkJob }>("/api/bulk", {
         method: "POST",
-        body: JSON.stringify({ campaignId, rows, delayMs }),
+        body: JSON.stringify({ campaignId, rows, delayMs, concurrency }),
       });
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
+      sampleRef.current = null;
       setCsv("phone,name,email\n");
       reloadJobs();
-      toast(`Queued ${rows.length} calls · ${concurrency} parallel · ${delayMs}ms between batches`, "ok");
-      activeCampaignIdRef.current = campaignId;
-      drive(r.job.id, campaignId, rows.length);
+      toast(`Queued ${rows.length} calls — dialing in the background. You can close this tab.`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  /**
-   * Server-driven advance loop.
-   * Each iteration calls /advance which atomically claims `concurrency` rows,
-   * fires them as parallel Plivo calls server-side, and returns counts.
-   * The browser only polls once per batch — no per-call round-trips.
-   */
-  async function drive(jobId: string, jobCampaignId: string, totalRows: number) {
-    stopRef.current = false;
-    setRunning(true);
-    setMetrics(null);
-    const startTime = Date.now();
-    let totalDispatched = 0;
-
+  // Stop = pause on the backend. Pending rows stay queued; Resume continues.
+  async function stop() {
+    if (!activeJob) return;
     try {
-      while (!stopRef.current) {
-        const batchStart = Date.now();
-
-        const r = await api<{ done: boolean; claimed?: number; ok?: number; failed?: number }>(
-          `/api/bulk/${jobId}/advance`,
-          { method: "POST", body: JSON.stringify({ n: concurrency, campaignId: jobCampaignId }) },
-        );
-
-        if (r.done || !r.claimed) break;
-
-        totalDispatched += r.claimed;
-        const elapsedSec = Math.max(1, (Date.now() - startTime) / 1000);
-        const cpm = Math.round(totalDispatched / (elapsedSec / 60));
-        const remaining = Math.max(0, totalRows - totalDispatched);
-        const etaSec = cpm > 0 ? Math.round((remaining / cpm) * 60) : 0;
-        setMetrics({ cpm, dispatched: totalDispatched, etaSec });
-
-        // Wait only the remaining time so effective cadence ≈ delayMs per batch.
-        const elapsed = Date.now() - batchStart;
-        const wait = Math.max(0, delayMs - elapsed);
-        if (wait > 0) await sleep(wait);
-      }
-    } catch (e: any) {
-      toast(e.message || "Batch error — run stopped", "danger");
-    } finally {
-      setRunning(false);
+      const r = await api<{ job: BulkJob }>(`/api/bulk/${activeJob.id}/pause`, { method: "POST" });
+      setActiveJob(r.job);
       setMetrics(null);
       reloadJobs();
+      toast("Paused — remaining calls are held. Resume any time.", "ok");
+    } catch (e: any) {
+      toast(e.message || "Failed to pause", "danger");
     }
-  }
-
-  function stop() {
-    stopRef.current = true;
-    setRunning(false);
   }
 
   async function resume(jobId: string) {
     setActiveJobId(jobId);
+    sampleRef.current = null;
     try {
-      const j = await api<{ job: BulkJob }>(`/api/bulk/${jobId}`);
-      setActiveJob(j.job);
-      const cid = j.job.campaignId || activeCampaignIdRef.current;
-      const total = j.job.rows.length;
-      activeCampaignIdRef.current = cid;
-      drive(jobId, cid, total);
+      const r = await api<{ job: BulkJob }>(`/api/bulk/${jobId}/resume`, { method: "POST" });
+      setActiveJob(r.job);
+      reloadJobs();
+      toast("Resumed — backend is dialing the remaining numbers.", "ok");
     } catch (e: any) {
       toast(e.message || "Failed to resume", "danger");
     }
@@ -157,18 +142,13 @@ export default function BulkTab() {
       const r = await api<{ job: BulkJob; count: number }>(`/api/bulk/${jobId}/retry`, { method: "POST" });
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
+      sampleRef.current = null;
       reloadJobs();
-      toast(`Retrying ${r.count} failed rows`, "ok");
-      const cid = r.job.campaignId || activeCampaignIdRef.current;
-      activeCampaignIdRef.current = cid;
-      drive(r.job.id, cid, r.job.rows.length);
+      toast(`Queued ${r.count} failed rows for retry — running in the background.`, "ok");
     } catch (e: any) {
       toast(e.message || "No retry-able rows", "danger");
     }
   }
-
-  const counts = activeJob ? tally(activeJob) : null;
-  const previewCount = parseRows(csv).length;
 
   if (!campaigns.length) {
     return (
@@ -200,7 +180,7 @@ export default function BulkTab() {
           <div>
             <Label hint="parallel calls per batch">Concurrency</Label>
             <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
-              {[1, 3, 10, 20, 30, 50, 100].map((v) => (
+              {[1, 3, 10, 20, 30, 50, 75, 100].map((v) => (
                 <option key={v} value={v}>{v}</option>
               ))}
             </Select>
@@ -222,13 +202,13 @@ export default function BulkTab() {
           <div className="flex items-end col-span-2 md:col-span-1">
             <Button
               onClick={start}
-              disabled={!campaignId || !previewCount}
-              loading={running}
+              disabled={!campaignId || !previewCount || submitting}
+              loading={submitting}
               leftIcon={<Play size={14} />}
               className="w-full"
               size="lg"
             >
-              {running ? "Dialing…" : `Start · ${previewCount} recipients`}
+              {submitting ? "Queuing…" : `Start · ${previewCount} recipients`}
             </Button>
           </div>
         </div>
@@ -456,8 +436,4 @@ function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; tota
       </div>
     </div>
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((res) => setTimeout(res, ms));
 }
