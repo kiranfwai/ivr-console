@@ -293,10 +293,11 @@ export async function updateBulkRow(
   patch: Partial<BulkRow>,
 ): Promise<void> {
   if (index < 0) return;
-  const { sets, params } = buildPatch(patch, 2);
+  // Patch params occupy $2..$(n+1) (after jobId=$1); the idx filter is $(n+2).
+  const { sets, params } = buildPatch(patch, 1);
   if (!sets.length) return;
   await query(
-    `UPDATE bulk_row SET ${sets.join(", ")} WHERE job_id=$1 AND idx=$${2 + params.length}`,
+    `UPDATE bulk_row SET ${sets.join(", ")} WHERE job_id=$1 AND idx=$${params.length + 2}`,
     [jobId, ...params, index],
   );
 }
@@ -306,10 +307,11 @@ export async function updateBulkRowByCallUuid(
   callUuid: string,
   patch: Partial<BulkRow>,
 ): Promise<void> {
-  const { sets, params } = buildPatch(patch, 1);
+  // Patch params occupy $1..$n; the call_uuid filter is $(n+1).
+  const { sets, params } = buildPatch(patch, 0);
   if (!sets.length) return;
   await query(
-    `UPDATE bulk_row SET ${sets.join(", ")} WHERE call_uuid=$${1 + params.length}`,
+    `UPDATE bulk_row SET ${sets.join(", ")} WHERE call_uuid=$${params.length + 1}`,
     [...params, callUuid],
   );
 }
