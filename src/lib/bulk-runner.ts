@@ -1,4 +1,5 @@
-import { claimBulkRows, updateBulkRow } from "./bulk";
+import { claimBulkRows, updateBulkRowsBatch } from "./bulk";
+import type { BulkRow } from "./models";
 import { placeCall } from "./plivo";
 import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
@@ -29,15 +30,17 @@ export async function fireBatch(
   if (!claimed.length) return { claimed: 0, ok: 0, failed: 0 };
 
   const triggeredAt = new Date().toISOString();
+  // Collect per-row results and flush them as ONE blob write at the end of the
+  // batch (see updateBulkRowsBatch) — never one rewrite per row.
+  const updates: Array<{ index: number; patch: Partial<BulkRow> }> = [];
 
   const results = await Promise.all(
     claimed.map(async (row) => {
       const to = normalizePhone(row.phone);
       if (!to) {
-        await updateBulkRow(jobId, row.index, {
-          status: "failed",
-          error: "invalid phone",
-          attemptedAt: triggeredAt,
+        updates.push({
+          index: row.index,
+          patch: { status: "failed", error: "invalid phone", attemptedAt: triggeredAt },
         });
         return { ok: false };
       }
@@ -57,32 +60,37 @@ export async function fireBatch(
         fromNumber: campaign.fromNumber || undefined,
       });
 
-      await Promise.all([
-        recordCall({
-          callUuid: internalId,
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          to,
-          from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
-          email: row.email,
-          audioId: campaign.audioId,
-          webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
-          status: result.ok ? "queued" : "failed",
-          digit: "",
-          triggeredAt,
-          bulkJobId: jobId,
-        }),
-        updateBulkRow(jobId, row.index, {
+      // recordCall writes small per-call rows (not the job blob), so it's fine here.
+      await recordCall({
+        callUuid: internalId,
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        to,
+        from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
+        email: row.email,
+        audioId: campaign.audioId,
+        webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
+        status: result.ok ? "queued" : "failed",
+        digit: "",
+        triggeredAt,
+        bulkJobId: jobId,
+      });
+
+      updates.push({
+        index: row.index,
+        patch: {
           status: result.ok ? "ok" : "failed",
           callUuid: internalId,
           attemptedAt: triggeredAt,
           error: result.ok ? undefined : `Plivo ${result.status}`,
-        }),
-      ]);
+        },
+      });
 
       return { ok: result.ok };
     }),
   );
+
+  await updateBulkRowsBatch(jobId, updates);
 
   const ok = results.filter((r) => r.ok).length;
   return { claimed: claimed.length, ok, failed: results.length - ok };

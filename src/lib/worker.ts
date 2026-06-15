@@ -3,6 +3,7 @@ import {
   listActiveJobIds,
   markActive,
   markInactive,
+  peekBulkJobMeta,
   resetDialingRows,
 } from "./bulk";
 import { getCampaign } from "./campaigns";
@@ -91,27 +92,23 @@ async function tick(): Promise<void> {
 
 async function runJobBatch(id: string): Promise<void> {
   try {
-    const job = await getBulkJob(id);
-    if (!job || (job.kind ?? "call") !== "call" || job.paused) {
+    // Cheap metadata read — does NOT load the full rows blob into memory.
+    const meta = await peekBulkJobMeta(id);
+    if (!meta || meta.kind !== "call" || meta.paused || !meta.hasPending) {
       await markInactive(id);
       nextAt.delete(id);
       return;
     }
-    if (!job.rows.some((r) => r.status === "pending")) {
-      await markInactive(id);
-      nextAt.delete(id);
-      return;
-    }
-    const campaign = await getCampaign(job.campaignId);
+    const campaign = await getCampaign(meta.campaignId);
     if (!campaign) {
       // Can't dial without a campaign — drop it from the active set and log loudly.
-      console.error(`[worker] job ${id}: campaign ${job.campaignId} not found, removing from queue`);
+      console.error(`[worker] job ${id}: campaign ${meta.campaignId} not found, removing from queue`);
       await markInactive(id);
       nextAt.delete(id);
       return;
     }
 
-    const n = Math.min(Math.max(1, job.concurrency ?? 3), 100);
+    const n = Math.min(Math.max(1, meta.concurrency ?? 3), 100);
     const r = await fireBatch(id, campaign, n, publicBaseUrl());
 
     if (!r.claimed) {
@@ -120,7 +117,7 @@ async function runJobBatch(id: string): Promise<void> {
       nextAt.delete(id);
       return;
     }
-    nextAt.set(id, Date.now() + (job.delayMs ?? 1000));
+    nextAt.set(id, Date.now() + (meta.delayMs ?? 1000));
   } catch (e) {
     // Transient error (e.g. Plivo/DB hiccup): keep the job queued, back off briefly.
     console.error(`[worker] job ${id} batch error:`, e);

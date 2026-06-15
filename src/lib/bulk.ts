@@ -1,4 +1,5 @@
 import { redis, newId } from "./redis";
+import { query } from "./db";
 import type { BulkJob, BulkKind, BulkRow, BulkRowStatus } from "./models";
 
 const KEY = (id: string) => `bulk:${id}`;
@@ -77,6 +78,48 @@ export async function getBulkJob(id: string): Promise<BulkJob | null> {
   return (await redis().get<BulkJob>(KEY(id))) ?? null;
 }
 
+/**
+ * Read just the worker-relevant metadata for a job WITHOUT pulling the whole
+ * rows blob into Node. For a 16k-row job the blob is ~1.7 MB; loading + parsing
+ * it every batch just to check "any pending?" is what made the worker OOM. This
+ * does that check (and reads pacing fields) entirely in Postgres.
+ */
+export interface BulkJobMeta {
+  kind: BulkKind;
+  paused: boolean;
+  campaignId: string;
+  concurrency?: number;
+  delayMs?: number;
+  hasPending: boolean;
+}
+export async function peekBulkJobMeta(jobId: string): Promise<BulkJobMeta | null> {
+  const { rows } = await query<{
+    kind: string | null;
+    paused: string | null;
+    campaign_id: string | null;
+    concurrency: string | null;
+    delay_ms: string | null;
+    has_pending: boolean;
+  }>(
+    `SELECT v->>'kind' AS kind, v->>'paused' AS paused, v->>'campaignId' AS campaign_id,
+            v->>'concurrency' AS concurrency, v->>'delayMs' AS delay_ms,
+            EXISTS (SELECT 1 FROM jsonb_array_elements(v->'rows') r
+                    WHERE r->>'status' = 'pending') AS has_pending
+     FROM kv WHERE k = $1`,
+    [KEY(jobId)],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    kind: (r.kind as BulkKind) ?? "call",
+    paused: r.paused === "true",
+    campaignId: r.campaign_id ?? "",
+    concurrency: r.concurrency != null ? Number(r.concurrency) : undefined,
+    delayMs: r.delay_ms != null ? Number(r.delay_ms) : undefined,
+    hasPending: r.has_pending === true,
+  };
+}
+
 export async function listBulkJobs(limit = 20): Promise<BulkJob[]> {
   const r = redis();
   const ids = (await r.zrange(ZINDEX, 0, limit - 1, { rev: true })) as string[];
@@ -114,6 +157,37 @@ export async function updateBulkRow(
     );
     if (allDone && !job.completedAt) job.completedAt = new Date().toISOString();
     return { next: job, ret: job as BulkJob };
+  });
+}
+
+/**
+ * Apply many row patches in a SINGLE atomic blob rewrite.
+ *
+ * The job is stored as one JSON blob holding every row, so each updateBulkRow
+ * call read-modify-writes the whole blob. Firing a batch of N calls and then
+ * doing N separate updateBulkRow writes means N full-blob serializations — for a
+ * 16k-row (~1.7 MB) job at high concurrency that churns tens of MB/s and OOMs
+ * the box. Collapsing a batch's results into one write keeps it to a single
+ * rewrite per batch regardless of concurrency.
+ */
+export async function updateBulkRowsBatch(
+  jobId: string,
+  updates: Array<{ index: number; patch: Partial<BulkRow> }>,
+): Promise<void> {
+  if (!updates.length) return;
+  await redis().withLock<null>(KEY(jobId), (job: any) => {
+    if (!job || !Array.isArray(job.rows)) return { ret: null };
+    for (const u of updates) {
+      if (u.index < 0) continue;
+      const row = job.rows[u.index];
+      if (!row || typeof row !== "object") continue;
+      for (const [k, v] of Object.entries(u.patch)) if (v !== undefined) row[k] = v;
+    }
+    const allDone = job.rows.every(
+      (rw: any) => rw.status === "ok" || rw.status === "failed"
+    );
+    if (allDone && !job.completedAt) job.completedAt = new Date().toISOString();
+    return { next: job, ret: null };
   });
 }
 
