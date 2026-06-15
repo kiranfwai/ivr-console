@@ -63,7 +63,7 @@ export default function BulkTab() {
 
   const [campaignId, setCampaignId] = useState("");
   const [csv, setCsv] = useState("phone,name,email\n");
-  const [concurrency, setConcurrency] = useState(30);
+  const [concurrency, setConcurrency] = useState(50);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [job, setJob] = useState<BulkJobWithCounts | null>(null);
   const [log, setLog] = useState<BulkRow[]>([]);
@@ -206,7 +206,7 @@ export default function BulkTab() {
           <div>
             <Label hint="parallel calls">Concurrency</Label>
             <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
-              {[10, 20, 30, 40].map((v) => <option key={v} value={v}>{v}</option>)}
+              {[25, 50, 75, 100, 125, 150, 175, 200].map((v) => <option key={v} value={v}>{v}</option>)}
             </Select>
           </div>
           <div className="flex items-end">

@@ -25,9 +25,11 @@ import { fireOne } from "./bulk-runner";
  */
 
 const TICK_MS = 200;
-// Hard ceiling on parallel calls per job regardless of the job's setting — the
-// box is a 1 GiB t3.micro. Raise via env on a bigger instance.
-const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 40;
+// Hard ceiling on parallel calls per job regardless of the job's setting.
+// Effective throughput is also bounded by the Plivo account CPS limit and the
+// DB pool (PGPOOL_MAX); above those, extra concurrency just queues. Raise via
+// env if you move to a bigger box / higher CPS.
+const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 200;
 
 const inFlight = new Map<string, number>();   // jobId -> calls currently in flight
 const pumping = new Set<string>();            // jobId -> a pumpJob claim is in progress
