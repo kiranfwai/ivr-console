@@ -54,6 +54,82 @@ function validateAudioUrl(raw: string): string | null {
   return null;
 }
 
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB (FEATURE 5)
+
+/** Validate a picked/dropped audio file: MP3 or WAV, ≤ 10 MB. Returns an error string or null. */
+function validateAudioFile(f: File): string | null {
+  const okType =
+    /\.(mp3|wav)$/i.test(f.name) ||
+    /^audio\/(mpeg|mp3|wav|x-wav|wave|vnd\.wave)$/i.test(f.type);
+  if (!okType) return "Only MP3 or WAV files are supported.";
+  if (f.size > MAX_AUDIO_BYTES) return `File is ${fmtBytes(f.size)} — the maximum is 10 MB.`;
+  return null;
+}
+
+/* -------------------- waveform preview -------------------- */
+function drawWave(canvas: HTMLCanvasElement, audio: AudioBuffer) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const data = audio.getChannelData(0);
+  const bars = 140;
+  const block = Math.floor(data.length / bars) || 1;
+  const mid = H / 2;
+  const barW = W / bars;
+  ctx.fillStyle = "#5eead4";
+  for (let i = 0; i < bars; i++) {
+    let peak = 0;
+    for (let j = 0; j < block; j++) {
+      const v = Math.abs(data[i * block + j] || 0);
+      if (v > peak) peak = v;
+    }
+    const h = Math.max(1, peak * H * 0.92);
+    ctx.fillRect(i * barW, mid - h / 2, Math.max(1, barW - 1), h);
+  }
+}
+
+// Decode the file locally (Web Audio) and draw its waveform — no server round-trip.
+function Waveform({ file }: { file: File }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("loading");
+    (async () => {
+      try {
+        const buf = await file.arrayBuffer();
+        const AC: typeof AudioContext =
+          window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AC();
+        const audio = await ctx.decodeAudioData(buf.slice(0));
+        ctx.close().catch(() => {});
+        if (cancelled) return;
+        if (canvasRef.current) drawWave(canvasRef.current, audio);
+        setStatus("ok");
+      } catch {
+        if (!cancelled) setStatus("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [file]);
+
+  return (
+    <div className="md:col-span-3 rounded-lg border border-line bg-bg/40 px-3 py-2.5">
+      <div className="text-xs font-medium text-ink2 uppercase tracking-wider mb-2">Waveform</div>
+      <div className="relative h-16">
+        <canvas ref={canvasRef} width={760} height={64} className="w-full h-16" />
+        {status !== "ok" && (
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-muted">
+            {status === "loading" ? "Rendering waveform…" : "Couldn’t render waveform (file still uploads fine)."}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* -------------------- audio metadata probe -------------------- */
 function useAudioMeta(src: string | null) {
   const [duration, setDuration] = useState<number | null>(null);
@@ -164,7 +240,20 @@ export default function AudiosTab() {
 
   // selected file + its preview object URL
   const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [fileObjUrl, setFileObjUrl] = useState<string | null>(null);
+
+  // Validate then accept a picked/dropped file (FEATURE 5).
+  function pickFile(f: File | null | undefined) {
+    if (!f) return;
+    const err = validateAudioFile(f);
+    if (err) {
+      toast(err, "danger");
+      return;
+    }
+    setFile(f);
+    if (!label) setLabel(f.name.replace(/\.[^.]+$/, ""));
+  }
   useEffect(() => {
     if (!file) {
       setFileObjUrl(null);
@@ -375,24 +464,34 @@ export default function AudiosTab() {
           ) : (
             <>
               <div className="md:col-span-2">
-                <Label>Audio file</Label>
-                <label className="flex items-center gap-3 px-3 py-2 bg-bg/60 border border-line rounded-lg cursor-pointer hover:border-line2 transition-colors">
+                <Label hint="MP3 or WAV · max 10 MB">Audio file</Label>
+                <label
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    pickFile(e.dataTransfer.files?.[0]);
+                  }}
+                  className={`flex items-center gap-3 px-3 py-3 border rounded-lg cursor-pointer transition-colors ${
+                    dragOver ? "bg-brand/10 border-brand/40" : "bg-bg/60 border-line hover:border-line2"
+                  }`}
+                >
                   <Upload size={14} className="text-muted shrink-0" />
+                  <span className="text-sm text-ink2 flex-1 min-w-0 truncate">
+                    {file ? `${file.name} · ${fmtBytes(file.size)}` : dragOver ? "Drop the audio file here" : "Drag & drop, or click to choose an MP3/WAV"}
+                  </span>
                   <input
                     ref={fileRef}
                     type="file"
-                    accept="audio/*"
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                    className="text-sm text-ink2 flex-1 min-w-0 outline-none"
+                    accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
+                    onChange={(e) => pickFile(e.target.files?.[0])}
+                    className="hidden"
                   />
                 </label>
-                {file && (
-                  <div className="mt-1 text-xs text-muted">
-                    {file.name} · {fmtBytes(file.size)}
-                  </div>
-                )}
               </div>
 
+              {file && <Waveform file={file} />}
               {fileObjUrl && <Preview src={fileObjUrl} label={file ? fmtBytes(file.size) : ""} />}
 
               {busy && mode === "upload" && (

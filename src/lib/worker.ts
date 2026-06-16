@@ -40,8 +40,7 @@ export async function startWorker(): Promise<void> {
   if (G.__ivrWorkerStarted) return;
   G.__ivrWorkerStarted = true;
   try {
-    const m = await migrateBulkJobsFromKv();
-    if (m.migrated) console.log(`[worker] migrated ${m.migrated} legacy job(s), ${m.rows} rows`);
+    await migrateBulkJobsFromKv();
   } catch (e) {
     console.error("[worker] migration failed:", e);
   }
@@ -52,13 +51,11 @@ export async function startWorker(): Promise<void> {
   }
   const timer = setInterval(() => void tick(), TICK_MS);
   if (timer && typeof (timer as any).unref === "function") (timer as any).unref();
-  console.log("[worker] started");
 }
 
 async function recover(): Promise<void> {
   for (const job of await listRunningJobs()) {
-    const n = await resetDialingRows(job.id);
-    if (n) console.log(`[worker] recovered ${n} dialing rows for ${job.id}`);
+    await resetDialingRows(job.id);
   }
 }
 
@@ -141,7 +138,6 @@ async function maybeComplete(jobId: string, cur: number): Promise<void> {
     if ((await countPending(jobId)) === 0) {
       await setJobStatus(jobId, "completed");
       nextClaimAt.delete(jobId);
-      console.log(`[worker] job ${jobId} completed`);
     }
   } catch (e) {
     console.error(`[worker] completion check failed for ${jobId}:`, e);

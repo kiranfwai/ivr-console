@@ -111,10 +111,16 @@ export async function createBulkJob(input: {
   const id = newId("blk");
   const kind = input.kind ?? "call";
   const total = input.rows.length;
-  return withTx(async (c) => {
+
+  // 1) Job metadata first, as 'paused' (BUG 5). Two reasons:
+  //    - the worker ignores paused jobs, so it can't fire a premature "completed"
+  //      in the window before rows exist (countPending would momentarily be 0);
+  //    - a crash mid-insert leaves a paused, never-auto-dialed job, not a partial
+  //      surprise campaign.
+  const created = await withTx(async (c) => {
     const { rows } = await c.query(
       `INSERT INTO bulk_job (id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct, status, total, started_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'running',$8, now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'paused',$8, now())
        RETURNING ${JOB_COLS}`,
       [
         id,
@@ -127,9 +133,18 @@ export async function createBulkJob(input: {
         total,
       ],
     );
-    await insertRows(c, id, input.rows);
     return mapJob(rows[0]);
   });
+
+  // 2) Rows in chunks with per-chunk autocommit — NOT one multi-second
+  //    transaction. Each INSERT is short, so a large or slow upload can't hold a
+  //    lock long enough to trip nginx's gateway timeout (the 504s) and partial
+  //    progress is durable. `query()` autocommits each chunk.
+  await insertRows({ query }, id, input.rows);
+
+  // 3) All rows are durable — flip to 'running' so the worker starts dialing.
+  const ready = await setJobStatus(id, "running");
+  return ready ?? { ...created, status: "running" };
 }
 
 // --- read --------------------------------------------------------------------
@@ -232,6 +247,27 @@ export async function countPending(jobId: string): Promise<number> {
     [jobId],
   );
   return rows[0]?.n ?? 0;
+}
+
+/** Sum + count of answered-call durations for a job (for the completion summary). */
+export async function jobDurationStats(jobId: string): Promise<{ sum: number; count: number }> {
+  const { rows } = await query<{ sum: number; count: number }>(
+    `SELECT COALESCE(SUM(duration_sec),0)::int AS sum,
+            COUNT(*) FILTER (WHERE duration_sec > 0)::int AS count
+       FROM bulk_row WHERE job_id=$1`,
+    [jobId],
+  );
+  return { sum: rows[0]?.sum ?? 0, count: rows[0]?.count ?? 0 };
+}
+
+/** Stream-friendly: every row of a job (for the full-report CSV export). */
+export async function getAllRows(jobId: string): Promise<BulkRow[]> {
+  const { rows } = await query(
+    `SELECT idx, phone, name, email, status, call_uuid, error, hangup_cause, duration_sec, attempted_at
+       FROM bulk_row WHERE job_id=$1 ORDER BY idx`,
+    [jobId],
+  );
+  return rows.map(mapRow);
 }
 
 // --- claim + update ----------------------------------------------------------

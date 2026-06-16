@@ -40,7 +40,13 @@ export async function GET(req: NextRequest) {
   // Row-level export must materialize records (unlike the counter-based KPIs).
   // Cap to keep the function within memory/time limits; narrow the range for more.
   const EXPORT_CAP = 50000;
-  const calls = await listCalls({ limit: EXPORT_CAP, day, from, to, campaignId });
+  let calls;
+  try {
+    calls = await listCalls({ limit: EXPORT_CAP, day, from, to, campaignId });
+  } catch (e) {
+    console.error("[reports/csv] export failed:", e);
+    return new Response("Export failed — the database is busy. Try a narrower range.", { status: 503 });
+  }
   if (calls.length >= EXPORT_CAP) {
     console.warn(`[reports/csv] export hit ${EXPORT_CAP}-row cap for range ${from || day}..${to || day}`);
   }

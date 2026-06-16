@@ -86,6 +86,22 @@ npx vercel --prod
 
 Or push to a GitHub repo linked to a Vercel project — same effect.
 
+### nginx (AWS deploy) — large contact uploads
+
+The app runs as a systemd service behind nginx. nginx's defaults are too small for
+20–30k-row uploads and cause 413/504 errors. In the `location / { … }` (or the API
+location) block set:
+
+```nginx
+client_max_body_size 50m;     # default 1m — a big upload 413s without this
+proxy_read_timeout   120s;    # default 60s — slow inserts 504 without this
+proxy_send_timeout   120s;
+```
+
+Then `nginx -t && systemctl reload nginx`. The app side is already hardened: the
+upload route inserts rows in per-chunk commits (no long transaction), serializes
+concurrent uploads, and returns specific 400/413/503 errors with `Retry-After`.
+
 ---
 
 ## 5. Day-to-day usage

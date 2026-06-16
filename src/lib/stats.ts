@@ -43,47 +43,53 @@ export function istHour(iso: string): string {
   return istShifted(iso).slice(11, 13); // HH
 }
 
-// --- write path (one pipelined round-trip per event) -------------------------
+// --- write path --------------------------------------------------------------
+//
+// PERFORMANCE (BUG 3): these increments are issued as standalone, autocommit
+// statements — NOT wrapped in one transaction. During a bulk campaign every
+// call hits the same hot counter rows on stats:d:<today> (total / h_<hour> /
+// c_<cid>). A single transaction held each of those row locks from its first
+// increment until COMMIT, so all 20k calls serialized on those rows and
+// throughput collapsed to a trickle. Independent increments release each row
+// lock immediately. Counters are monotonic and the reports backfill recomputes
+// absolute totals from call records, so losing all-or-nothing atomicity here is
+// harmless (and the previous TTL was already a no-op in the Postgres shim).
 
 /** Call was placed (Plivo accepted it, or the place-call failed outright). */
 export async function recordPlaced(c: CallRecord): Promise<void> {
   const day = istDay(c.triggeredAt);
   const hour = istHour(c.triggeredAt);
   const cid = c.campaignId || "none";
-  const p = redis().pipeline();
+  const r = redis();
   for (const key of [dayKey(day), dcKey(day, cid)]) {
-    p.hincrby(key, "total", 1);
-    p.hincrby(key, `h_${hour}`, 1);
+    await r.hincrby(key, "total", 1);
+    await r.hincrby(key, `h_${hour}`, 1);
     if (c.status === "failed") {
       // A failed place-call never rings, so it's terminal here: count it as an error.
-      p.hincrby(key, "failed", 1);
-      p.hincrby(key, "o_error", 1);
+      await r.hincrby(key, "failed", 1);
+      await r.hincrby(key, "o_error", 1);
     }
-    p.expire(key, TTL_SECONDS);
   }
   // Per-campaign breakdown for the "all campaigns" view lives on the global hash.
-  p.hincrby(dayKey(day), `c_${cid}`, 1);
-  await p.exec();
+  await r.hincrby(dayKey(day), `c_${cid}`, 1);
 }
 
 /** Call was answered (first transition only — caller guards on prior answeredAt). */
 export async function recordAnswered(c: CallRecord): Promise<void> {
   const day = istDay(c.triggeredAt);
   const cid = c.campaignId || "none";
-  const p = redis().pipeline();
-  p.hincrby(dayKey(day), "answered", 1);
-  p.hincrby(dcKey(day, cid), "answered", 1);
-  await p.exec();
+  const r = redis();
+  await r.hincrby(dayKey(day), "answered", 1);
+  await r.hincrby(dcKey(day, cid), "answered", 1);
 }
 
 /** Caller pressed 1 (first transition only — caller guards on prior press1 status). */
 export async function recordPress1(c: CallRecord): Promise<void> {
   const day = istDay(c.triggeredAt);
   const cid = c.campaignId || "none";
-  const p = redis().pipeline();
-  p.hincrby(dayKey(day), "press1", 1);
-  p.hincrby(dcKey(day, cid), "press1", 1);
-  await p.exec();
+  const r = redis();
+  await r.hincrby(dayKey(day), "press1", 1);
+  await r.hincrby(dcKey(day, cid), "press1", 1);
 }
 
 /** Call finalized at hangup (first finalize only — caller guards on prior hangupAt). */
@@ -91,12 +97,11 @@ export async function recordFinalized(c: CallRecord, hangupCause: string, durati
   const outcome = deriveOutcome(hangupCause, c.digit, !!c.answeredAt) as Outcome;
   const day = istDay(c.triggeredAt);
   const cid = c.campaignId || "none";
-  const p = redis().pipeline();
+  const r = redis();
   for (const key of [dayKey(day), dcKey(day, cid)]) {
-    p.hincrby(key, `o_${outcome}`, 1);
-    if (durationSec > 0) p.hincrby(key, "durSum", durationSec);
+    await r.hincrby(key, `o_${outcome}`, 1);
+    if (durationSec > 0) await r.hincrby(key, "durSum", durationSec);
   }
-  await p.exec();
 }
 
 // --- read path ---------------------------------------------------------------

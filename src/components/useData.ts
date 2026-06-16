@@ -1,6 +1,51 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+
+/**
+ * State that survives tab switches (component unmount) and full page reloads by
+ * mirroring into localStorage. Used for anything the operator typed/uploaded:
+ * the contact CSV, the selected campaign, concurrency, and the active job id —
+ * so none of it is lost when the dashboard tab is changed or the page refreshes.
+ *
+ * SSR-safe: we render the default on the server + first client paint, then
+ * rehydrate from storage in an effect. This avoids React hydration mismatches
+ * while still restoring the stored value before any state-dependent API call
+ * (the polling effects key off the rehydrated value once it lands).
+ */
+export function usePersistentState<T>(
+  key: string,
+  initial: T,
+): [T, Dispatch<SetStateAction<T>>, boolean] {
+  const [state, setState] = useState<T>(initial);
+  const hydratedRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw != null) setState(JSON.parse(raw) as T);
+    } catch {
+      /* corrupt/blocked storage — fall back to the in-memory default */
+    }
+    hydratedRef.current = true;
+    setHydrated(true);
+    // Only re-run if the key itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  useEffect(() => {
+    // Don't let the default value clobber stored data before rehydration.
+    if (!hydratedRef.current) return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(state));
+    } catch {
+      /* storage full / disabled — non-fatal, state still works in memory */
+    }
+  }, [key, state]);
+
+  return [state, setState, hydrated];
+}
 
 export interface ApiError extends Error {
   status: number;
@@ -69,4 +114,34 @@ export async function api<T = any>(url: string, init?: RequestInit): Promise<T> 
   } catch {}
   if (!r.ok) throw makeError(r.status, json?.error || `HTTP ${r.status}`);
   return json as T;
+}
+
+/**
+ * api() with auto-retry on *transient* failures only (BUG 5): network drop and
+ * 429 / 502 / 503 / 504. These mean the request didn't complete (or the server
+ * asked us to back off), so retrying is safe — and the bulk endpoint is
+ * idempotency-keyed, so even a 504 after the job actually saved won't duplicate.
+ * 4xx/500 are NOT retried (client error / ambiguous), they throw immediately.
+ */
+export async function apiRetry<T = any>(
+  url: string,
+  init?: RequestInit,
+  opts: { retries?: number; baseMs?: number } = {},
+): Promise<T> {
+  const retries = opts.retries ?? 3;
+  const baseMs = opts.baseMs ?? 600;
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await api<T>(url, init);
+    } catch (e: any) {
+      lastErr = e;
+      const status: number = e?.status ?? 0;
+      const transient = status === 0 || status === 429 || status === 502 || status === 503 || status === 504;
+      if (!transient || attempt === retries) throw e;
+      const delay = Math.min(baseMs * 2 ** attempt, 8000) + Math.random() * 250;
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
+  throw lastErr;
 }

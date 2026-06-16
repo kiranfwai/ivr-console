@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw } from "lucide-react";
 import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, IconButton, toast } from "./ui";
-import { useFetch, api } from "./useData";
+import { useFetch, api, usePersistentState } from "./useData";
 import type { Campaign } from "@/lib/models";
 
 interface CallResult {
@@ -43,9 +43,10 @@ let historyCounter = 1;
 export default function DialTab() {
   const { data: c } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const campaigns = c?.campaigns ?? [];
-  const [campaignId, setCampaignId] = useState<string>("");
+  // Selected campaign + caller name persist across tab switches / refresh (BUG 1).
+  const [campaignId, setCampaignId] = usePersistentState<string>("ivr.dial.campaignId", "");
   const [phone, setPhone] = useState("");
-  const [callerName, setCallerName] = useState("");
+  const [callerName, setCallerName] = usePersistentState("ivr.dial.callerName", "");
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<CallResult | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);

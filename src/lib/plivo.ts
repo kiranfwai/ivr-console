@@ -24,6 +24,27 @@ export interface PlaceCallOptions {
 // failure into a normal { ok:false } result instead of a throw.
 const CALL_TIMEOUT_MS = Number(process.env.PLIVO_CALL_TIMEOUT_MS) || 25000;
 
+// Exponential backoff is applied ONLY to HTTP 429 (Plivo CPS / rate limit).
+// Every other status — including 4xx invalid-number and 5xx carrier errors —
+// returns immediately so one bad number never slows the whole campaign.
+const RL_MAX_RETRIES = Number(process.env.PLIVO_RL_MAX_RETRIES) || 4;
+const RL_BASE_MS = Number(process.env.PLIVO_RL_BASE_MS) || 250;
+const RL_MAX_BACKOFF_MS = Number(process.env.PLIVO_RL_MAX_BACKOFF_MS) || 4000;
+
+function sleep(ms: number) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+/** Backoff for the Nth 429 (0-based): capped exponential + full jitter, or Retry-After. */
+function rateLimitDelayMs(attempt: number, retryAfter: string | null): number {
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs) && secs > 0) return Math.min(secs * 1000, RL_MAX_BACKOFF_MS);
+  }
+  const capped = Math.min(RL_BASE_MS * 2 ** attempt, RL_MAX_BACKOFF_MS);
+  return Math.round(capped / 2 + Math.random() * (capped / 2)); // full jitter
+}
+
 export async function placeCall(opts: PlaceCallOptions) {
   const body = {
     from: opts.fromNumber || DEFAULT_FROM(),
@@ -34,26 +55,38 @@ export async function placeCall(opts: PlaceCallOptions) {
     hangup_method: "POST",
     caller_name: opts.callerName,
   };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
-  try {
-    const res = await fetch(`https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: authHeader() },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    let json: any = null;
+
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
     try {
-      json = JSON.parse(text);
-    } catch {}
-    return { ok: res.ok, status: res.status, body: json ?? text };
-  } catch (e: any) {
-    const status = e?.name === "AbortError" ? 408 : 0;
-    return { ok: false, status, body: e?.name === "AbortError" ? "timeout" : e?.message || "fetch error" };
-  } finally {
-    clearTimeout(timer);
+      const res = await fetch(`https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: authHeader() },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      // Rate limited: back off and retry (only 429, only up to RL_MAX_RETRIES).
+      if (res.status === 429 && attempt < RL_MAX_RETRIES) {
+        const delay = rateLimitDelayMs(attempt, res.headers.get("retry-after"));
+        clearTimeout(timer);
+        await sleep(delay);
+        continue;
+      }
+
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {}
+      return { ok: res.ok, status: res.status, body: json ?? text };
+    } catch (e: any) {
+      const status = e?.name === "AbortError" ? 408 : 0;
+      return { ok: false, status, body: e?.name === "AbortError" ? "timeout" : e?.message || "fetch error" };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

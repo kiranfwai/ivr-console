@@ -8,3 +8,13 @@ node_modules
 *.tsbuildinfo
 scripts/_*
 scripts/_test-charts.xlsx
+
+# local-only deploy tooling — contains ivr-key.pem (private key). NEVER commit.
+skills/
+.env.tmp
+
+# stray scratch files from a botched curl -o
+/campaignId
+/campaignName
+/from
+/status

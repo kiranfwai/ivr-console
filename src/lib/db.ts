@@ -25,9 +25,12 @@ function makePool(): Pool {
       : undefined;
 
   // Pool size matters for the bulk-call worker: at high concurrency, claims +
-  // per-call record writes + Plivo hangup callbacks all draw connections. Default
-  // 25; override with PGPOOL_MAX (keep below the DB's max_connections headroom).
-  const max = Number(process.env.PGPOOL_MAX) || 25;
+  // per-call record writes + Plivo hangup callbacks all draw connections. With
+  // up to `concurrency` fireOne()s running in parallel (default 50), a pool of
+  // 25 caps real DB throughput and bottlenecks dialing — half the calls block
+  // waiting for a connection. Default 50; override with PGPOOL_MAX (keep below
+  // the DB's max_connections headroom — vanilla Postgres allows 100).
+  const max = Number(process.env.PGPOOL_MAX) || 50;
   if (conn) {
     return new Pool({ connectionString: conn, ssl, max });
   }

@@ -36,7 +36,7 @@ function formatDate(iso?: string) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-export default function CampaignsTab() {
+export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: string) => void }) {
   const { data: cdata, reload: reloadC } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: adata } = useFetch<{ audios: Audio[] }>("/api/audios");
   const campaigns = cdata?.campaigns ?? [];
@@ -174,6 +174,7 @@ export default function CampaignsTab() {
             setEditing(null);
             setClone(null);
           }}
+          onCreated={onCreated}
         />
       )}
 
@@ -294,12 +295,14 @@ function CampaignEditor({
   audios,
   onClose,
   onSaved,
+  onCreated,
 }: {
   initial: Campaign | null;
   cloneFrom: Campaign | null;
   audios: Audio[];
   onClose: () => void;
   onSaved: () => void;
+  onCreated?: (campaignId: string) => void;
 }) {
   // `initial` = editing an existing record; `cloneFrom` = prefilled new record.
   const seed = initial ?? cloneFrom;
@@ -312,7 +315,10 @@ function CampaignEditor({
 
   const webhookValid = isValidHttpsUrl(webhookUrl);
   const fromEmpty = !fromNumber.trim();
-  const canSave = !!name.trim() && webhookValid;
+  // FEATURE 5: require a name AND a selected audio (plus a valid webhook).
+  const nameValid = !!name.trim();
+  const audioValid = !!audioId;
+  const canSave = nameValid && audioValid && webhookValid;
 
   async function save() {
     if (!canSave) return;
@@ -321,11 +327,18 @@ function CampaignEditor({
       const payload = { name, audioId: audioId || null, prompt, webhookUrl, fromNumber };
       if (initial) {
         await api(`/api/campaigns/${initial.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+        toast("Saved", "ok");
+        onSaved();
       } else {
-        await api("/api/campaigns", { method: "POST", body: JSON.stringify(payload) });
+        const res = await api<{ campaign: Campaign }>("/api/campaigns", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        toast("Campaign created", "ok");
+        onSaved();
+        // Jump to Bulk with this campaign pre-selected (FEATURE 5).
+        onCreated?.(res.campaign.id);
       }
-      toast("Saved", "ok");
-      onSaved();
     } catch (e: any) {
       toast(e.message || "Save failed", "danger");
     } finally {
@@ -353,13 +366,18 @@ function CampaignEditor({
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day-1 outreach" />
         </div>
         <div>
-          <Label hint={audios.length ? `${audios.length} available` : "Audios tab to add"}>Audio</Label>
+          <Label hint={audios.length ? `${audios.length} available` : "add one in the Audios tab"}>Audio</Label>
           <Select value={audioId ?? ""} onChange={(e) => setAudioId(e.target.value)}>
-            <option value="">— None (fallback day1.mp3) —</option>
+            <option value="">— Select an audio —</option>
             {audios.map((a) => (
               <option key={a.id} value={a.id}>{a.label}</option>
             ))}
           </Select>
+          {!audioValid && (
+            <div className="text-xs text-danger mt-1">
+              {audios.length ? "Select an audio for this campaign." : "No audios yet — add one in the Audios tab first."}
+            </div>
+          )}
         </div>
         <div>
           <Label hint="optional">Press-1 webhook URL</Label>

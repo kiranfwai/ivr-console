@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
 import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
-import { useFetch, api } from "./useData";
+import { useFetch, api, apiRetry, usePersistentState } from "./useData";
+import { parseContacts } from "@/lib/contacts";
 import type { BulkJobWithCounts } from "@/lib/models";
 
 type Mode = "single" | "bulk";
@@ -116,35 +117,6 @@ function SingleSend() {
   );
 }
 
-const PHONE_KEYS = ["phone", "mobile", "number", "contact", "tel", "mob", "msisdn"];
-const NAME_KEYS  = ["name", "full name", "fullname", "lead", "first name", "firstname"];
-const EMAIL_KEYS = ["email", "email address", "e-mail", "emailid", "email id"];
-
-function parseRows(csv: string): { phone: string; name?: string; email?: string }[] {
-  const lines = csv.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return [];
-  const firstLower = lines[0].toLowerCase();
-  if (PHONE_KEYS.some((k) => firstLower.includes(k))) {
-    const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
-    const pIdx = header.findIndex((h) => PHONE_KEYS.includes(h));
-    const nIdx = header.findIndex((h) => NAME_KEYS.includes(h));
-    const eIdx = header.findIndex((h) => EMAIL_KEYS.includes(h));
-    return lines.slice(1).map((line) => {
-      const cols = line.split(",").map((c) => c.trim());
-      const phone = (pIdx >= 0 ? cols[pIdx] : cols[0] || "").trim();
-      return {
-        phone,
-        name: nIdx >= 0 ? cols[nIdx] || undefined : undefined,
-        email: eIdx >= 0 ? cols[eIdx] || undefined : undefined,
-      };
-    }).filter((r) => /\d/.test(r.phone));
-  }
-  return lines.map((line) => {
-    const [phone, ...rest] = line.split(",");
-    return { phone: phone.trim(), name: rest.join(",").trim() || undefined };
-  }).filter((r) => /\d/.test(r.phone));
-}
-
 function delayMsForRate(ratePerMin: number, jitterPct: number): number {
   const baseMs = 60000 / Math.max(1, ratePerMin);
   const jitter = baseMs * (jitterPct / 100);
@@ -155,14 +127,28 @@ function BulkSend() {
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJobWithCounts[] }>("/api/bulk");
   const jobs = (jdata?.jobs ?? []).filter((j) => j.kind === "whatsapp");
 
-  const [csv, setCsv] = useState<string>("phone,name,email\n");
-  const [webhookUrl, setWebhookUrl] = useState("");
-  const [rate, setRate] = useState(6);
-  const [jitterPct, setJitterPct] = useState(30);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  // Persisted across tab switches + refresh (BUG 1) — recipients and settings survive.
+  const [csv, setCsv] = usePersistentState<string>("ivr.wa.csv", "phone,name,email\n");
+  const [webhookUrl, setWebhookUrl] = usePersistentState("ivr.wa.webhookUrl", "");
+  const [rate, setRate] = usePersistentState("ivr.wa.rate", 6);
+  const [jitterPct, setJitterPct] = usePersistentState("ivr.wa.jitterPct", 30);
+  const [activeJobId, setActiveJobId] = usePersistentState<string | null>("ivr.wa.activeJobId", null);
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   const [running, setRunning] = useState(false);
   const stopRef = useRef(false);
+
+  // Bulk WhatsApp is browser-paced, so closing the tab actually halts the trickle.
+  // Warn before leaving while a send is in progress (BUG 1).
+  useEffect(() => {
+    if (!running) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "You have an active campaign running. Are you sure you want to leave?";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [running]);
 
   useEffect(() => {
     if (!activeJobId) return;
@@ -178,10 +164,11 @@ function BulkSend() {
   }, [activeJobId, running]);
 
   async function start() {
-    const rows = parseRows(csv);
+    const rows = parsed.rows;
     if (!rows.length) return;
+    const idempotencyKey = `idem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     try {
-      const r = await api<{ job: BulkJobWithCounts }>("/api/bulk", {
+      const r = await apiRetry<{ job: BulkJobWithCounts }>("/api/bulk", {
         method: "POST",
         body: JSON.stringify({
           kind: "whatsapp",
@@ -189,12 +176,13 @@ function BulkSend() {
           webhookUrl: webhookUrl || undefined,
           delayMs: Math.round(60000 / Math.max(1, rate)),
           jitterPct,
+          idempotencyKey,
         }),
       });
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
       reloadJobs();
-      toast(`Queued ${rows.length} WhatsApp sends`, "ok");
+      toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends`, "ok");
       drive(r.job.id, webhookUrl);
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
@@ -243,7 +231,8 @@ function BulkSend() {
   }
 
   const counts = activeJob ? tally(activeJob) : null;
-  const previewCount = parseRows(csv).length;
+  const parsed = useMemo(() => parseContacts(csv), [csv]);
+  const previewCount = parsed.rows.length;
   const estimatedMin = previewCount > 0 ? Math.max(1, Math.ceil(previewCount / Math.max(1, rate))) : 0;
 
   return (
@@ -306,11 +295,25 @@ function BulkSend() {
             onChange={(e) => setCsv(e.target.value)}
             placeholder={"phone,name,email\n9876543210,Animesh,animesh@example.com\n9123456789,Test,"}
           />
+          {previewCount > 0 && (
+            <div className="mt-2 flex items-start gap-2 text-xs bg-ok/5 border border-ok/20 rounded-lg px-3 py-2">
+              <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
+              <span className="text-ink2">
+                <span className="text-ok font-semibold">✓ {previewCount.toLocaleString()} contacts loaded</span>
+                {parsed.stats.duplicates > 0 && (
+                  <> · {parsed.stats.duplicates.toLocaleString()} duplicate{parsed.stats.duplicates === 1 ? "" : "s"} removed</>
+                )}
+                {parsed.stats.noPhone > 0 && (
+                  <> · <span className="text-warn">{parsed.stats.noPhone.toLocaleString()} row{parsed.stats.noPhone === 1 ? "" : "s"} skipped — no phone</span></>
+                )}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end">
           <Button onClick={start} disabled={!previewCount || running} loading={running} leftIcon={<Play size={14} />} size="lg">
-            {running ? "Sending…" : `Start · ${previewCount} sends`}
+            {running ? "Sending…" : `Start · ${previewCount.toLocaleString()} sends`}
           </Button>
         </div>
       </Card>

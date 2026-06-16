@@ -321,17 +321,48 @@ export function KPI({
 }
 
 /* -------------------- File picker -------------------- */
+// Big CSVs (20–30k rows) take a moment to read off disk; show a real progress
+// bar driven by FileReader's onprogress so the upload never looks frozen (BUG 4).
 export function CsvFilePicker({ onLoad }: { onLoad: (text: string) => void }) {
   const [fileName, setFileName] = useState<string>("");
   const [dragOver, setDragOver] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null); // 0–100 while reading, null idle
+
+  function readWithProgress(f: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onprogress = (e) => {
+        if (e.lengthComputable) setProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
+      };
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+      reader.readAsText(f);
+    });
+  }
 
   async function handleFile(f: File | undefined | null) {
     if (!f) return;
-    const text = await f.text();
     setFileName(f.name);
-    onLoad(text);
+    const LARGE = 512 * 1024; // 512 KB ≈ a few thousand rows
+    try {
+      let text: string;
+      if (f.size > LARGE) {
+        setProgress(0);
+        text = await readWithProgress(f);
+        setProgress(100);
+      } else {
+        text = await f.text();
+      }
+      onLoad(text);
+    } catch {
+      toast("Could not read that file", "danger");
+    } finally {
+      // Let 100% show briefly, then clear.
+      setTimeout(() => setProgress(null), 400);
+    }
   }
 
+  const reading = progress !== null;
   return (
     <label
       onDragOver={(e) => {
@@ -344,18 +375,27 @@ export function CsvFilePicker({ onLoad }: { onLoad: (text: string) => void }) {
         setDragOver(false);
         handleFile(e.dataTransfer.files?.[0]);
       }}
-      className={`cursor-pointer px-2.5 py-1.5 rounded-md border text-ink inline-flex items-center gap-1.5 text-xs transition-colors ${
+      className={`relative overflow-hidden cursor-pointer px-2.5 py-1.5 rounded-md border text-ink inline-flex items-center gap-1.5 text-xs transition-colors ${
         dragOver
           ? "bg-brand/10 border-brand/40"
           : "bg-elev/80 hover:bg-elev border-line hover:border-line2"
       }`}
     >
-      <Upload size={12} />
-      <span>{fileName || (dragOver ? "Drop CSV here" : "Choose CSV")}</span>
+      {reading && (
+        <span
+          className="absolute inset-y-0 left-0 bg-brand/20 transition-[width] duration-150"
+          style={{ width: `${progress}%` }}
+        />
+      )}
+      <Upload size={12} className="relative" />
+      <span className="relative tabular-nums">
+        {reading ? `Reading… ${progress}%` : fileName || (dragOver ? "Drop CSV here" : "Choose CSV")}
+      </span>
       <input
         type="file"
         accept=".csv,text/csv,text/plain"
         className="hidden"
+        disabled={reading}
         onChange={(e) => handleFile(e.target.files?.[0])}
       />
     </label>

@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   PhoneCall, PhoneIncoming, PhoneOff, Clock, Download, RefreshCw, TrendingUp, BarChart3,
-  ArrowUp, ArrowDown, X,
+  ArrowUp, ArrowDown, X, ChevronRight, ChevronDown,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -38,9 +38,31 @@ interface Report {
   };
   byHour: Record<string, number>;
   byCampaign: Record<string, number>;
+  campaignTable: CampaignRow[];
+  range: { from: string; to: string };
   hangupCauseCounts: Record<string, number>;
   recent: (CallRecord & { outcome: string | null })[];
   plivoRecent: any[];
+}
+
+interface CampaignRow {
+  campaignId: string;
+  name: string;
+  total: number;
+  lifted: number;
+  press1: number;
+  busy: number;
+  failed: number;
+  liftRate: number;
+}
+
+interface DrillRow {
+  to: string;
+  outcome: string;
+  durationSec: number | null;
+  triggeredAt: string;
+  digit: string;
+  hangupCause: string | null;
 }
 
 type RecentRow = CallRecord & { outcome: string | null };
@@ -53,6 +75,11 @@ function istDateKey(ms: number): string {
 }
 function istTimeOfDay(iso: string): string {
   return new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString().slice(11, 19);
+}
+// Compact IST "MM-DD HH:MM" for drill-down rows (keeps the date for multi-day ranges).
+function istStamp(iso: string): string {
+  const d = new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString();
+  return `${d.slice(5, 10)} ${d.slice(11, 16)}`;
 }
 function todayKey(): string {
   return istDateKey(Date.now());
@@ -105,6 +132,16 @@ export default function ReportsTab() {
   function setPreset(start: string, end: string) {
     setFrom(start);
     setTo(end);
+  }
+  // Keep from <= to on manual edits so a range never inverts (which silently
+  // returns zero rows). The query key (url) is from/to, so any change re-fetches.
+  function changeFrom(v: string) {
+    setFrom(v);
+    if (to && v > to) setTo(v);
+  }
+  function changeTo(v: string) {
+    setTo(v);
+    if (from && v < from) setFrom(v);
   }
   function downloadCsv() {
     const csvQs = new URLSearchParams();
@@ -163,7 +200,7 @@ export default function ReportsTab() {
                 type="date"
                 value={from}
                 max={to}
-                onChange={(e) => setFrom(e.target.value)}
+                onChange={(e) => changeFrom(e.target.value)}
                 className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-brand/60"
               />
             </div>
@@ -173,7 +210,7 @@ export default function ReportsTab() {
                 type="date"
                 value={to}
                 min={from}
-                onChange={(e) => setTo(e.target.value)}
+                onChange={(e) => changeTo(e.target.value)}
                 className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-brand/60"
               />
             </div>
@@ -227,14 +264,14 @@ export default function ReportsTab() {
             <KPI label="Avg duration" value={`${data.totals.avgDurationSec}s`} icon={<Clock size={18} />} />
           </div>
 
-          <ReportBody data={data} />
+          <ReportBody data={data} from={from} to={to} />
         </>
       )}
     </Section>
   );
 }
 
-function ReportBody({ data }: { data: Report }) {
+function ReportBody({ data, from, to }: { data: Report; from: string; to: string }) {
   // Client-side outcome filter shared by the pie and the recent-calls table.
   const [outcomeFilter, setOutcomeFilter] = useState<string | null>(null);
 
@@ -271,6 +308,13 @@ function ReportBody({ data }: { data: Report }) {
           <KVList rows={data.hangupCauseCounts} />
         </Card>
       </div>
+
+      <Card
+        title="Campaign breakdown"
+        description="Click a row to drill into individual numbers, outcomes, duration and time."
+      >
+        <CampaignTable rows={data.campaignTable ?? []} from={from} to={to} />
+      </Card>
 
       <Card
         title="Recent calls"
@@ -610,6 +654,139 @@ function Th({
         {active && (sortDir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
       </button>
     </th>
+  );
+}
+
+// ---- Campaign breakdown table + phone-level drill-down (FEATURE 3) ----------
+
+function CampaignTable({ rows, from, to }: { rows: CampaignRow[]; from: string; to: string }) {
+  const [openCid, setOpenCid] = useState<string | null>(null);
+  if (!rows.length) {
+    return <div className="text-sm text-muted py-4 text-center">No campaign activity in this range.</div>;
+  }
+  const dateLabel = from === to ? from : `${from} → ${to}`;
+  return (
+    <div className="overflow-auto -mx-1">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+            <th className="font-medium py-2 px-1">Campaign</th>
+            <th className="font-medium px-1">Date</th>
+            <th className="font-medium px-1 text-right">Total</th>
+            <th className="font-medium px-1 text-right">Lifted</th>
+            <th className="font-medium px-1 text-right">Press 1</th>
+            <th className="font-medium px-1 text-right">Busy</th>
+            <th className="font-medium px-1 text-right">Failed</th>
+            <th className="font-medium px-1 text-right">Lift Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const open = openCid === r.campaignId;
+            return (
+              <Fragment key={r.campaignId}>
+                <tr
+                  onClick={() => setOpenCid(open ? null : r.campaignId)}
+                  className={`border-t border-line cursor-pointer transition-colors ${open ? "bg-elev/50" : "hover:bg-elev/40"}`}
+                >
+                  <td className="py-2 px-1">
+                    <span className="inline-flex items-center gap-1.5">
+                      {open ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
+                      <span className="truncate max-w-[160px]">{r.name}</span>
+                    </span>
+                    <span className="block font-mono text-[10px] text-muted truncate max-w-[200px] pl-[18px]">{r.campaignId}</span>
+                  </td>
+                  <td className="px-1 text-muted text-xs whitespace-nowrap">{dateLabel}</td>
+                  <td className="px-1 text-right font-mono tabular-nums">{r.total.toLocaleString()}</td>
+                  <td className="px-1 text-right font-mono tabular-nums text-ok">{r.lifted.toLocaleString()}</td>
+                  <td className="px-1 text-right font-mono tabular-nums">{r.press1.toLocaleString()}</td>
+                  <td className="px-1 text-right font-mono tabular-nums text-warn">{r.busy.toLocaleString()}</td>
+                  <td className="px-1 text-right font-mono tabular-nums text-danger">{r.failed.toLocaleString()}</td>
+                  <td className="px-1 text-right">
+                    <Badge tone={r.liftRate >= 20 ? "ok" : r.liftRate >= 10 ? "warn" : "muted"}>{r.liftRate}%</Badge>
+                  </td>
+                </tr>
+                {open && (
+                  <tr className="border-t border-line/40">
+                    <td colSpan={8} className="px-1 py-2">
+                      <DrillDown campaignId={r.campaignId} from={from} to={to} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const DRILL_STATUSES = [
+  { value: "", label: "All statuses" },
+  { value: "connected", label: "Connected" },
+  { value: "failed", label: "Failed" },
+  { value: "no-answer", label: "No Answer" },
+  { value: "busy", label: "Busy" },
+];
+
+function DrillDown({ campaignId, from, to }: { campaignId: string; from: string; to: string }) {
+  const [status, setStatus] = useState<string>("");
+  const qs = new URLSearchParams({ campaign: campaignId, from, to });
+  if (status) qs.set("status", status);
+  const { data, loading } = useFetch<{ rows: DrillRow[]; total: number; capped: boolean }>(
+    `/api/reports/calls?${qs.toString()}`,
+    [campaignId, from, to, status],
+  );
+  const rows = data?.rows ?? [];
+
+  return (
+    <div className="bg-bg/50 border border-line rounded-lg p-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span className="text-xs text-muted">
+          {loading
+            ? "Loading numbers…"
+            : `${rows.length.toLocaleString()} number${rows.length === 1 ? "" : "s"}${data?.capped ? " (showing first 1,000)" : ""}`}
+        </span>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          className="bg-bg/60 border border-line rounded-md px-2 py-1 text-xs outline-none hover:border-line2 focus:border-brand/60"
+        >
+          {DRILL_STATUSES.map((s) => (
+            <option key={s.value} value={s.value}>{s.label}</option>
+          ))}
+        </select>
+      </div>
+      {loading && <Skeleton className="h-24 rounded-lg" />}
+      {!loading && !rows.length && <div className="text-xs text-muted py-3 text-center">No matching calls.</div>}
+      {!loading && rows.length > 0 && (
+        <div className="max-h-72 overflow-auto rounded-md border border-line">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-bg">
+              <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+                <th className="font-medium py-1.5 px-2">Phone</th>
+                <th className="font-medium px-2">Status</th>
+                <th className="font-medium px-2 text-right">Duration</th>
+                <th className="font-medium px-2 text-right">Time (IST)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={`${r.to}-${i}`} className="border-t border-line/60 hover:bg-elev/40">
+                  <td className="py-1.5 px-2 font-mono">{r.to}</td>
+                  <td className="px-2">
+                    <Badge tone={OUTCOME_TONE[r.outcome] || "muted"}>{OUTCOME_LABEL[r.outcome] || r.outcome}</Badge>
+                  </td>
+                  <td className="px-2 text-right font-mono tabular-nums">{r.durationSec ? `${r.durationSec}s` : "—"}</td>
+                  <td className="px-2 text-right font-mono text-muted whitespace-nowrap">{istStamp(r.triggeredAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

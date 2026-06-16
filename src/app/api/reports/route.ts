@@ -39,6 +39,40 @@ export async function GET(req: NextRequest) {
     byCampaign[label] = (byCampaign[label] || 0) + count;
   }
 
+  // Per-campaign breakdown table (FEATURE 3). Read each active campaign's rolled-up
+  // aggregate over the same range (O(days) each). Capped at 50 campaigns so a long
+  // campaign list can't fan out into an unbounded number of reads.
+  const rangeFrom = fromDay || today;
+  const rangeTo = toDay || today;
+  const activeCids = Object.entries(agg.byCampaignId)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 50)
+    .map(([cid]) => cid);
+  const campaignTable = (
+    await Promise.all(
+      activeCids.map(async (cid) => {
+        const a = await readRange(rangeFrom, rangeTo, cid);
+        const lifted = a.outcomes.press1 + a.outcomes.connected;
+        const busy = a.outcomes.busy;
+        // Everything settled that isn't lifted or busy (no-answer + rejected +
+        // carrier error + place-call failures), so columns sum to total.
+        const failed = Math.max(0, a.total - lifted - busy);
+        return {
+          campaignId: cid,
+          name: cid === "none" ? "(none)" : nameById.get(cid) || cid,
+          total: a.total,
+          lifted,
+          press1: a.press1,
+          busy,
+          failed,
+          liftRate: a.total ? Math.round((lifted / a.total) * 100) : 0,
+        };
+      }),
+    )
+  )
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total);
+
   // ----- recent table: only the latest rows are needed, fetched directly -----
   const recentCalls = await listCalls({ limit: 50, day, from: fromDay, to: toDay, campaignId });
   const recent = recentCalls.map((c) => ({
@@ -84,6 +118,8 @@ export async function GET(req: NextRequest) {
     outcomes,
     byHour: agg.byHour,
     byCampaign,
+    campaignTable,
+    range: { from: rangeFrom, to: rangeTo },
     hangupCauseCounts,
     recent,
     plivoRecent: plivoCalls.slice(0, 15),

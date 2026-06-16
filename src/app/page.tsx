@@ -46,6 +46,18 @@ export default function Page() {
     location.href = "/login";
   }
 
+  // After creating a campaign, jump to Bulk with it pre-selected (FEATURE 5).
+  // BulkTab reads its campaign from this persisted key on mount, so writing it
+  // before switching tabs makes the new campaign the active selection.
+  function onCampaignCreated(id: string) {
+    try {
+      window.localStorage.setItem("ivr.bulk.campaignId", JSON.stringify(id));
+    } catch {
+      /* storage blocked — non-fatal, user can pick it manually */
+    }
+    changeTab("bulk");
+  }
+
   return (
     <>
       <Shell
@@ -57,7 +69,7 @@ export default function Page() {
       >
         {tab === "dial" && <DialTab />}
         {tab === "bulk" && <BulkTab />}
-        {tab === "campaigns" && <CampaignsTab />}
+        {tab === "campaigns" && <CampaignsTab onCreated={onCampaignCreated} />}
         {tab === "audios" && <AudiosTab />}
         {tab === "reports" && <ReportsTab />}
         {tab === "whatsapp" && <WhatsAppTab />}
