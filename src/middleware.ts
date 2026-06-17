@@ -7,6 +7,7 @@ const PUBLIC_PREFIXES = [
   "/api/answer",
   "/api/dtmf",
   "/api/hangup",
+  "/api/trigger-call", // guarded by its own x-api-key header, not the session cookie
   "/audios",
   "/_next",
   "/favicon",

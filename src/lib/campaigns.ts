@@ -18,6 +18,17 @@ export async function getCampaign(id: string): Promise<Campaign | null> {
   return (await redis().get<Campaign>(KEY(id))) ?? null;
 }
 
+/** Resolve a campaign by its exact id first, then by exact name (case-insensitive). */
+export async function findCampaignByNameOrId(ref: string): Promise<Campaign | null> {
+  const trimmed = (ref || "").trim();
+  if (!trimmed) return null;
+  const byId = await getCampaign(trimmed);
+  if (byId) return byId;
+  const needle = trimmed.toLowerCase();
+  const all = await listCampaigns();
+  return all.find((c) => c.name.trim().toLowerCase() === needle) ?? null;
+}
+
 export interface CampaignInput {
   name: string;
   audioId?: string | null;
