@@ -111,7 +111,8 @@ export default function BulkTab() {
       }
     };
     tick();
-    const h = setInterval(tick, job?.status === "running" ? 2000 : 6000);
+    // Poll fast while running so live counts stay near-real-time (low latency).
+    const h = setInterval(tick, job?.status === "running" ? 1000 : 6000);
     return () => { alive = false; clearInterval(h); };
   }, [activeJobId, job?.status]);
 
@@ -400,10 +401,11 @@ export default function BulkTab() {
         >
           <LiveDashboard counts={counts} cpm={cpm} running={running} />
 
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {/* Granular breakdown — complements the live rollup above (Connected /
+              Failed / No Answer) without repeating those labels. "Connected" and
+              "No answer" are intentionally omitted here so each label shows once. */}
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
             <Stat label="Press 1" value={counts.press1} tone="ok" />
-            <Stat label="Connected" value={counts.connected} tone="ok" />
-            <Stat label="No answer" value={counts.noAnswer} tone="warn" />
             <Stat label="Busy" value={counts.busy} tone="warn" />
             <Stat label="Rejected" value={counts.rejected} tone="danger" />
             <Stat label="Error" value={counts.error + counts.failed} tone="danger" />
