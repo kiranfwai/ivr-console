@@ -105,6 +105,39 @@ export async function fetchCallDetail(callUuid: string) {
   return res.json();
 }
 
+/**
+ * Account-wide LIVE call count straight from Plivo (status=live) — this includes
+ * calls placed by EVERY application on the same Plivo account, not just ours.
+ *
+ * The dashboard polls ~every 1s, so the result is cached for a few seconds to
+ * stay well clear of Plivo's API rate limits. Returns null if the lookup fails
+ * (the UI then falls back to this app's own live count). The live endpoint
+ * returns { api_id, calls: [<uuid>, ...] }, so the concurrency is calls.length.
+ */
+let _liveCache: { at: number; count: number } | null = null;
+
+export async function fetchAccountLiveCount(maxAgeMs = 3000): Promise<number | null> {
+  const now = Date.now();
+  if (_liveCache && now - _liveCache.at < maxAgeMs) return _liveCache.count;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(
+      `https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/?status=live`,
+      { headers: { Authorization: authHeader() }, signal: controller.signal },
+    );
+    if (!res.ok) return _liveCache?.count ?? null;
+    const json: any = await res.json();
+    const count = Array.isArray(json?.calls) ? json.calls.length : 0;
+    _liveCache = { at: now, count };
+    return count;
+  } catch {
+    return _liveCache?.count ?? null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function listRecentCalls(limit = 20, offset = 0) {
   const res = await fetch(
     `https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/?limit=${limit}&offset=${offset}`,

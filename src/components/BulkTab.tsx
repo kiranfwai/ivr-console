@@ -14,6 +14,9 @@ const SPLIT_SIZE = 10000;      // "Split & upload" chunk size
 
 type Counts = ReturnType<typeof summarize>;
 type SummaryData = { job: BulkJobWithCounts; durationSum: number; durationCount: number };
+// Account-wide dialing telemetry. `live` = this app's live calls; `accountLive`
+// = TRUE Plivo account-wide live calls (all apps), or null if the lookup failed.
+type AcctStats = { cps: number; maxLive: number; live: number; accountLive: number | null };
 
 function summarize(job: BulkJobWithCounts) {
   const c = job.counts || {};
@@ -58,7 +61,7 @@ export default function BulkTab() {
   const [stale, setStale] = useState(false);
   const [cpm, setCpm] = useState(0);
   // Account-wide dialing telemetry (CPS limit, live-call cap, current live calls).
-  const [acct, setAcct] = useState<{ cps: number; maxLive: number; live: number } | null>(null);
+  const [acct, setAcct] = useState<AcctStats | null>(null);
   const sampleRef = useRef<{ t: number; dialed: number } | null>(null);
   // FEATURE 6 — post-campaign summary
   const [summary, setSummary] = useState<SummaryData | null>(null);
@@ -83,7 +86,7 @@ export default function BulkTab() {
         setStale(false);
         setUpdatedAt(Date.now());
         // Keep account-wide CPS / live-concurrency fresh alongside job progress.
-        api<{ cps: number; maxLive: number; live: number }>("/api/plivo-stats")
+        api<AcctStats>("/api/plivo-stats")
           .then((a) => alive && setAcct(a)).catch(() => {});
         // FEATURE 6 — surface the full summary once, on the running→completed edge.
         if (
@@ -125,7 +128,7 @@ export default function BulkTab() {
   // shared limits before any campaign is running.
   useEffect(() => {
     let alive = true;
-    api<{ cps: number; maxLive: number; live: number }>("/api/plivo-stats")
+    api<AcctStats>("/api/plivo-stats")
       .then((a) => alive && setAcct((prev) => prev ?? a)).catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -709,7 +712,7 @@ function DashRow({ icon, label, value, pct, tone }: { icon: ReactNode; label: st
 // limit), live concurrency (vs the per-campaign cap and the account ceiling),
 // and how long the campaign has been running / took.
 function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running }: {
-  acct: { cps: number; maxLive: number; live: number } | null;
+  acct: AcctStats | null;
   campaignCps: number;
   campaignLive: number;
   cap: number;
@@ -717,11 +720,15 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
   running: boolean;
 }) {
   const accCps = acct?.cps ?? 0;
-  const accLive = acct?.live ?? 0;
   const maxLive = acct?.maxLive ?? 0;
+  const appLive = acct?.live ?? 0;
+  // Real Plivo account-wide live calls (all apps); fall back to this app's count.
+  const accountLive = acct?.accountLive ?? null;
+  const shownAccLive = accountLive ?? appLive;
+  const otherApps = accountLive != null ? Math.max(0, accountLive - appLive) : 0;
   const cpsPct = accCps > 0 ? (campaignCps / accCps) * 100 : 0;
   const livePct = cap > 0 ? (campaignLive / cap) * 100 : 0;
-  const accLivePct = maxLive > 0 ? (accLive / maxLive) * 100 : 0;
+  const accLivePct = maxLive > 0 ? (shownAccLive / maxLive) * 100 : 0;
 
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -753,7 +760,24 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
         </div>
         <Meter label="CPS limit" value={`${accCps || "—"}/s`} sub="all campaigns combined" pct={100} tone="bg-line" muted />
         <div className="h-2.5" />
-        <Meter label="Live concurrency" value={accLive.toLocaleString()} sub={maxLive ? `of ${maxLive} max` : ""} pct={accLivePct} tone="bg-warn" />
+        <Meter label="Live concurrency" value={shownAccLive.toLocaleString()} sub={maxLive ? `of ${maxLive} max` : ""} pct={accLivePct} tone="bg-warn" />
+        <div className="mt-1.5 text-[11px] text-muted flex items-center gap-2">
+          {accountLive != null ? (
+            <>
+              <span className="inline-flex items-center gap-1">
+                <Activity size={10} className="text-ok" /> this app{" "}
+                <span className="text-ink2 tabular-nums">{appLive.toLocaleString()}</span>
+              </span>
+              <span className="text-line">·</span>
+              <span className="inline-flex items-center gap-1">
+                <Users size={10} /> other apps{" "}
+                <span className="text-ink2 tabular-nums">{otherApps.toLocaleString()}</span>
+              </span>
+            </>
+          ) : (
+            <span className="text-warn/80">Plivo live API unavailable — showing this app only</span>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { PLIVO_CPS } from "@/lib/cps";
+import { fetchAccountLiveCount } from "@/lib/plivo";
 import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -11,11 +12,13 @@ const MAX_CALL_SEC = Number(process.env.PLIVO_MAX_CALL_SEC) || 180;
 /**
  * GET /api/plivo-stats — account-wide dialing telemetry for the dashboard.
  *
- * - `cps`     : the account-wide CPS limit (PLIVO_CPS) shared by every placeCall.
- * - `maxLive` : hard ceiling on simultaneously-live calls (PLIVO_MAX_LIVE).
- * - `live`    : calls currently live across ALL call campaigns — rows still
- *               'dialing'/'ok' (placed, not yet finalized by the hangup webhook),
- *               aged out after MAX_CALL_SEC so a lost callback can't inflate it.
+ * - `cps`         : the account-wide CPS limit (PLIVO_CPS) shared by every placeCall.
+ * - `maxLive`     : hard ceiling on simultaneously-live calls (PLIVO_MAX_LIVE).
+ * - `live`        : calls live from THIS app's campaigns — rows still 'dialing'/'ok'
+ *                   (placed, not yet finalized), aged out after MAX_CALL_SEC.
+ * - `accountLive` : TRUE Plivo account-wide live calls (status=live), including
+ *                   calls placed by OTHER applications on the same account. null
+ *                   if the Plivo lookup fails (UI falls back to `live`).
  */
 export async function GET() {
   let live = 0;
@@ -33,5 +36,6 @@ export async function GET() {
   } catch {
     // Best-effort telemetry — never fail the dashboard poll over it.
   }
-  return NextResponse.json({ cps: PLIVO_CPS, maxLive: MAX_LIVE, live });
+  const accountLive = await fetchAccountLiveCount();
+  return NextResponse.json({ cps: PLIVO_CPS, maxLive: MAX_LIVE, live, accountLive });
 }
