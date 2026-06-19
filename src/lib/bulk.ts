@@ -249,6 +249,31 @@ export async function countPending(jobId: string): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
+/** Rows still being placed (claimed but placeCall not yet returned). */
+export async function countDialing(jobId: string): Promise<number> {
+  const { rows } = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM bulk_row WHERE job_id=$1 AND status='dialing'`,
+    [jobId],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Count of calls currently "live" for the job — placed but not yet finalized by
+ * the hangup webhook: status 'dialing' (being placed) or 'ok' (queued/ringing/
+ * talking). Bounded by `maxAgeSec` so a lost hangup callback can't leave a row
+ * stuck "live" forever and stall the live-cap pump (self-healing headroom).
+ */
+export async function countLive(jobId: string, maxAgeSec: number): Promise<number> {
+  const { rows } = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM bulk_row
+       WHERE job_id=$1 AND status IN ('dialing','ok')
+         AND attempted_at > now() - make_interval(secs => $2::int)`,
+    [jobId, maxAgeSec],
+  );
+  return rows[0]?.n ?? 0;
+}
+
 /** Sum + count of answered-call durations for a job (for the completion summary). */
 export async function jobDurationStats(jobId: string): Promise<{ sum: number; count: number }> {
   const { rows } = await query<{ sum: number; count: number }>(

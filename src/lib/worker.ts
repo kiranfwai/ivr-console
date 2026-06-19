@@ -1,5 +1,7 @@
 import {
   claimBulkRows,
+  countDialing,
+  countLive,
   countPending,
   listRunningJobs,
   migrateBulkJobsFromKv,
@@ -11,27 +13,42 @@ import { publicBaseUrl } from "./plivo";
 import { fireOne } from "./bulk-runner";
 
 /**
- * In-process bulk-call worker — a per-job concurrency pump.
+ * In-process bulk-call worker — CPS-paced, live-capped dial pump.
  *
  * Campaigns are dialed entirely server-side: submitting a job just inserts rows
- * with status 'running'; this pump keeps up to `concurrency` calls in flight per
- * job by claiming pending rows (FOR UPDATE SKIP LOCKED) and firing each one
- * independently. Closing the browser has no effect. State lives in Postgres, so
- * the worker is crash-safe: on boot it migrates any legacy blob jobs, resets
- * rows stuck in 'dialing', and resumes 'running' jobs where they left off.
+ * with status 'running'; this pump claims pending rows (FOR UPDATE SKIP LOCKED)
+ * and fires each independently. Closing the browser has no effect.
  *
- * Stop = set job status 'paused' (worker stops claiming next tick; in-flight
- * calls finish). Resume = status 'running'. Both are durable in the DB.
+ * Two independent controls (replacing the old per-job placement window):
+ *   1. RATE  — the account-wide CPS token bucket (see cps.ts) gates every
+ *      placeCall(), so combined initiation across ALL jobs never exceeds PLIVO_CPS.
+ *   2. CEILING — each job's `concurrency` field is now reinterpreted as a cap on
+ *      simultaneously-LIVE calls. We never claim past `concurrency - live`, where
+ *      `live` is the DB count of rows still 'dialing'/'ok' (placed, not yet hung
+ *      up). A slot frees when the hangup webhook finalizes the row — so this is a
+ *      true live-call cap, not a placement window.
+ *
+ * State lives in Postgres, so the worker is crash-safe: on boot it migrates any
+ * legacy blob jobs, resets rows stuck in 'dialing', and resumes 'running' jobs.
+ *
+ * Stop = set job status 'paused'. Resume = status 'running'. Both durable in DB.
+ *
+ * NOTE: the CPS bucket and the per-tick guards below are per-process. This is
+ * correct for the single-instance systemd deploy; a multi-node setup would need
+ * a shared limiter (Redis/Postgres) and a DB-derived account-wide live count.
  */
 
 const TICK_MS = 200;
-// Hard ceiling on parallel calls per job regardless of the job's setting.
-// Effective throughput is also bounded by the Plivo account CPS limit and the
-// DB pool (PGPOOL_MAX); above those, extra concurrency just queues. Raise via
-// env if you move to a bigger box / higher CPS.
-const MAX_CONCURRENCY = Number(process.env.WORKER_MAX_CONCURRENCY) || 200;
+// Hard ceiling on the per-job live cap regardless of the job's `concurrency`
+// setting. The real account-wide throttle is PLIVO_CPS (cps.ts).
+const MAX_LIVE = Number(process.env.PLIVO_MAX_LIVE) || 500;
+// A "live" row older than this is assumed to have lost its hangup callback and
+// no longer counts against the cap (prevents a stuck row from stalling dialing).
+const MAX_CALL_SEC = Number(process.env.PLIVO_MAX_CALL_SEC) || 180;
+// Cap how many rows we move into 'dialing' per tick so we never drain the whole
+// queue at once; the CPS bucket then paces the actual placeCalls.
+const CLAIM_BATCH = Number(process.env.WORKER_CLAIM_BATCH) || 50;
 
-const inFlight = new Map<string, number>();   // jobId -> calls currently in flight
 const pumping = new Set<string>();            // jobId -> a pumpJob claim is in progress
 const nextClaimAt = new Map<string, number>(); // jobId -> earliest next claim (delay pacing)
 const G = globalThis as unknown as { __ivrWorkerStarted?: boolean };
@@ -84,26 +101,37 @@ async function pumpJob(
   job: { id: string; campaignId: string; concurrency: number; delayMs: number },
   now: number,
 ): Promise<void> {
-  const cur = inFlight.get(job.id) ?? 0;
-  const cap = Math.min(Math.max(1, job.concurrency), MAX_CONCURRENCY);
-  const budget = cap - cur;
+  // `concurrency` is now the cap on simultaneously-LIVE calls for this job.
+  const cap = Math.min(Math.max(1, job.concurrency), MAX_LIVE);
 
-  // Optional pacing between claims (delayMs=0 → run at full concurrency).
+  // Optional inter-claim pacing on top of the CPS bucket (delayMs=0 → CPS only).
   if (job.delayMs && (nextClaimAt.get(job.id) ?? 0) > now) {
-    await maybeComplete(job.id, cur);
+    await maybeComplete(job.id);
     return;
   }
-  if (budget <= 0) return;
 
+  // Live-call ceiling: never place past `cap - live`. A slot frees when the
+  // hangup webhook finalizes a row (or it ages out of the live window).
+  let live: number;
+  try {
+    live = await countLive(job.id, MAX_CALL_SEC);
+  } catch (e) {
+    console.error(`[worker] live count failed for ${job.id}:`, e);
+    return;
+  }
+  const headroom = cap - live;
+  if (headroom <= 0) return; // at the live cap; wait for hangups to free slots
+
+  const want = Math.min(headroom, CLAIM_BATCH);
   let claimed;
   try {
-    claimed = await claimBulkRows(job.id, budget);
+    claimed = await claimBulkRows(job.id, want);
   } catch (e) {
     console.error(`[worker] claim failed for ${job.id}:`, e);
     return;
   }
   if (!claimed.length) {
-    await maybeComplete(job.id, cur);
+    await maybeComplete(job.id);
     return;
   }
 
@@ -116,26 +144,27 @@ async function pumpJob(
     return;
   }
 
-  inFlight.set(job.id, (inFlight.get(job.id) ?? 0) + claimed.length);
   if (job.delayMs) nextClaimAt.set(job.id, Date.now() + job.delayMs);
   const base = publicBaseUrl();
 
+  // Fire independently; placeCall() self-paces on the CPS bucket. No in-memory
+  // in-flight counter — the live ceiling is derived from the DB each tick.
   for (const row of claimed) {
-    void fireOne(job.id, row, campaign, base)
-      .catch((e) => console.error(`[worker] fireOne error ${job.id}#${row.index}:`, e))
-      .finally(() => {
-        const n = (inFlight.get(job.id) ?? 1) - 1;
-        if (n <= 0) inFlight.delete(job.id);
-        else inFlight.set(job.id, n);
-      });
+    void fireOne(job.id, row, campaign, base).catch((e) =>
+      console.error(`[worker] fireOne error ${job.id}#${row.index}:`, e),
+    );
   }
 }
 
-/** Mark a job completed once nothing is pending and nothing is in flight. */
-async function maybeComplete(jobId: string, cur: number): Promise<void> {
-  if (cur > 0) return;
+/**
+ * Mark a job completed once nothing is left to place: no 'pending' rows and no
+ * rows still 'dialing'. Calls that are merely 'live' (placed, awaiting hangup)
+ * do not block completion — the job is "done dialing", and the hangup webhooks
+ * keep finalizing those rows afterward.
+ */
+async function maybeComplete(jobId: string): Promise<void> {
   try {
-    if ((await countPending(jobId)) === 0) {
+    if ((await countPending(jobId)) === 0 && (await countDialing(jobId)) === 0) {
       await setJobStatus(jobId, "completed");
       nextClaimAt.delete(jobId);
     }

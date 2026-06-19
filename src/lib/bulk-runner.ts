@@ -47,6 +47,19 @@ export async function fireOne(
     fromNumber: campaign.fromNumber || undefined,
   });
 
+  // A 429 means we were rate-limited, NOT that the number is bad. With the CPS
+  // bucket gating placeCall this should be rare (only if PLIVO_CPS is set above
+  // the account's real limit). Re-queue the row as 'pending' so the pump retries
+  // it later, instead of burning it as a 'failed' outcome that pollutes the report.
+  if (!result.ok && result.status === 429) {
+    await updateBulkRow(jobId, row.index, {
+      status: "pending",
+      error: "rate-limited, requeued",
+      attemptedAt: triggeredAt,
+    });
+    return { ok: false };
+  }
+
   await recordCall({
     callUuid: internalId,
     campaignId: campaign.id,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download } from "lucide-react";
+import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download, Gauge, Server, Activity } from "lucide-react";
 import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, CsvFilePicker, Modal, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts, type Contact } from "@/lib/contacts";
@@ -57,6 +57,8 @@ export default function BulkTab() {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
   const [cpm, setCpm] = useState(0);
+  // Account-wide dialing telemetry (CPS limit, live-call cap, current live calls).
+  const [acct, setAcct] = useState<{ cps: number; maxLive: number; live: number } | null>(null);
   const sampleRef = useRef<{ t: number; dialed: number } | null>(null);
   // FEATURE 6 — post-campaign summary
   const [summary, setSummary] = useState<SummaryData | null>(null);
@@ -80,6 +82,9 @@ export default function BulkTab() {
         setJob(j);
         setStale(false);
         setUpdatedAt(Date.now());
+        // Keep account-wide CPS / live-concurrency fresh alongside job progress.
+        api<{ cps: number; maxLive: number; live: number }>("/api/plivo-stats")
+          .then((a) => alive && setAcct(a)).catch(() => {});
         // FEATURE 6 — surface the full summary once, on the running→completed edge.
         if (
           j.status === "completed" &&
@@ -115,6 +120,15 @@ export default function BulkTab() {
     const h = setInterval(tick, job?.status === "running" ? 1000 : 6000);
     return () => { alive = false; clearInterval(h); };
   }, [activeJobId, job?.status]);
+
+  // Load account-wide CPS / live-cap once on mount so the Start card can show the
+  // shared limits before any campaign is running.
+  useEffect(() => {
+    let alive = true;
+    api<{ cps: number; maxLive: number; live: number }>("/api/plivo-stats")
+      .then((a) => alive && setAcct((prev) => prev ?? a)).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Warn before leaving while a campaign is actively dialing (BUG 1). The backend
   // keeps dialing even if the tab closes, but the operator should confirm intent.
@@ -266,8 +280,12 @@ export default function BulkTab() {
     }
   }
 
-  // Rough: ~1.5s per batch to fire+settle, plus the configured batch delay (FEATURE 1).
-  const ratePerMin = Math.round((concurrency * 60000) / (1500 + batchDelay));
+  // Under the CPS model the dial rate is bounded by the account-wide CPS, not by
+  // the per-campaign live cap. Estimate placement time as total / CPS; long calls
+  // with a small live cap can extend it (the cap throttles turnover).
+  const acctCps = acct?.cps ?? 0;
+  const estSec = acctCps > 0 ? Math.ceil(previewCount / acctCps) : 0;
+  const estMin = Math.max(1, Math.ceil(estSec / 60));
 
   if (!campaigns.length) {
     return (
@@ -295,7 +313,7 @@ export default function BulkTab() {
             </Select>
           </div>
           <div>
-            <Label hint="parallel calls">Concurrency</Label>
+            <Label hint="max calls live at once">Max live calls</Label>
             <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
               {[25, 50, 75, 100, 125, 150, 175, 200].map((v) => <option key={v} value={v}>{v}</option>)}
             </Select>
@@ -315,10 +333,19 @@ export default function BulkTab() {
             </Button>
           </div>
         </div>
-        <p className="text-xs text-muted mt-3">
-          ~{ratePerMin.toLocaleString()} calls/min at concurrency {concurrency}
-          {previewCount > 0 && ` · ~${Math.max(1, Math.ceil(previewCount / ratePerMin))} min for ${previewCount.toLocaleString()} numbers`}.
-          Backend caps parallelism for box safety.
+        <p className="text-xs text-muted mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="inline-flex items-center gap-1">
+            <Server size={12} className="text-muted" />
+            Account CPS limit <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span> (shared by all campaigns)
+          </span>
+          <span className="text-line">·</span>
+          <span>This campaign dials up to <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span>, max <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> live at once</span>
+          {previewCount > 0 && acctCps > 0 && (
+            <>
+              <span className="text-line">·</span>
+              <span>~<span className="text-ink2 font-medium tabular-nums">{estMin}</span> min for {previewCount.toLocaleString()} numbers</span>
+            </>
+          )}
         </p>
 
         {/* FEATURE 5 — test one number with this campaign before launching. */}
@@ -400,6 +427,21 @@ export default function BulkTab() {
           }
         >
           <LiveDashboard counts={counts} cpm={cpm} running={running} />
+
+          <RatePanel
+            acct={acct}
+            campaignCps={running ? cpm / 60 : 0}
+            campaignLive={counts.dialing + counts.ok}
+            cap={job.concurrency}
+            campaignSec={
+              job.startedAt
+                ? Math.max(0, Math.floor(
+                    ((job.completedAt ? Date.parse(job.completedAt) : Date.now()) - Date.parse(job.startedAt)) / 1000,
+                  ))
+                : 0
+            }
+            running={running}
+          />
 
           {/* Granular breakdown — complements the live rollup above (Connected /
               Failed / No Answer) without repeating those labels. "Connected" and
@@ -510,8 +552,8 @@ export default function BulkTab() {
           <div className="text-sm text-ink2 space-y-2">
             <p>
               You&apos;ve uploaded <span className="font-semibold text-ink">{previewCount.toLocaleString()}</span> contacts.
-              At concurrency {concurrency}, this will take approximately{" "}
-              <span className="font-semibold text-ink">{Math.max(1, Math.ceil(previewCount / ratePerMin))} min</span>.
+              At the account CPS limit{acctCps ? ` of ${acctCps}/s` : ""}, this will take approximately{" "}
+              <span className="font-semibold text-ink">{estMin} min</span>.
             </p>
             <p className="text-muted">
               Tip: split into batches of {SPLIT_SIZE.toLocaleString()} for better reliability.
@@ -661,6 +703,89 @@ function DashRow({ icon, label, value, pct, tone }: { icon: ReactNode; label: st
       </span>
     </div>
   );
+}
+
+// Campaign- and account-level dialing meters: CPS (with progress vs the account
+// limit), live concurrency (vs the per-campaign cap and the account ceiling),
+// and how long the campaign has been running / took.
+function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running }: {
+  acct: { cps: number; maxLive: number; live: number } | null;
+  campaignCps: number;
+  campaignLive: number;
+  cap: number;
+  campaignSec: number;
+  running: boolean;
+}) {
+  const accCps = acct?.cps ?? 0;
+  const accLive = acct?.live ?? 0;
+  const maxLive = acct?.maxLive ?? 0;
+  const cpsPct = accCps > 0 ? (campaignCps / accCps) * 100 : 0;
+  const livePct = cap > 0 ? (campaignLive / cap) * 100 : 0;
+  const accLivePct = maxLive > 0 ? (accLive / maxLive) * 100 : 0;
+
+  return (
+    <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {/* This campaign */}
+      <div className="rounded-xl border border-line bg-bg/50 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="flex items-center gap-1.5 text-sm text-ink2">
+            <Activity size={13} className="text-ok" /> This campaign
+          </span>
+          <span className="inline-flex items-center gap-1 text-xs text-muted">
+            <Clock size={11} /> {running ? "elapsed" : "duration"}{" "}
+            <span className="font-mono tabular-nums text-ink2">{fmtClockShort(campaignSec)}</span>
+          </span>
+        </div>
+        <Meter label="CPS (calls / sec)" value={`${campaignCps.toFixed(1)}/s`} sub={accCps ? `of ${accCps}/s limit` : ""} pct={cpsPct} tone="bg-ok" />
+        <div className="h-2.5" />
+        <Meter label="Live calls" value={campaignLive.toLocaleString()} sub={`of ${cap} cap`} pct={livePct} tone="bg-brand" />
+      </div>
+
+      {/* Plivo account */}
+      <div className="rounded-xl border border-line bg-bg/50 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="flex items-center gap-1.5 text-sm text-ink2">
+            <Server size={13} className="text-muted" /> Plivo account
+          </span>
+          <span className="inline-flex items-center gap-1 text-xs text-muted">
+            <Gauge size={11} /> shared limits
+          </span>
+        </div>
+        <Meter label="CPS limit" value={`${accCps || "—"}/s`} sub="all campaigns combined" pct={100} tone="bg-line" muted />
+        <div className="h-2.5" />
+        <Meter label="Live concurrency" value={accLive.toLocaleString()} sub={maxLive ? `of ${maxLive} max` : ""} pct={accLivePct} tone="bg-warn" />
+      </div>
+    </div>
+  );
+}
+
+function Meter({ label, value, sub, pct, tone, muted }: {
+  label: string; value: string; sub?: string; pct: number; tone: string; muted?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-xs text-muted">{label}</span>
+        <span className="font-mono tabular-nums text-sm">
+          <span className={muted ? "text-ink2" : "text-ink"}>{value}</span>
+          {sub && <span className="text-muted text-xs ml-1.5">{sub}</span>}
+        </span>
+      </div>
+      <div className="w-full h-2 bg-line rounded-full overflow-hidden">
+        <div className={`h-full ${tone} transition-all duration-500`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// "12:05" (m:ss) or "1:03:20" (h:m:ss) for the running/elapsed campaign clock.
+function fmtClockShort(sec: number): string {
+  if (sec <= 0) return "0:00";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 // ---- Post-campaign summary modal (FEATURE 6) --------------------------------

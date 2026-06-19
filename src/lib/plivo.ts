@@ -1,4 +1,5 @@
 import { hmacBase64, constantTimeEqual } from "./hmac";
+import { takeCpsToken } from "./cps";
 
 const AUTH_ID = () => process.env.PLIVO_AUTH_ID || "";
 const AUTH_TOKEN = () => process.env.PLIVO_AUTH_TOKEN || "";
@@ -55,6 +56,11 @@ export async function placeCall(opts: PlaceCallOptions) {
     hangup_method: "POST",
     caller_name: opts.callerName,
   };
+
+  // Account-wide CPS gate: block until a token is free so the combined
+  // initiation rate across all jobs + ad-hoc calls never exceeds PLIVO_CPS.
+  // With this in place 429s should be rare; the loop below still handles any.
+  await takeCpsToken();
 
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
