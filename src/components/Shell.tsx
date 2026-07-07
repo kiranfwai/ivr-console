@@ -8,6 +8,7 @@ import {
   Music,
   BarChart3,
   MessageCircle,
+  Wallet,
   LogOut,
   Menu,
   X,
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 import { IconButton } from "./ui";
 
-export type TabId = "dial" | "bulk" | "campaigns" | "audios" | "reports" | "whatsapp";
+export type TabId = "dial" | "bulk" | "campaigns" | "audios" | "reports" | "whatsapp" | "billing";
 
 const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   { id: "dial",       label: "Dial",       icon: <Phone size={16} />,        group: "Call" },
@@ -24,6 +25,7 @@ const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   { id: "audios",     label: "Audios",     icon: <Music size={16} />,        group: "Manage" },
   { id: "reports",    label: "Reports",    icon: <BarChart3 size={16} />,    group: "Insights" },
   { id: "whatsapp",   label: "WhatsApp",   icon: <MessageCircle size={16} />, group: "Insights" },
+  { id: "billing",    label: "Billing",    icon: <Wallet size={16} />,       group: "Billing" },
 ];
 
 export function Shell({

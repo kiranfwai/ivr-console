@@ -7,6 +7,7 @@ import CampaignsTab from "@/components/CampaignsTab";
 import AudiosTab from "@/components/AudiosTab";
 import ReportsTab from "@/components/ReportsTab";
 import WhatsAppTab from "@/components/WhatsAppTab";
+import BillingTab from "@/components/BillingTab";
 import { Toaster } from "@/components/ui";
 import { Shell, TabId } from "@/components/Shell";
 
@@ -17,6 +18,7 @@ const META: Record<TabId, { title: string; desc: string }> = {
   audios:    { title: "Audio library",   desc: "Upload or link MP3s used by campaigns" },
   reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
   whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
+  billing:   { title: "Billing",         desc: "Credits, transactions, wallet and phone numbers" },
 };
 
 const TAB_IDS = Object.keys(META) as TabId[];
@@ -73,6 +75,7 @@ export default function Page() {
         {tab === "audios" && <AudiosTab />}
         {tab === "reports" && <ReportsTab />}
         {tab === "whatsapp" && <WhatsAppTab />}
+        {tab === "billing" && <BillingTab />}
       </Shell>
       <Toaster />
     </>
