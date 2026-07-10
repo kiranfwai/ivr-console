@@ -20,6 +20,7 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,7 +41,7 @@ function LoginForm() {
       const r = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ email, password }),
       });
       if (r.ok) {
         router.replace(from);
@@ -73,17 +74,29 @@ function LoginForm() {
           className="bg-panel border border-line rounded-2xl p-6 shadow-card space-y-4"
         >
           <div>
-            <Label required>Admin password</Label>
+            <Label required>Email</Label>
+            <Input
+              type="email"
+              autoFocus
+              autoComplete="username"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              aria-label="Email"
+            />
+          </div>
+          <div>
+            <Label required>Password</Label>
             <Input
               type="password"
-              autoFocus
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyUp={detectCaps}
               onKeyDown={detectCaps}
               placeholder="Enter password"
               error={err || undefined}
-              aria-label="Admin password"
+              aria-label="Password"
             />
             {capsLock && !err && (
               <div className="mt-1 text-xs text-warn flex items-center gap-1">
@@ -94,7 +107,7 @@ function LoginForm() {
           </div>
           <Button
             type="submit"
-            disabled={!password}
+            disabled={!email || !password}
             loading={busy}
             leftIcon={!busy && <LogIn size={14} />}
             className="w-full"

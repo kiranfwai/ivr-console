@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { constantTimeEqual } from "@/lib/hmac";
 import { findCampaignByNameOrId } from "@/lib/campaigns";
 import { placeCampaignCall } from "@/lib/place-campaign-call";
+import { runWithTenant } from "@/lib/tenant";
+import { getClient } from "@/lib/clients";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +42,13 @@ export async function POST(req: NextRequest) {
   const campaignRef = typeof body.campaign === "string" ? body.campaign.trim() : "";
   if (!campaignRef) return fail("campaign is required", 400);
 
+  // Campaigns are now per-client, so an external trigger must say which client
+  // it's firing for. `client` is the client id shown in the admin panel.
+  const clientId = typeof body.client === "string" ? body.client.trim() : "";
+  if (!clientId) return fail("client is required", 400);
+  const client = await getClient(clientId);
+  if (!client) return fail("client not found", 400);
+
   const contact = body.contact && typeof body.contact === "object" ? body.contact : null;
   if (!contact) return fail("contact is required", 400);
 
@@ -51,31 +60,34 @@ export async function POST(req: NextRequest) {
   if (!E164.test(phone)) return fail("contact.phone must be valid E.164, e.g. +919876543210", 400);
   if (!EMAIL.test(email)) return fail("contact.email must be a valid email address", 400);
 
-  // --- Campaign must exist in the dashboard (matched by id or name). ---
-  const campaign = await findCampaignByNameOrId(campaignRef);
-  if (!campaign) return fail("campaign not found", 400);
+  // Everything below reads/writes the client's own data partition.
+  return runWithTenant(clientId, async () => {
+    // --- Campaign must exist in this client's dashboard (matched by id or name). ---
+    const campaign = await findCampaignByNameOrId(campaignRef);
+    if (!campaign) return fail("campaign not found", 400);
 
-  // --- Trigger via the SAME path as the dashboard test call. ---
-  const result = await placeCampaignCall({
-    campaign,
-    phone,
-    callerName: name,
-    email,
-    req,
-  });
+    // --- Trigger via the SAME path as the dashboard test call. ---
+    const result = await placeCampaignCall({
+      campaign,
+      phone,
+      callerName: name,
+      email,
+      req,
+    });
 
-  if (!result.ok) {
-    // Plivo rejected / failed to queue the call — surface it as an upstream error.
-    return fail(`telephony provider error (status ${result.status})`, 502, {
+    if (!result.ok) {
+      // Plivo rejected / failed to queue the call — surface it as an upstream error.
+      return fail(`telephony provider error (status ${result.status})`, 502, {
+        campaign: campaign.name,
+        contact: name,
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      callId: result.callUuid,
       campaign: campaign.name,
       contact: name,
     });
-  }
-
-  return NextResponse.json({
-    success: true,
-    callId: result.callUuid,
-    campaign: campaign.name,
-    contact: name,
   });
 }

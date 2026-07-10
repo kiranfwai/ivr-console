@@ -152,6 +152,85 @@ async function bootstrap(): Promise<void> {
     CREATE INDEX IF NOT EXISTS bulk_row_calluuid ON bulk_row (call_uuid) WHERE call_uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS bulk_job_running  ON bulk_job (status) WHERE status='running';
     CREATE INDEX IF NOT EXISTS bulk_job_created  ON bulk_job (created_at DESC);
+
+    -- Multi-tenant: bulk jobs belong to a client so the worker can re-establish
+    -- that client's data scope while dialing, and each client only sees its own
+    -- jobs. NULL = a legacy job created before tenancy (admin-owned).
+    ALTER TABLE bulk_job ADD COLUMN IF NOT EXISTS client_id text;
+    CREATE INDEX IF NOT EXISTS bulk_job_client ON bulk_job (client_id);
+
+    -- Client logins. The admin is env-based (ADMIN_EMAIL / ADMIN_PASSWORD); every
+    -- other login is a row here. perms is the JSON array of feature-tab ids the
+    -- admin has granted this client (e.g. dial, bulk, reports).
+    CREATE TABLE IF NOT EXISTS app_client (
+      id          text PRIMARY KEY,
+      name        text NOT NULL,
+      email       text UNIQUE NOT NULL,
+      pass_hash   text NOT NULL,
+      pass_salt   text NOT NULL,
+      perms       jsonb NOT NULL DEFAULT '[]'::jsonb,
+      active      boolean NOT NULL DEFAULT true,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    );
+
+    -- Per-client call-cost overrides (NULL = fall back to the global default in
+    -- app_config). perCall is charged per placed call; perMin per connected
+    -- minute. The admin defines these; the client never sets them.
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS per_call_cost double precision;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS per_min_cost  double precision;
+
+    -- Per-client override for the flat per-CONNECTED-CALL charge (the live wallet
+    -- billing model). NULL = inherit the global default in app_config('pricing').
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS per_conn_call_cost double precision;
+
+    -- Global admin settings (key/value). Holds the default call-cost pricing at
+    -- key 'pricing' and Cashfree config at key 'cashfree'. Admin-scoped only;
+    -- never tenant-partitioned.
+    CREATE TABLE IF NOT EXISTS app_config (
+      k  text PRIMARY KEY,
+      v  jsonb NOT NULL
+    );
+
+    -- Per-client prepaid wallet balance in ₹. One row per client, created lazily
+    -- on first credit/charge. This is real money the client has topped up (via
+    -- Cashfree) minus what their connected calls have consumed. Keyed by client
+    -- id; NOT tenant-partitioned (it's the mapping the admin manages).
+    CREATE TABLE IF NOT EXISTS client_wallet (
+      client_id   text PRIMARY KEY,
+      balance     double precision NOT NULL DEFAULT 0,
+      updated_at  timestamptz NOT NULL DEFAULT now()
+    );
+
+    -- Wallet ledger: every credit/charge/adjustment/refund, newest-last by id.
+    -- ref makes writes idempotent — a charge's ref is the call id (never bill a
+    -- call twice on webhook retries), a topup's ref is the Cashfree order id.
+    CREATE TABLE IF NOT EXISTS wallet_txn (
+      id            bigserial PRIMARY KEY,
+      client_id     text NOT NULL,
+      type          text NOT NULL,            -- topup | charge | adjustment | refund
+      amount        double precision NOT NULL, -- signed ₹: +credit, -charge
+      balance_after double precision NOT NULL,
+      description   text NOT NULL DEFAULT '',
+      ref           text,
+      created_at    timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS wallet_txn_ref
+      ON wallet_txn (client_id, type, ref) WHERE ref IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS wallet_txn_client
+      ON wallet_txn (client_id, created_at DESC);
+
+    -- Pending/paid Cashfree top-up orders. Maps an order back to the client +
+    -- amount so the webhook (which only carries the order id) can credit the
+    -- right wallet. status: created | paid | failed.
+    CREATE TABLE IF NOT EXISTS wallet_order (
+      order_id    text PRIMARY KEY,
+      client_id   text NOT NULL,
+      amount      double precision NOT NULL,
+      status      text NOT NULL DEFAULT 'created',
+      created_at  timestamptz NOT NULL DEFAULT now(),
+      paid_at     timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS wallet_order_client ON wallet_order (client_id, created_at DESC);
   `;
   await pool().query(sql);
 }

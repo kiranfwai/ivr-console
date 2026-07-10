@@ -11,6 +11,7 @@ import {
 import { getCampaign } from "./campaigns";
 import { publicBaseUrl } from "./plivo";
 import { fireOne } from "./bulk-runner";
+import { runWithTenant } from "./tenant";
 
 /**
  * In-process bulk-call worker — CPS-paced, live-capped dial pump.
@@ -72,7 +73,8 @@ export async function startWorker(): Promise<void> {
 
 async function recover(): Promise<void> {
   for (const job of await listRunningJobs()) {
-    await resetDialingRows(job.id);
+    // Row ops are tenant-scoped — run inside the job's client so its rows match.
+    await runWithTenant(job.clientId ?? "", () => resetDialingRows(job.id));
   }
 }
 
@@ -93,12 +95,17 @@ async function tick(): Promise<void> {
     // and blowing past the concurrency cap.
     if (pumping.has(job.id)) continue;
     pumping.add(job.id);
-    void pumpJob(job, now).finally(() => pumping.delete(job.id));
+    // The entire pump for this job runs inside its client's tenant scope, so
+    // every campaign read, live count, row claim, call record and stats write
+    // lands in (and reads from) that client's partition.
+    void runWithTenant(job.clientId ?? "", () => pumpJob(job, now)).finally(() =>
+      pumping.delete(job.id),
+    );
   }
 }
 
 async function pumpJob(
-  job: { id: string; campaignId: string; concurrency: number; delayMs: number },
+  job: { id: string; clientId?: string; campaignId: string; concurrency: number; delayMs: number },
   now: number,
 ): Promise<void> {
   // `concurrency` is now the cap on simultaneously-LIVE calls for this job.

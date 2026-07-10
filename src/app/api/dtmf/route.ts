@@ -4,6 +4,7 @@ import { getCall, patchCall } from "@/lib/calls";
 import { recordPress1 } from "@/lib/stats";
 import { digitsOnly } from "@/lib/phone";
 import { redis } from "@/lib/redis";
+import { runWithTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,8 +23,9 @@ async function resolveInternalId(req: string, callUuid: string): Promise<string 
 }
 
 async function handle(req: NextRequest) {
+  const client = new URL(req.url).searchParams.get("client") || "";
   try {
-    return await handleInner(req);
+    return await runWithTenant(client, () => handleInner(req));
   } catch (e) {
     console.error("[dtmf] error:", e);
     return xml(`<?xml version="1.0" encoding="UTF-8"?>

@@ -5,13 +5,17 @@ import { updateBulkRowByCallUuid } from "@/lib/bulk";
 import { deriveOutcome } from "@/lib/outcome";
 import { recordFinalized } from "@/lib/stats";
 import { redis } from "@/lib/redis";
+import { runWithTenant, currentClientId } from "@/lib/tenant";
+import { getConnectedCallRate } from "@/lib/pricing";
+import { charge } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 async function handle(req: NextRequest) {
+  const client = new URL(req.url).searchParams.get("client") || "";
   try {
-    return await handleInner(req);
+    return await runWithTenant(client, () => handleInner(req));
   } catch (e) {
     console.error("[hangup] error:", e);
     // Always 200 — Plivo retries on errors, and we'd rather lose one duration log than thrash.
@@ -54,7 +58,28 @@ async function handleInner(req: NextRequest) {
     const dur = Number(duration) || 0;
     const cause = hangupCause || callStatus;
     // Finalize the report counters once, on the first hangup only.
-    if (cur && !cur.hangupAt) await recordFinalized(cur, cause, dur);
+    if (cur && !cur.hangupAt) {
+      await recordFinalized(cur, cause, dur);
+      // Bill the client's wallet once per CONNECTED call (answered → outcome
+      // "connected" or "press1"). Idempotent on the call id (ref) so Plivo
+      // hangup retries never double-charge. Non-fatal: a billing hiccup must
+      // never break call finalization, so we swallow + log.
+      const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
+      const clientId = currentClientId();
+      if (clientId && (outcome === "connected" || outcome === "press1")) {
+        try {
+          const rate = await getConnectedCallRate(clientId);
+          if (rate > 0) {
+            await charge(clientId, rate, {
+              ref: internalId,
+              description: `Connected call${cur.to ? ` · ${cur.to}` : ""}`,
+            });
+          }
+        } catch (e) {
+          console.error("[hangup] wallet charge failed:", e);
+        }
+      }
+    }
     await patchCall(internalId, {
       status: keepPress1 ? "press1" : "hangup",
       hangupAt: new Date().toISOString(),

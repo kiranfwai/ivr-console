@@ -1,5 +1,6 @@
 import { newId } from "./redis";
 import { query, withTx } from "./db";
+import { currentClientId } from "./tenant";
 import { RETRY_STATUSES } from "./outcome";
 import type {
   BulkJob,
@@ -24,8 +25,31 @@ import type {
 
 // --- row mappers -------------------------------------------------------------
 
+/**
+ * Tenant scoping. Every UI/API path runs inside a client's request context
+ * (currentClientId() set); the worker runs each job inside runWithTenant(job's
+ * client). These helpers add the ownership filter ONLY when a client is in
+ * scope — leaving admin-level / worker-tick / migration paths (no client)
+ * unfiltered. `jobTenant` filters the bulk_job table directly; `rowTenant`
+ * guards bulk_row via its parent job (bulk_row has no client_id of its own).
+ * Both assume the job id is bound to `$1` in the surrounding query.
+ */
+function jobTenant(params: any[]): string {
+  const cid = currentClientId();
+  if (!cid) return "";
+  params.push(cid);
+  return ` AND client_id=$${params.length}`;
+}
+function rowTenant(params: any[]): string {
+  const cid = currentClientId();
+  if (!cid) return "";
+  params.push(cid);
+  return ` AND EXISTS (SELECT 1 FROM bulk_job j WHERE j.id=$1 AND j.client_id=$${params.length})`;
+}
+
 type JobDbRow = {
   id: string;
+  client_id: string | null;
   kind: string;
   campaign_id: string | null;
   webhook_url: string | null;
@@ -42,6 +66,7 @@ type JobDbRow = {
 function mapJob(r: JobDbRow): BulkJob {
   return {
     id: r.id,
+    clientId: r.client_id ?? undefined,
     kind: (r.kind as BulkKind) ?? "call",
     campaignId: r.campaign_id ?? "",
     webhookUrl: r.webhook_url ?? undefined,
@@ -56,7 +81,7 @@ function mapJob(r: JobDbRow): BulkJob {
   };
 }
 
-const JOB_COLS = `id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct,
+const JOB_COLS = `id, client_id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct,
   status, total, created_at, started_at, completed_at`;
 
 function mapRow(r: any): BulkRow {
@@ -117,13 +142,15 @@ export async function createBulkJob(input: {
   //      in the window before rows exist (countPending would momentarily be 0);
   //    - a crash mid-insert leaves a paused, never-auto-dialed job, not a partial
   //      surprise campaign.
+  const clientId = currentClientId();
   const created = await withTx(async (c) => {
     const { rows } = await c.query(
-      `INSERT INTO bulk_job (id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct, status, total, started_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'paused',$8, now())
+      `INSERT INTO bulk_job (id, client_id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct, status, total, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'paused',$9, now())
        RETURNING ${JOB_COLS}`,
       [
         id,
+        clientId,
         kind,
         input.campaignId ?? null,
         input.webhookUrl || null,
@@ -150,14 +177,18 @@ export async function createBulkJob(input: {
 // --- read --------------------------------------------------------------------
 
 export async function getBulkJob(id: string): Promise<BulkJob | null> {
-  const { rows } = await query<JobDbRow>(`SELECT ${JOB_COLS} FROM bulk_job WHERE id=$1`, [id]);
+  const params: any[] = [id];
+  const t = jobTenant(params);
+  const { rows } = await query<JobDbRow>(`SELECT ${JOB_COLS} FROM bulk_job WHERE id=$1${t}`, params);
   return rows.length ? mapJob(rows[0]) : null;
 }
 
 export async function tallyJob(jobId: string): Promise<BulkJobCounts> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query<{ status: string; n: number }>(
-    `SELECT status, count(*)::int AS n FROM bulk_row WHERE job_id=$1 GROUP BY status`,
-    [jobId],
+    `SELECT status, count(*)::int AS n FROM bulk_row WHERE job_id=$1${t} GROUP BY status`,
+    params,
   );
   const out: BulkJobCounts = {};
   for (const r of rows) out[r.status as BulkRowStatus] = r.n;
@@ -171,9 +202,17 @@ export async function getJobWithCounts(id: string): Promise<BulkJobWithCounts | 
 }
 
 export async function listBulkJobs(limit = 20): Promise<BulkJobWithCounts[]> {
+  const params: any[] = [];
+  const cid = currentClientId();
+  let where = "";
+  if (cid) {
+    params.push(cid);
+    where = ` WHERE client_id=$${params.length}`;
+  }
+  params.push(limit);
   const { rows } = await query<JobDbRow>(
-    `SELECT ${JOB_COLS} FROM bulk_job ORDER BY created_at DESC LIMIT $1`,
-    [limit],
+    `SELECT ${JOB_COLS} FROM bulk_job${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+    params,
   );
   if (!rows.length) return [];
   const jobs = rows.map(mapJob);
@@ -207,6 +246,7 @@ export async function getRows(jobId: string, opts: GetRowsOpts = {}): Promise<Bu
     params.push(statuses);
     where += ` AND status = ANY($${params.length})`;
   }
+  where += rowTenant(params);
   const order = opts.order === "recent" ? `attempted_at DESC NULLS LAST, idx DESC` : `idx ASC`;
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 500);
   params.push(limit);
@@ -223,9 +263,11 @@ export async function getRows(jobId: string, opts: GetRowsOpts = {}): Promise<Bu
 export async function firstPendingRow(
   jobId: string,
 ): Promise<{ index: number; phone: string; name?: string; email?: string } | null> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query(
-    `SELECT idx, phone, name, email FROM bulk_row WHERE job_id=$1 AND status='pending' ORDER BY idx LIMIT 1`,
-    [jobId],
+    `SELECT idx, phone, name, email FROM bulk_row WHERE job_id=$1 AND status='pending'${t} ORDER BY idx LIMIT 1`,
+    params,
   );
   if (!rows.length) return null;
   const r = rows[0];
@@ -234,26 +276,32 @@ export async function firstPendingRow(
 
 /** All rows eligible for retry (no-answer / busy / error / failed), for cloning. */
 export async function getRetryableRows(jobId: string): Promise<{ phone: string; name?: string }[]> {
+  const params: any[] = [jobId, [...RETRY_STATUSES]];
+  const t = rowTenant(params);
   const { rows } = await query(
-    `SELECT phone, name FROM bulk_row WHERE job_id=$1 AND status = ANY($2) ORDER BY idx`,
-    [jobId, [...RETRY_STATUSES]],
+    `SELECT phone, name FROM bulk_row WHERE job_id=$1 AND status = ANY($2)${t} ORDER BY idx`,
+    params,
   );
   return rows.map((r: any) => ({ phone: r.phone, name: r.name ?? undefined }));
 }
 
 export async function countPending(jobId: string): Promise<number> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM bulk_row WHERE job_id=$1 AND status='pending'`,
-    [jobId],
+    `SELECT count(*)::int AS n FROM bulk_row WHERE job_id=$1 AND status='pending'${t}`,
+    params,
   );
   return rows[0]?.n ?? 0;
 }
 
 /** Rows still being placed (claimed but placeCall not yet returned). */
 export async function countDialing(jobId: string): Promise<number> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM bulk_row WHERE job_id=$1 AND status='dialing'`,
-    [jobId],
+    `SELECT count(*)::int AS n FROM bulk_row WHERE job_id=$1 AND status='dialing'${t}`,
+    params,
   );
   return rows[0]?.n ?? 0;
 }
@@ -265,32 +313,38 @@ export async function countDialing(jobId: string): Promise<number> {
  * stuck "live" forever and stall the live-cap pump (self-healing headroom).
  */
 export async function countLive(jobId: string, maxAgeSec: number): Promise<number> {
+  const params: any[] = [jobId, maxAgeSec];
+  const t = rowTenant(params);
   const { rows } = await query<{ n: number }>(
     `SELECT count(*)::int AS n FROM bulk_row
        WHERE job_id=$1 AND status IN ('dialing','ok')
-         AND attempted_at > now() - make_interval(secs => $2::int)`,
-    [jobId, maxAgeSec],
+         AND attempted_at > now() - make_interval(secs => $2::int)${t}`,
+    params,
   );
   return rows[0]?.n ?? 0;
 }
 
 /** Sum + count of answered-call durations for a job (for the completion summary). */
 export async function jobDurationStats(jobId: string): Promise<{ sum: number; count: number }> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query<{ sum: number; count: number }>(
     `SELECT COALESCE(SUM(duration_sec),0)::int AS sum,
             COUNT(*) FILTER (WHERE duration_sec > 0)::int AS count
-       FROM bulk_row WHERE job_id=$1`,
-    [jobId],
+       FROM bulk_row WHERE job_id=$1${t}`,
+    params,
   );
   return { sum: rows[0]?.sum ?? 0, count: rows[0]?.count ?? 0 };
 }
 
 /** Stream-friendly: every row of a job (for the full-report CSV export). */
 export async function getAllRows(jobId: string): Promise<BulkRow[]> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rows } = await query(
     `SELECT idx, phone, name, email, status, call_uuid, error, hangup_cause, duration_sec, attempted_at
-       FROM bulk_row WHERE job_id=$1 ORDER BY idx`,
-    [jobId],
+       FROM bulk_row WHERE job_id=$1${t} ORDER BY idx`,
+    params,
   );
   return rows.map(mapRow);
 }
@@ -306,17 +360,19 @@ export async function claimBulkRows(
   n: number,
 ): Promise<Array<{ index: number; phone: string; name?: string; email?: string }>> {
   const want = Math.max(1, Math.min(n, 500));
+  const params: any[] = [jobId, want];
+  const t = rowTenant(params);
   const { rows } = await query(
     `WITH c AS (
        SELECT idx FROM bulk_row
-       WHERE job_id=$1 AND status='pending'
+       WHERE job_id=$1 AND status='pending'${t}
        ORDER BY idx LIMIT $2
        FOR UPDATE SKIP LOCKED
      )
      UPDATE bulk_row b SET status='dialing', attempted_at=now()
      FROM c WHERE b.job_id=$1 AND b.idx=c.idx
      RETURNING b.idx, b.phone, b.name, b.email`,
-    [jobId, want],
+    params,
   );
   return rows.map((r: any) => ({
     index: r.idx,
@@ -357,9 +413,12 @@ export async function updateBulkRow(
   // Patch params occupy $2..$(n+1) (after jobId=$1); the idx filter is $(n+2).
   const { sets, params } = buildPatch(patch, 1);
   if (!sets.length) return;
+  const all: any[] = [jobId, ...params, index];
+  const idxPh = all.length; // idx filter placeholder ($n+2)
+  const t = rowTenant(all); // references $1 (jobId); appends cid if in scope
   await query(
-    `UPDATE bulk_row SET ${sets.join(", ")} WHERE job_id=$1 AND idx=$${params.length + 2}`,
-    [jobId, ...params, index],
+    `UPDATE bulk_row SET ${sets.join(", ")} WHERE job_id=$1 AND idx=$${idxPh}${t}`,
+    all,
   );
 }
 
@@ -379,9 +438,11 @@ export async function updateBulkRowByCallUuid(
 
 /** Reset rows stuck in "dialing" (crash/restart recovery) back to pending. */
 export async function resetDialingRows(jobId: string): Promise<number> {
+  const params: any[] = [jobId];
+  const t = rowTenant(params);
   const { rowCount } = await query(
-    `UPDATE bulk_row SET status='pending' WHERE job_id=$1 AND status='dialing'`,
-    [jobId],
+    `UPDATE bulk_row SET status='pending' WHERE job_id=$1 AND status='dialing'${t}`,
+    params,
   );
   return rowCount ?? 0;
 }
@@ -391,14 +452,21 @@ export async function resetDialingRows(jobId: string): Promise<number> {
 export async function setJobStatus(jobId: string, status: BulkJobStatus): Promise<BulkJob | null> {
   const completedAt = status === "completed" ? "now()" : "completed_at";
   const startedAt = status === "running" ? "COALESCE(started_at, now())" : "started_at";
+  const params: any[] = [jobId, status];
+  const t = jobTenant(params);
   const { rows } = await query<JobDbRow>(
     `UPDATE bulk_job SET status=$2, completed_at=${completedAt}, started_at=${startedAt}
-     WHERE id=$1 RETURNING ${JOB_COLS}`,
-    [jobId, status],
+     WHERE id=$1${t} RETURNING ${JOB_COLS}`,
+    params,
   );
   return rows.length ? mapJob(rows[0]) : null;
 }
 
+/**
+ * ALL running jobs across every client — the worker tick runs with NO tenant in
+ * scope and needs to see them all; it then re-establishes each job's client
+ * (job.clientId) before dialing. Intentionally not tenant-filtered.
+ */
 export async function listRunningJobs(): Promise<BulkJob[]> {
   const { rows } = await query<JobDbRow>(
     `SELECT ${JOB_COLS} FROM bulk_job WHERE status='running' ORDER BY created_at`,
@@ -408,8 +476,14 @@ export async function listRunningJobs(): Promise<BulkJob[]> {
 
 export async function deleteBulkJob(id: string): Promise<void> {
   await withTx(async (c) => {
-    await c.query(`DELETE FROM bulk_row WHERE job_id=$1`, [id]);
-    await c.query(`DELETE FROM bulk_job WHERE id=$1`, [id]);
+    // Delete the job first, guarded by tenant, so a wrong-client id can't wipe
+    // another client's rows. Only remove the rows once the job actually deleted.
+    const params: any[] = [id];
+    const t = jobTenant(params);
+    const del = await c.query(`DELETE FROM bulk_job WHERE id=$1${t} RETURNING id`, params);
+    if (del.rows.length) {
+      await c.query(`DELETE FROM bulk_row WHERE job_id=$1`, [id]);
+    }
   });
 }
 

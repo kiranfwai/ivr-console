@@ -5,6 +5,7 @@ import { plivoGuard, publicBaseUrl, parseFormBody } from "@/lib/plivo";
 import { patchCall, getCall } from "@/lib/calls";
 import { recordAnswered } from "@/lib/stats";
 import { redis } from "@/lib/redis";
+import { runWithTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,8 +23,11 @@ function esc(s: string): string {
 }
 
 async function handle(req: NextRequest, { params }: { params: { id: string } }) {
+  // No session on a Plivo callback — the owning client rides on ?client (put
+  // there when the call was placed) so all data reads/writes stay tenant-scoped.
+  const client = new URL(req.url).searchParams.get("client") || "";
   try {
-    return await handleInner(req, params.id);
+    return await runWithTenant(client, () => handleInner(req, params.id));
   } catch (e) {
     console.error("[answer] error:", e);
     // Always give Plivo valid XML so the caller hears something coherent.
@@ -83,7 +87,9 @@ async function handleInner(req: NextRequest, id: string) {
     }
   }
 
-  const dtmfAction = `${base}/api/dtmf?req=${encodeURIComponent(req_)}`;
+  const client = url.searchParams.get("client") || "";
+  const clientQ = client ? `&client=${encodeURIComponent(client)}` : "";
+  const dtmfAction = `${base}/api/dtmf?req=${encodeURIComponent(req_)}${clientQ}`;
 
   return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>

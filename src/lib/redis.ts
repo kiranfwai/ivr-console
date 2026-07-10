@@ -1,4 +1,5 @@
 import { query, withTx } from "./db";
+import { scopeKey } from "./tenant";
 import type { PoolClient } from "pg";
 
 /**
@@ -62,22 +63,23 @@ async function _zrange(
 function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; rowCount?: number }>) {
   return {
     async get<T = any>(key: string): Promise<T | null> {
-      const { rows } = await q(`SELECT v FROM kv WHERE k=$1 AND ${NOT_EXPIRED}`, [key]);
+      const { rows } = await q(`SELECT v FROM kv WHERE k=$1 AND ${NOT_EXPIRED}`, [scopeKey(key)]);
       return rows.length ? (rows[0].v as T) : null;
     },
 
     async set(key: string, value: any, opts?: { ex?: number }): Promise<"OK"> {
+      const k = scopeKey(key);
       if (opts?.ex != null) {
         await q(
           `INSERT INTO kv (k, v, expire_at) VALUES ($1, $2::jsonb, now() + make_interval(secs => $3::int))
            ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = EXCLUDED.expire_at`,
-          [key, JSON.stringify(value), opts.ex],
+          [k, JSON.stringify(value), opts.ex],
         );
       } else {
         await q(
           `INSERT INTO kv (k, v, expire_at) VALUES ($1, $2::jsonb, NULL)
            ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, expire_at = NULL`,
-          [key, JSON.stringify(value)],
+          [k, JSON.stringify(value)],
         );
       }
       return "OK";
@@ -85,9 +87,10 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
 
     async del(...keys: string[]): Promise<number> {
       if (!keys.length) return 0;
+      const scoped = keys.map(scopeKey);
       let n = 0;
       for (const tbl of ["kv", "zset", "sset", "hash"]) {
-        const { rowCount } = await q(`DELETE FROM ${tbl} WHERE k = ANY($1)`, [keys]);
+        const { rowCount } = await q(`DELETE FROM ${tbl} WHERE k = ANY($1)`, [scoped]);
         n += rowCount ?? 0;
       }
       return n;
@@ -95,19 +98,21 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
 
     async mget<T = any>(...keys: string[]): Promise<(T | null)[]> {
       if (!keys.length) return [];
-      const { rows } = await q(`SELECT k, v FROM kv WHERE k = ANY($1) AND ${NOT_EXPIRED}`, [keys]);
+      const scoped = keys.map(scopeKey);
+      const { rows } = await q(`SELECT k, v FROM kv WHERE k = ANY($1) AND ${NOT_EXPIRED}`, [scoped]);
       const map = new Map<string, T>();
       for (const r of rows) map.set(r.k, r.v as T);
-      return keys.map((k) => (map.has(k) ? (map.get(k) as T) : null));
+      return scoped.map((k) => (map.has(k) ? (map.get(k) as T) : null));
     },
 
     async zadd(key: string, ...members: ZAddMember[]): Promise<number> {
+      const k = scopeKey(key);
       let added = 0;
       for (const m of members) {
         const { rowCount } = await q(
           `INSERT INTO zset (k, member, score) VALUES ($1, $2, $3)
            ON CONFLICT (k, member) DO UPDATE SET score = EXCLUDED.score`,
-          [key, m.member, m.score],
+          [k, m.member, m.score],
         );
         added += rowCount ?? 0;
       }
@@ -115,26 +120,27 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
     },
 
     zrange(key: string, start: number, stop: number, opts?: ZRangeOpts): Promise<string[]> {
-      return _zrange(q, key, start, stop, opts);
+      return _zrange(q, scopeKey(key), start, stop, opts);
     },
 
     async zrem(key: string, ...members: string[]): Promise<number> {
       if (!members.length) return 0;
-      const { rowCount } = await q(`DELETE FROM zset WHERE k=$1 AND member = ANY($2)`, [key, members]);
+      const { rowCount } = await q(`DELETE FROM zset WHERE k=$1 AND member = ANY($2)`, [scopeKey(key), members]);
       return rowCount ?? 0;
     },
 
     async zcard(key: string): Promise<number> {
-      const { rows } = await q(`SELECT count(*)::int AS n FROM zset WHERE k=$1`, [key]);
+      const { rows } = await q(`SELECT count(*)::int AS n FROM zset WHERE k=$1`, [scopeKey(key)]);
       return rows[0]?.n ?? 0;
     },
 
     async sadd(key: string, ...members: string[]): Promise<number> {
+      const k = scopeKey(key);
       let added = 0;
       for (const m of members) {
         const { rowCount } = await q(
           `INSERT INTO sset (k, member) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-          [key, m],
+          [k, m],
         );
         added += rowCount ?? 0;
       }
@@ -143,23 +149,24 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
 
     async srem(key: string, ...members: string[]): Promise<number> {
       if (!members.length) return 0;
-      const { rowCount } = await q(`DELETE FROM sset WHERE k=$1 AND member = ANY($2)`, [key, members]);
+      const { rowCount } = await q(`DELETE FROM sset WHERE k=$1 AND member = ANY($2)`, [scopeKey(key), members]);
       return rowCount ?? 0;
     },
 
     async smembers(key: string): Promise<string[]> {
-      const { rows } = await q(`SELECT member FROM sset WHERE k=$1`, [key]);
+      const { rows } = await q(`SELECT member FROM sset WHERE k=$1`, [scopeKey(key)]);
       return rows.map((r) => r.member as string);
     },
 
     async hset(key: string, obj: Record<string, unknown>): Promise<number> {
+      const k = scopeKey(key);
       const entries = Object.entries(obj);
       let n = 0;
       for (const [field, val] of entries) {
         const { rowCount } = await q(
           `INSERT INTO hash (k, field, v) VALUES ($1, $2, $3)
            ON CONFLICT (k, field) DO UPDATE SET v = EXCLUDED.v`,
-          [key, field, String(val)],
+          [k, field, String(val)],
         );
         n += rowCount ?? 0;
       }
@@ -167,7 +174,7 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
     },
 
     async hgetall<T = Record<string, string>>(key: string): Promise<T | null> {
-      const { rows } = await q(`SELECT field, v FROM hash WHERE k=$1`, [key]);
+      const { rows } = await q(`SELECT field, v FROM hash WHERE k=$1`, [scopeKey(key)]);
       if (!rows.length) return null;
       const out: Record<string, string> = {};
       for (const r of rows) out[r.field] = r.v;
@@ -179,7 +186,7 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
         `INSERT INTO hash (k, field, v) VALUES ($1, $2, $3::text)
          ON CONFLICT (k, field) DO UPDATE SET v = ((COALESCE(NULLIF(hash.v,'')::numeric, 0) + $3::numeric))::text
          RETURNING v`,
-        [key, field, String(by)],
+        [scopeKey(key), field, String(by)],
       );
       return Number(rows[0]?.v ?? by);
     },
@@ -244,18 +251,19 @@ export function redis(): RedisApi {
     ...base,
     pipeline: () => new Pipeline(),
     async withLock<T>(key: string, fn: (cur: any | null) => Promise<LockResult<T>> | LockResult<T>): Promise<T> {
+      const k = scopeKey(key);
       return withTx(async (client: PoolClient) => {
-        const sel = await client.query(`SELECT v FROM kv WHERE k=$1 FOR UPDATE`, [key]);
+        const sel = await client.query(`SELECT v FROM kv WHERE k=$1 FOR UPDATE`, [k]);
         const cur = sel.rows.length ? sel.rows[0].v : null;
         const { next, ret } = await fn(cur);
         if (next !== undefined) {
           if (next === null) {
-            await client.query(`DELETE FROM kv WHERE k=$1`, [key]);
+            await client.query(`DELETE FROM kv WHERE k=$1`, [k]);
           } else {
             await client.query(
               `INSERT INTO kv (k, v, expire_at) VALUES ($1, $2::jsonb, NULL)
                ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
-              [key, JSON.stringify(next)],
+              [k, JSON.stringify(next)],
             );
           }
         }

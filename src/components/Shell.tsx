@@ -9,6 +9,8 @@ import {
   BarChart3,
   MessageCircle,
   Wallet,
+  ShieldCheck,
+  Coins,
   LogOut,
   Menu,
   X,
@@ -16,7 +18,18 @@ import {
 } from "lucide-react";
 import { IconButton } from "./ui";
 
-export type TabId = "dial" | "bulk" | "campaigns" | "audios" | "reports" | "whatsapp" | "billing";
+export type TabId =
+  | "dial"
+  | "bulk"
+  | "campaigns"
+  | "audios"
+  | "reports"
+  | "whatsapp"
+  | "billing"
+  | "admin"
+  | "adminReports"
+  | "adminFinancials"
+  | "adminPricing";
 
 const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   { id: "dial",       label: "Dial",       icon: <Phone size={16} />,        group: "Call" },
@@ -26,6 +39,11 @@ const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   { id: "reports",    label: "Reports",    icon: <BarChart3 size={16} />,    group: "Insights" },
   { id: "whatsapp",   label: "WhatsApp",   icon: <MessageCircle size={16} />, group: "Insights" },
   { id: "billing",    label: "Billing",    icon: <Wallet size={16} />,       group: "Billing" },
+  // Admin-only surfaces (shown only when no client is being viewed).
+  { id: "admin",           label: "Clients",       icon: <ShieldCheck size={16} />, group: "Admin" },
+  { id: "adminReports",    label: "Reports",       icon: <BarChart3 size={16} />,   group: "Admin" },
+  { id: "adminFinancials", label: "Financials",    icon: <Wallet size={16} />,      group: "Admin" },
+  { id: "adminPricing",    label: "Per-call cost", icon: <Coins size={16} />,       group: "Admin" },
 ];
 
 export function Shell({
@@ -36,6 +54,8 @@ export function Shell({
   action,
   children,
   onLogout,
+  allowedTabs,
+  userLabel,
 }: {
   tab: TabId;
   setTab: (t: TabId) => void;
@@ -44,8 +64,12 @@ export function Shell({
   action?: ReactNode;
   children: ReactNode;
   onLogout: () => void;
+  allowedTabs?: TabId[];
+  userLabel?: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Only render the nav entries this user is allowed to see.
+  const nav = allowedTabs ? NAV.filter((n) => allowedTabs.includes(n.id)) : NAV;
   const [health, setHealth] = useState<"checking" | "ok" | "down">("checking");
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
 
@@ -79,7 +103,7 @@ export function Shell({
     ? checkedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : null;
 
-  const groups = Array.from(new Set(NAV.map((n) => n.group)));
+  const groups = Array.from(new Set(nav.map((n) => n.group)));
 
   const sidebar = (
     <div className="flex flex-col h-full w-60 bg-panel/80 border-r border-line backdrop-blur">
@@ -102,7 +126,7 @@ export function Shell({
               {g}
             </div>
             <div className="space-y-0.5">
-              {NAV.filter((n) => n.group === g).map((item) => {
+              {nav.filter((n) => n.group === g).map((item) => {
                 const active = item.id === tab;
                 return (
                   <button
@@ -130,6 +154,11 @@ export function Shell({
 
       {/* Status + Logout */}
       <div className="border-t border-line p-3 space-y-2">
+        {userLabel && (
+          <div className="px-2 py-1 text-xs text-muted truncate" title="Signed in as">
+            {userLabel}
+          </div>
+        )}
         <div
           className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-elev/50 text-xs"
           title={checkedLabel ? `Last checked ${checkedLabel}` : undefined}

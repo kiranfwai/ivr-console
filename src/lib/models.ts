@@ -81,6 +81,7 @@ export type BulkJobStatus = "running" | "paused" | "completed";
  */
 export interface BulkJob {
   id: string;
+  clientId?: string;         // owning client (tenant); undefined for legacy/admin jobs
   kind: BulkKind;
   campaignId: string;        // for "call" kind. For "whatsapp" use webhookUrl; campaignId may be "".
   webhookUrl?: string;       // WhatsApp bulk: optional Pabbly override (falls back to env)

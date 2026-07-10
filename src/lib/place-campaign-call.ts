@@ -2,6 +2,7 @@ import { placeCall, publicBaseUrl } from "./plivo";
 import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
 import { updateBulkRow } from "./bulk";
+import { currentClientId } from "./tenant";
 import type { Campaign, CallRecord } from "./models";
 
 export interface PlaceCampaignCallInput {
@@ -42,8 +43,12 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   const base = publicBaseUrl(req);
 
   const internalId = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}`;
-  const hangupUrl = `${base}/api/hangup?req=${internalId}`;
+  // Carry the owning client on the webhook URLs so Plivo's (session-less)
+  // answer/dtmf/hangup callbacks re-enter this client's data scope.
+  const clientId = currentClientId() ?? "";
+  const cq = clientId ? `&client=${encodeURIComponent(clientId)}` : "";
+  const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
+  const hangupUrl = `${base}/api/hangup?req=${internalId}${cq}`;
 
   const result = await placeCall({
     to,

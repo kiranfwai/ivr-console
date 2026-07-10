@@ -2,6 +2,7 @@ import { updateBulkRow } from "./bulk";
 import { placeCall } from "./plivo";
 import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
+import { currentClientId } from "./tenant";
 import type { Campaign } from "./models";
 
 export interface ClaimedRow {
@@ -36,8 +37,12 @@ export async function fireOne(
   const triggeredAt = new Date().toISOString();
   // Enough entropy to survive concurrent ID generation in the same ms.
   const internalId = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
-  const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}`;
-  const hangupUrl = `${base}/api/hangup?req=${internalId}`;
+  // Carry the owning client on the webhook URLs so Plivo's answer/dtmf/hangup
+  // callbacks (which have no session) re-enter this client's data scope.
+  const clientId = currentClientId() ?? "";
+  const cq = clientId ? `&client=${encodeURIComponent(clientId)}` : "";
+  const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
+  const hangupUrl = `${base}/api/hangup?req=${internalId}${cq}`;
 
   const result = await placeCall({
     to,

@@ -45,12 +45,34 @@ const config: Config = {
         "fade-in": "fadeIn 0.2s ease-out",
         "slide-up": "slideUp 0.25s ease-out",
         pulse2: "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        // Payment-success celebration
+        "check-pop": "checkPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "check-draw": "checkDraw 0.4s 0.25s ease-out both",
+        "ring-out": "ringOut 0.9s 0.2s ease-out both",
+        "pop-in": "popIn 0.4s 0.35s cubic-bezier(0.16, 1, 0.3, 1) both",
       },
       keyframes: {
         fadeIn: { "0%": { opacity: "0" }, "100%": { opacity: "1" } },
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(8px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        checkPop: {
+          "0%": { opacity: "0", transform: "scale(0.5)" },
+          "60%": { opacity: "1", transform: "scale(1.08)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        checkDraw: {
+          "0%": { strokeDashoffset: "48" },
+          "100%": { strokeDashoffset: "0" },
+        },
+        ringOut: {
+          "0%": { opacity: "0.55", transform: "scale(0.7)" },
+          "100%": { opacity: "0", transform: "scale(2.2)" },
+        },
+        popIn: {
+          "0%": { opacity: "0", transform: "translateY(6px) scale(0.96)" },
+          "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
         },
       },
     },
