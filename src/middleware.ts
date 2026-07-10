@@ -80,8 +80,15 @@ export async function middleware(req: NextRequest) {
   // verified admin — the browser sends it on every request, so all the admin's
   // data fetches transparently scope to the selected client). With none set,
   // admin is tenant-less (used for /api/admin management endpoints).
+  // The sentinel "__main__" is the admin's own pre-tenancy ("main account") data:
+  // it maps to the tenant-less scope so the admin can browse existing campaigns /
+  // calls / reports created before clients existed, without re-tenanting anything.
   const adminViewClient = isAdmin ? req.cookies.get("ivr_admin_client")?.value || "" : "";
-  const effectiveClient = isAdmin ? adminViewClient : session.cid;
+  const effectiveClient = isAdmin
+    ? adminViewClient === "__main__"
+      ? ""
+      : adminViewClient
+    : session.cid;
 
   const requestHeaders = new Headers(req.headers);
   requestHeaders.delete("x-ivr-client");

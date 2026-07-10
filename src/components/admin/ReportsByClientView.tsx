@@ -57,11 +57,11 @@ export default function ReportsByClientView() {
           <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
             <Spinner size={16} /> Loading…
           </div>
-        ) : data.rows.length === 0 ? (
+        ) : data.rows.length === 0 && !data.legacy ? (
           <EmptyState
             icon={<BarChart3 size={20} />}
-            title="No clients yet"
-            description="Create client logins to see their reports here."
+            title="No data yet"
+            description="Create client logins, or run calls, to see reports here."
           />
         ) : (
           <div className="overflow-auto -mx-1">
@@ -113,7 +113,7 @@ export default function ReportsByClientView() {
                 ))}
                 {data.legacy && (
                   <tr className="border-t border-line text-muted">
-                    <td className="py-2.5 px-2 italic">Unassigned (legacy)</td>
+                    <td className="py-2.5 px-2 italic">Main account (existing)</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.total.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.connected.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.press1.toLocaleString()}</td>

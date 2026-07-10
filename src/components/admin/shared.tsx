@@ -81,6 +81,10 @@ const PRESETS: { label: string; from: () => string; days: number }[] = [
   { label: "Today", from: () => istToday(), days: 0 },
   { label: "7d", from: () => istDaysAgo(6), days: 6 },
   { label: "30d", from: () => istDaysAgo(29), days: 29 },
+  { label: "90d", from: () => istDaysAgo(89), days: 89 },
+  // "All" reaches back ~2 years — within readRange's 800-day cap — so historical
+  // (pre-clients) data surfaces without a migration.
+  { label: "All", from: () => istDaysAgo(729), days: 729 },
 ];
 
 /** From/To date inputs with quick presets. Controlled by the parent view. */
