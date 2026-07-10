@@ -17,6 +17,7 @@ import {
 import { api } from "./useData";
 import FinancialsView from "./admin/FinancialsView";
 import ReportsByClientView from "./admin/ReportsByClientView";
+import CallersView from "./admin/CallersView";
 import PricingView from "./admin/PricingView";
 import { viewAsClient } from "./admin/shared";
 
@@ -44,7 +45,7 @@ interface Client {
   createdAt: string;
 }
 
-export type AdminView = "clients" | "reports" | "financials" | "pricing";
+export type AdminView = "clients" | "reports" | "calls" | "financials" | "pricing";
 
 /** Admin area: manage client logins, define call cost + see financials, and view
  *  client-wise reports. Which sub-view shows is driven by the sidebar (page.tsx). */
@@ -53,6 +54,7 @@ export default function AdminTab({ view = "clients" }: { view?: AdminView }) {
     <div className="space-y-4">
       {view === "clients" && <ClientsView />}
       {view === "reports" && <ReportsByClientView />}
+      {view === "calls" && <CallersView />}
       {view === "financials" && <FinancialsView />}
       {view === "pricing" && <PricingView />}
     </div>

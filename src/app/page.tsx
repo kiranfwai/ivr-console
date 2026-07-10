@@ -23,6 +23,7 @@ const META: Record<TabId, { title: string; desc: string }> = {
   billing:   { title: "Billing",         desc: "Wallet balance, top-ups, transactions and phone numbers" },
   admin:          { title: "Clients",       desc: "Create client logins and set feature permissions" },
   adminReports:   { title: "Reports",       desc: "Client-wise volumes, outcomes and lift" },
+  adminCalls:     { title: "Callers",       desc: "Every number dialed — per client, date range and charge" },
   adminFinancials:{ title: "Financials",    desc: "Cost and wallet balance by client" },
   adminPricing:   { title: "Per-call cost",  desc: "Connected-call rate and payment settings" },
 };
@@ -31,12 +32,13 @@ const META: Record<TabId, { title: string; desc: string }> = {
 const DATA_TABS: TabId[] = ["dial", "bulk", "campaigns", "audios", "reports", "whatsapp", "billing"];
 
 // Admin-only surfaces (shown when the admin isn't viewing a specific client).
-const ADMIN_TABS: TabId[] = ["admin", "adminReports", "adminFinancials", "adminPricing"];
+const ADMIN_TABS: TabId[] = ["admin", "adminReports", "adminCalls", "adminFinancials", "adminPricing"];
 
 // Which AdminTab sub-view each admin tab renders.
 const ADMIN_VIEW: Partial<Record<TabId, AdminView>> = {
   admin: "clients",
   adminReports: "reports",
+  adminCalls: "calls",
   adminFinancials: "financials",
   adminPricing: "pricing",
 };

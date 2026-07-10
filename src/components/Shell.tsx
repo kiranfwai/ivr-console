@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import {
   Phone,
+  PhoneCall,
   Users,
   Megaphone,
   Music,
@@ -28,6 +29,7 @@ export type TabId =
   | "billing"
   | "admin"
   | "adminReports"
+  | "adminCalls"
   | "adminFinancials"
   | "adminPricing";
 
@@ -42,6 +44,7 @@ const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   // Admin-only surfaces (shown only when no client is being viewed).
   { id: "admin",           label: "Clients",       icon: <ShieldCheck size={16} />, group: "Admin" },
   { id: "adminReports",    label: "Reports",       icon: <BarChart3 size={16} />,   group: "Admin" },
+  { id: "adminCalls",      label: "Callers",       icon: <PhoneCall size={16} />,   group: "Admin" },
   { id: "adminFinancials", label: "Financials",    icon: <Wallet size={16} />,      group: "Admin" },
   { id: "adminPricing",    label: "Per-call cost", icon: <Coins size={16} />,       group: "Admin" },
 ];
