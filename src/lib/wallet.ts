@@ -1,4 +1,5 @@
 import { query, withTx } from "./db";
+import { getConnectedCallRate } from "./pricing";
 
 /**
  * Per-client prepaid wallet (real ₹).
@@ -150,6 +151,21 @@ export function credit(
     description: opts?.description,
     ref: opts?.ref ?? null,
   });
+}
+
+/**
+ * Prepaid gate: may this client place a call right now? A call is allowed only
+ * when the wallet can cover at least one connected call (balance >= per-call
+ * rate). The admin / legacy "main" scope (empty clientId) has no wallet and is
+ * never gated, and a zero rate (free tier) is never gated either.
+ */
+export async function canDial(
+  clientId: string,
+): Promise<{ ok: boolean; balance: number; rate: number }> {
+  if (!clientId) return { ok: true, balance: 0, rate: 0 };
+  const [balance, rate] = await Promise.all([getBalance(clientId), getConnectedCallRate(clientId)]);
+  const ok = rate <= 0 || balance >= rate;
+  return { ok, balance, rate };
 }
 
 /** Charge the wallet (a connected call). `amount` is the positive ₹ cost. */

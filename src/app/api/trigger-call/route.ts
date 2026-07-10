@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { constantTimeEqual } from "@/lib/hmac";
 import { findCampaignByNameOrId } from "@/lib/campaigns";
-import { placeCampaignCall } from "@/lib/place-campaign-call";
+import { placeCampaignCall, InsufficientBalanceError } from "@/lib/place-campaign-call";
 import { runWithTenant } from "@/lib/tenant";
 import { getClient } from "@/lib/clients";
 
@@ -67,13 +67,19 @@ export async function POST(req: NextRequest) {
     if (!campaign) return fail("campaign not found", 400);
 
     // --- Trigger via the SAME path as the dashboard test call. ---
-    const result = await placeCampaignCall({
-      campaign,
-      phone,
-      callerName: name,
-      email,
-      req,
-    });
+    let result;
+    try {
+      result = await placeCampaignCall({ campaign, phone, callerName: name, email, req });
+    } catch (e) {
+      if (e instanceof InsufficientBalanceError) {
+        return fail("insufficient wallet balance — top up to place calls", 402, {
+          code: "insufficient_balance",
+          balance: e.balance,
+          rate: e.rate,
+        });
+      }
+      throw e;
+    }
 
     if (!result.ok) {
       // Plivo rejected / failed to queue the call — surface it as an upstream error.

@@ -12,6 +12,7 @@ import { getCampaign } from "./campaigns";
 import { publicBaseUrl } from "./plivo";
 import { fireOne } from "./bulk-runner";
 import { runWithTenant } from "./tenant";
+import { canDial } from "./wallet";
 
 /**
  * In-process bulk-call worker — CPS-paced, live-capped dial pump.
@@ -148,6 +149,20 @@ async function pumpJob(
     // Put the claimed rows back and pause so it stops trying.
     await resetDialingRows(job.id);
     await setJobStatus(job.id, "paused");
+    return;
+  }
+
+  // Prepaid gate: if the owning client's wallet can't cover a connected call,
+  // put the claimed rows back and pause the job so it stops dialing. It resumes
+  // once the client tops up (and clicks resume). Admin/legacy jobs (no client)
+  // are never gated.
+  const gate = await canDial(job.clientId ?? "");
+  if (!gate.ok) {
+    await resetDialingRows(job.id);
+    await setJobStatus(job.id, "paused");
+    console.warn(
+      `[worker] job ${job.id} paused — insufficient wallet balance (₹${gate.balance} < ₹${gate.rate}/call)`,
+    );
     return;
   }
 

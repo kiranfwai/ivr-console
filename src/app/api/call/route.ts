@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCampaign } from "@/lib/campaigns";
-import { placeCampaignCall } from "@/lib/place-campaign-call";
+import { placeCampaignCall, InsufficientBalanceError } from "@/lib/place-campaign-call";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,21 @@ export async function POST(req: NextRequest) {
 
   // The actual dialing + answer-URL wiring + call recording lives in one shared
   // helper so the external trigger API (/api/trigger-call) fires calls identically.
-  const result = await placeCampaignCall({ campaign, phone, callerName, email, bulkJobId, bulkRowIndex, req });
-  return NextResponse.json(result);
+  try {
+    const result = await placeCampaignCall({ campaign, phone, callerName, email, bulkJobId, bulkRowIndex, req });
+    return NextResponse.json(result);
+  } catch (e) {
+    if (e instanceof InsufficientBalanceError) {
+      return NextResponse.json(
+        {
+          error: "Insufficient wallet balance — please top up to place calls.",
+          code: "insufficient_balance",
+          balance: e.balance,
+          rate: e.rate,
+        },
+        { status: 402 },
+      );
+    }
+    throw e;
+  }
 }

@@ -39,6 +39,9 @@ function summarize(job: BulkJobWithCounts) {
 export default function BulkTab() {
   const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJobWithCounts[] }>("/api/bulk");
+  // Wallet balance — to warn (before dialing) when it can't cover a connected call.
+  const { data: wallet } = useFetch<{ balance: number; currency: string; rate: number; noClient?: boolean }>("/api/wallet");
+  const lowBalance = !!wallet && !wallet.noClient && wallet.rate > 0 && wallet.balance < wallet.rate;
   const campaigns = cdata?.campaigns ?? [];
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
@@ -306,6 +309,18 @@ export default function BulkTab() {
 
   return (
     <Section>
+      {lowBalance && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-warn/30 bg-warn/10 px-3 py-2.5 text-sm">
+          <AlertCircle size={16} className="text-warn shrink-0" />
+          <span className="text-ink2">
+            Low wallet balance —{" "}
+            <span className="font-medium text-ink">
+              {wallet!.currency === "INR" ? "₹" : ""}{wallet!.balance.toFixed(2)}
+            </span>
+            . Calls cost {wallet!.currency === "INR" ? "₹" : ""}{wallet!.rate.toFixed(2)} per connected call, so dialing is blocked until you top up in the <span className="font-medium text-ink">Billing</span> tab.
+          </span>
+        </div>
+      )}
       <Card title="Start a campaign" description="Submitted to the backend — it dials on the server, not your browser.">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="col-span-2 md:col-span-2">

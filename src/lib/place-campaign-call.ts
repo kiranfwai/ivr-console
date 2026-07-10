@@ -3,7 +3,17 @@ import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
 import { updateBulkRow } from "./bulk";
 import { currentClientId } from "./tenant";
+import { canDial } from "./wallet";
 import type { Campaign, CallRecord } from "./models";
+
+/** Thrown by placeCampaignCall when the client's prepaid wallet can't cover a call. */
+export class InsufficientBalanceError extends Error {
+  code = "insufficient_balance" as const;
+  constructor(public balance: number, public rate: number) {
+    super("insufficient_balance");
+    this.name = "InsufficientBalanceError";
+  }
+}
 
 export interface PlaceCampaignCallInput {
   campaign: Campaign;
@@ -46,6 +56,11 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   // Carry the owning client on the webhook URLs so Plivo's (session-less)
   // answer/dtmf/hangup callbacks re-enter this client's data scope.
   const clientId = currentClientId() ?? "";
+
+  // Prepaid gate: block dialing when the wallet can't cover a connected call.
+  const gate = await canDial(clientId);
+  if (!gate.ok) throw new InsufficientBalanceError(gate.balance, gate.rate);
+
   const cq = clientId ? `&client=${encodeURIComponent(clientId)}` : "";
   const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
   const hangupUrl = `${base}/api/hangup?req=${internalId}${cq}`;

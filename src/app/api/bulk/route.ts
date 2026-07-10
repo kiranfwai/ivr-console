@@ -4,6 +4,8 @@ import { getCampaign } from "@/lib/campaigns";
 import { startWorker } from "@/lib/worker";
 import { createLimiter, BusyError } from "@/lib/limiter";
 import { redis } from "@/lib/redis";
+import { currentClientId } from "@/lib/tenant";
+import { canDial } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -66,6 +68,20 @@ export async function POST(req: NextRequest) {
     if (!campaignId) return NextResponse.json({ error: "Pick a campaign first." }, { status: 400 });
     const c = await getCampaign(campaignId).catch(() => null);
     if (!c) return NextResponse.json({ error: "Campaign not found." }, { status: 404 });
+
+    // Prepaid gate: don't accept a call campaign the wallet can't start paying for.
+    const gate = await canDial(currentClientId() ?? "");
+    if (!gate.ok) {
+      return NextResponse.json(
+        {
+          error: `Insufficient wallet balance (₹${gate.balance.toFixed(2)}). Top up to run call campaigns — ₹${gate.rate.toFixed(2)} per connected call.`,
+          code: "insufficient_balance",
+          balance: gate.balance,
+          rate: gate.rate,
+        },
+        { status: 402 },
+      );
+    }
   }
 
   // Idempotency: a retried upload (same key, after a 503/504/network blip) must
