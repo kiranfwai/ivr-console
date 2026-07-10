@@ -89,6 +89,12 @@ export async function setConfig(input: {
   return toPublic(next);
 }
 
+/** Wipe the stored Cashfree credentials (App ID + secret + env) entirely. */
+export async function clearConfig(): Promise<CashfreeConfigPublic> {
+  await query(`DELETE FROM app_config WHERE k=$1`, [CONFIG_KEY]);
+  return toPublic({ env: "sandbox", appId: "", secretKey: "" });
+}
+
 function baseUrl(env: CashfreeEnv): string {
   return env === "production" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
 }
