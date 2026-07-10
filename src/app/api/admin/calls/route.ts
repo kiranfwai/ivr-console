@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
 
   // Legacy / unassigned (tenant-less) calls, only when viewing all clients.
   if (!specific) {
-    const legacy = await rowsForTenant("", "Main account (existing)", pricing.perConnectedCall);
+    const legacy = await rowsForTenant("", "Pryank", pricing.perConnectedCall);
     rows = rows.concat(legacy);
   }
 

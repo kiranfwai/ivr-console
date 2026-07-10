@@ -92,7 +92,7 @@ export default function Page() {
   // (existing pre-tenancy data), which gets all data tabs.
   const switcherClients = useMemo<ClientOpt[]>(
     () => [
-      { id: MAIN_ACCOUNT, name: "Main account (existing data)", email: "", active: true, perms: [...DATA_TABS] },
+      { id: MAIN_ACCOUNT, name: "Pryank", email: "", active: true, perms: [...DATA_TABS] },
       ...clients,
     ],
     [clients],

@@ -113,7 +113,7 @@ export default function ReportsByClientView() {
                 ))}
                 {data.legacy && (
                   <tr className="border-t border-line text-muted">
-                    <td className="py-2.5 px-2 italic">Main account (existing)</td>
+                    <td className="py-2.5 px-2 italic">Pryank</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.total.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.connected.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">{data.legacy.press1.toLocaleString()}</td>

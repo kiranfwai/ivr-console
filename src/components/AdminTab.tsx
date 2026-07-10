@@ -86,7 +86,7 @@ function ClientsView() {
   // "__main__" sentinel the middleware maps to it); no data is migrated.
   const mainAccount: Client = {
     id: "__main__",
-    name: "Main account (existing data)",
+    name: "Pryank",
     email: "your existing campaigns & calls",
     perms: FEATURES.map((f) => f.id),
     active: true,
@@ -123,7 +123,7 @@ function ClientsView() {
           <div className="overflow-auto -mx-1">
             {clients.length === 0 && (
               <div className="mb-3 text-xs text-muted">
-                No separate client logins yet. Your existing data lives under <span className="text-ink2">Main account</span> below — create a client with <span className="text-ink2">New client</span> to onboard others.
+                No separate client logins yet. Your existing data lives under <span className="text-ink2">Pryank</span> below — create a client with <span className="text-ink2">New client</span> to onboard others.
               </div>
             )}
             <table className="w-full text-sm">
@@ -339,6 +339,7 @@ function ClientModal({
 
   async function save() {
     setErr(null);
+    if (!name.trim()) return setErr("Name is required.");
     if (!isEdit && !email.trim()) return setErr("Email is required.");
     if (!isEdit && password.length < 6) return setErr("Password must be at least 6 characters.");
     if (isEdit && password && password.length < 6) return setErr("Password must be at least 6 characters.");
@@ -385,7 +386,7 @@ function ClientModal({
       <div className="space-y-4">
         {err && <div className="text-sm text-danger">{err}</div>}
         <div>
-          <Label>Name</Label>
+          <Label required>Name</Label>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
         </div>
         <div>
