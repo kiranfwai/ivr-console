@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 /**
  * Admin caller-level drill-down (across clients).
  *   GET ?client=<id|all>&from=&to=&status=&limit=
- *     client  — a specific client id, or "all"/"" for every client (+ legacy)
+ *     client  — a specific client id, or "all"/"" for every client
  *     status  — connected | failed | no-answer | busy (optional filter)
  *
  * Returns each individual call (caller number, client, campaign, outcome,
@@ -54,8 +54,8 @@ export async function GET(req: NextRequest) {
   const [pricing, clients] = await Promise.all([getGlobalPricing(), listClients()]);
   const rateOf = (perConn: number | null) => (perConn == null ? pricing.perConnectedCall : perConn);
 
-  // Which tenants to scan. A specific client → just that one; else every client
-  // plus the tenant-less legacy bucket (pre-tenancy calls).
+  // Which tenants to scan. A specific client → just that one; else every client,
+  // each reported separately (never combined).
   const specific = clientParam !== "all" && clientParam !== "";
   const targets = specific
     ? clients.filter((c) => c.id === clientParam)
@@ -90,12 +90,6 @@ export async function GET(req: NextRequest) {
     targets.map((c) => rowsForTenant(c.id, c.name || c.email, rateOf(c.perConnectedCall))),
   );
   let rows = perTenant.flat();
-
-  // Legacy / unassigned (tenant-less) calls, only when viewing all clients.
-  if (!specific) {
-    const legacy = await rowsForTenant("", "Pryank", pricing.perConnectedCall);
-    rows = rows.concat(legacy);
-  }
 
   if (group) rows = rows.filter((r) => group.has(r.outcome));
 

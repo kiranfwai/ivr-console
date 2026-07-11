@@ -77,7 +77,17 @@ export default function Page() {
       .catch(() => setMeErr(true));
     // Read any previously-selected admin client from the cookie.
     const m = document.cookie.match(/(?:^|;\s*)ivr_admin_client=([^;]+)/);
-    if (m) setViewClient(decodeURIComponent(m[1]));
+    if (m) {
+      const val = decodeURIComponent(m[1]);
+      // "__main__" is the retired pre-tenancy sentinel (that data is now the real
+      // client "Pryank"). Clear a stale cookie so the admin never lands in an
+      // empty phantom scope — just return to the normal admin console.
+      if (val === "__main__") {
+        document.cookie = "ivr_admin_client=; path=/; max-age=0; samesite=lax";
+      } else {
+        setViewClient(val);
+      }
+    }
   }, []);
 
   const isAdmin = me?.role === "admin";

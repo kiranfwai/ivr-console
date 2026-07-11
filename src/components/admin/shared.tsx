@@ -42,7 +42,6 @@ export interface AnalyticsResp {
   currency: string;
   pricing: Pricing;
   rows: AnalyticsRow[];
-  legacy: (Omit<AnalyticsRow, "id" | "name" | "email" | "active" | "perCallOverride" | "perMinuteOverride" | "perConnectedCallOverride" | "effPerCall" | "effPerMinute" | "effPerConnectedCall" | "balance" | "liftRate"> & { liftRate: number }) | null;
   totals: { total: number; connected: number; press1: number; minutes: number; cost: number };
 }
 

@@ -130,7 +130,27 @@ async function pumpJob(
   const headroom = cap - live;
   if (headroom <= 0) return; // at the live cap; wait for hangups to free slots
 
-  const want = Math.min(headroom, CLAIM_BATCH);
+  // Prepaid gate + wallet-affordability cap, checked BEFORE claiming so we never
+  // place more connected calls than the balance can cover. Admin/legacy jobs
+  // (no client) return ok with rate 0 and are never capped.
+  const gate = await canDial(job.clientId ?? "");
+  if (!gate.ok) {
+    await setJobStatus(job.id, "paused");
+    console.warn(
+      `[worker] job ${job.id} paused — insufficient wallet balance (₹${gate.balance} < ₹${gate.rate}/call)`,
+    );
+    return;
+  }
+  // Never claim more than the wallet can afford: a small top-up on a large job
+  // can't drive the balance deeply negative (charges land on hangup, and we
+  // re-check the balance every tick as calls settle).
+  const affordable = gate.rate > 0 ? Math.floor(gate.balance / gate.rate) : Infinity;
+
+  const want = Math.min(headroom, CLAIM_BATCH, affordable);
+  if (want <= 0) {
+    await maybeComplete(job.id);
+    return;
+  }
   let claimed;
   try {
     claimed = await claimBulkRows(job.id, want);
@@ -149,20 +169,6 @@ async function pumpJob(
     // Put the claimed rows back and pause so it stops trying.
     await resetDialingRows(job.id);
     await setJobStatus(job.id, "paused");
-    return;
-  }
-
-  // Prepaid gate: if the owning client's wallet can't cover a connected call,
-  // put the claimed rows back and pause the job so it stops dialing. It resumes
-  // once the client tops up (and clicks resume). Admin/legacy jobs (no client)
-  // are never gated.
-  const gate = await canDial(job.clientId ?? "");
-  if (!gate.ok) {
-    await resetDialingRows(job.id);
-    await setJobStatus(job.id, "paused");
-    console.warn(
-      `[worker] job ${job.id} paused — insufficient wallet balance (₹${gate.balance} < ₹${gate.rate}/call)`,
-    );
     return;
   }
 

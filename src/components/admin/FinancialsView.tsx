@@ -49,7 +49,7 @@ export default function FinancialsView() {
         <KPI
           label="Total cost"
           value={fmtMoney(data?.totals.cost ?? 0, currency)}
-          sub="across all clients"
+          sub="estimated usage · all clients"
           icon={<Wallet size={18} />}
           tone="accent"
         />
@@ -69,13 +69,13 @@ export default function FinancialsView() {
 
       <Card
         title="Cost & wallets by client"
-        description="Cost = connected calls × per-connected-call rate. Balance is the live wallet."
+        description="Cost = estimated usage (connected calls × rate) for the range — not necessarily debited. Balance is the live wallet (actual top-ups minus charges). Each client is shown separately."
       >
         {!data ? (
           <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
             <Spinner size={16} /> Loading…
           </div>
-        ) : data.rows.length === 0 && !data.legacy ? (
+        ) : data.rows.length === 0 ? (
           <EmptyState
             icon={<Wallet size={20} />}
             title="No data yet"
@@ -141,17 +141,6 @@ export default function FinancialsView() {
                     </td>
                   </tr>
                 ))}
-                {data.legacy && (
-                  <tr className="border-t border-line text-muted">
-                    <td className="py-2.5 px-2 italic">Pryank</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.total.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.connected.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">—</td>
-                    <td className="px-2 text-right tabular-nums">{fmtMoney(data.legacy.cost, currency)}</td>
-                    <td className="px-2 text-right tabular-nums">—</td>
-                    <td />
-                  </tr>
-                )}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-line2 font-medium text-ink">

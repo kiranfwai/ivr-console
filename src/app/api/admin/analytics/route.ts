@@ -15,8 +15,9 @@ export const runtime = "nodejs";
  *
  * Each client's rolled-up counters live under its own tenant scope
  * (`t:<clientId>:stats:*`), so we read them by running readRange inside
- * runWithTenant(clientId). runWithTenant("") forces a tenant-less read used for
- * legacy pre-tenancy data (kept off the client rows, surfaced separately).
+ * runWithTenant(clientId). Every client is reported as its own separate row —
+ * nothing is combined, and a client with no calls in the range simply shows
+ * zeros.
  */
 
 function istToday(): string {
@@ -76,18 +77,6 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  // Legacy / unassigned pre-tenancy data (tenant-less keys). Only surfaced if it
-  // actually holds calls, and costed at the global default connected rate.
-  const legacyAgg = await runWithTenant("", () => readRange(from, to));
-  const legacyS = summarize(legacyAgg);
-  const legacy =
-    legacyS.total > 0
-      ? {
-          ...legacyS,
-          cost: round2(legacyS.connected * pricing.perConnectedCall),
-        }
-      : null;
-
   const totals = rows.reduce(
     (t, r) => ({
       total: t.total + r.total,
@@ -104,7 +93,6 @@ export async function GET(req: NextRequest) {
     currency: pricing.currency,
     pricing,
     rows,
-    legacy,
     totals,
   });
 }

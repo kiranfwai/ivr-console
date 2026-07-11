@@ -57,7 +57,7 @@ export default function ReportsByClientView() {
           <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
             <Spinner size={16} /> Loading…
           </div>
-        ) : data.rows.length === 0 && !data.legacy ? (
+        ) : data.rows.length === 0 ? (
           <EmptyState
             icon={<BarChart3 size={20} />}
             title="No data yet"
@@ -111,19 +111,6 @@ export default function ReportsByClientView() {
                     </td>
                   </tr>
                 ))}
-                {data.legacy && (
-                  <tr className="border-t border-line text-muted">
-                    <td className="py-2.5 px-2 italic">Pryank</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.total.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.connected.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.press1.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.busy.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.noAnswer.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.failed.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{data.legacy.liftRate}%</td>
-                    <td />
-                  </tr>
-                )}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-line2 font-medium text-ink">
