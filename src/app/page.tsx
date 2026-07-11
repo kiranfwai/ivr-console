@@ -31,12 +31,6 @@ const META: Record<TabId, { title: string; desc: string }> = {
 // Feature tabs that operate on a specific client's data.
 const DATA_TABS: TabId[] = ["dial", "bulk", "campaigns", "audios", "reports", "whatsapp", "billing"];
 
-// Virtual "client" representing the admin's own pre-tenancy data (everything
-// created before client accounts existed lives in the tenant-less scope). The
-// middleware maps this sentinel back to that scope, so selecting it lets the
-// admin browse existing campaigns / calls / reports without changing any data.
-const MAIN_ACCOUNT = "__main__";
-
 // Admin-only surfaces (shown when the admin isn't viewing a specific client).
 const ADMIN_TABS: TabId[] = ["admin", "adminReports", "adminCalls", "adminFinancials", "adminPricing"];
 
@@ -88,15 +82,8 @@ export default function Page() {
 
   const isAdmin = me?.role === "admin";
 
-  // The switcher list = the real client accounts plus the virtual "Main account"
-  // (existing pre-tenancy data), which gets all data tabs.
-  const switcherClients = useMemo<ClientOpt[]>(
-    () => [
-      { id: MAIN_ACCOUNT, name: "Pryank", email: "", active: true, perms: [...DATA_TABS] },
-      ...clients,
-    ],
-    [clients],
-  );
+  // The switcher list = the real client accounts (Pryank is now one of them).
+  const switcherClients = clients;
   const selectedClient = useMemo(
     () => switcherClients.find((c) => c.id === viewClient) ?? null,
     [switcherClients, viewClient],

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { UserPlus, Pencil, Trash2, ShieldCheck, Copy, Check, ExternalLink } from "lucide-react";
+import { UserPlus, Pencil, Trash2, Copy, Check, ExternalLink } from "lucide-react";
 import {
   Card,
   Section,
@@ -80,26 +80,13 @@ function ClientsView() {
     load();
   }, [load]);
 
-  // The virtual "Main account" — the admin's own pre-tenancy data. It behaves
-  // like a client (browse its data, shows in financials/reports) but has no
-  // login and can't be edited/deleted. Backed by the tenant-less scope (the
-  // "__main__" sentinel the middleware maps to it); no data is migrated.
-  const mainAccount: Client = {
-    id: "__main__",
-    name: "Pryank",
-    email: "your existing campaigns & calls",
-    perms: FEATURES.map((f) => f.id),
-    active: true,
-    createdAt: "",
-  };
-  const rows: Client[] = [mainAccount, ...(clients ?? [])];
+  const rows: Client[] = clients ?? [];
 
   // Enter a client's console (view-as-client), landing on their first granted
   // feature tab. Middleware scopes all data to this client via the cookie set
   // in viewAsClient; page.tsx shows the "Viewing as …" banner + exit.
   function openClientConsole(c: Client) {
-    const firstTab =
-      c.id === "__main__" ? "reports" : DATA_TAB_ORDER.find((t) => c.perms.includes(t)) ?? "reports";
+    const firstTab = DATA_TAB_ORDER.find((t) => c.perms.includes(t)) ?? "reports";
     viewAsClient(c.id, firstTab);
   }
 
@@ -123,7 +110,7 @@ function ClientsView() {
           <div className="overflow-auto -mx-1">
             {clients.length === 0 && (
               <div className="mb-3 text-xs text-muted">
-                No separate client logins yet. Your existing data lives under <span className="text-ink2">Pryank</span> below — create a client with <span className="text-ink2">New client</span> to onboard others.
+                No client logins yet — create one with <span className="text-ink2">New client</span> to onboard a client.
               </div>
             )}
             <table className="w-full text-sm">
@@ -136,14 +123,12 @@ function ClientsView() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((c) => {
-                  const isMain = c.id === "__main__";
-                  return (
+                {rows.map((c) => (
                   <tr
                     key={c.id}
                     onClick={() => openClientConsole(c)}
                     className="border-t border-line align-top hover:bg-elev/40 cursor-pointer"
-                    title={`Open ${c.name || c.email}${isMain ? "" : "'s"} console`}
+                    title={`Open ${c.name || c.email}'s console`}
                   >
                     <td className="py-2.5 px-1">
                       <div className="font-medium text-ink flex items-center gap-1.5">
@@ -151,20 +136,12 @@ function ClientsView() {
                         <ExternalLink size={12} className="text-muted" />
                       </div>
                       <div className="text-xs text-muted">{c.email}</div>
-                      {isMain ? (
-                        <div className="mt-0.5 text-[10px] text-muted italic">no login · you access it as admin</div>
-                      ) : (
-                        <ClientId id={c.id} />
-                      )}
+                      <ClientId id={c.id} />
                     </td>
                     <td className="px-1 py-2.5">
-                      {isMain ? (
-                        <Badge tone="accent">Your data</Badge>
-                      ) : (
-                        <Badge tone={c.active ? "ok" : "muted"} dot={c.active}>
-                          {c.active ? "Active" : "Disabled"}
-                        </Badge>
-                      )}
+                      <Badge tone={c.active ? "ok" : "muted"} dot={c.active}>
+                        {c.active ? "Active" : "Disabled"}
+                      </Badge>
                     </td>
                     <td className="px-1 py-2.5">
                       <div className="flex flex-wrap gap-1 max-w-[280px]">
@@ -183,28 +160,16 @@ function ClientsView() {
                       className="px-1 py-2.5 text-right whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {isMain ? (
-                        <button
-                          onClick={() => openClientConsole(c)}
-                          className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 px-2 py-1 rounded-md hover:bg-brand/10"
-                        >
-                          <ExternalLink size={12} /> Open
-                        </button>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => setEditing(c)}
-                            className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
-                          >
-                            <Pencil size={12} /> Edit
-                          </button>
-                          <DeleteButton client={c} onDone={load} />
-                        </>
-                      )}
+                      <button
+                        onClick={() => setEditing(c)}
+                        className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
+                      >
+                        <Pencil size={12} /> Edit
+                      </button>
+                      <DeleteButton client={c} onDone={load} />
                     </td>
                   </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
