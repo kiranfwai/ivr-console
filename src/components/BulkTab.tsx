@@ -25,12 +25,21 @@ function summarize(job: BulkJobWithCounts) {
   const error = c.error ?? 0, failed = c.failed ?? 0;
   const pending = c.pending ?? 0, dialing = c.dialing ?? 0;
   const total = job.total || 0;
-  const good = press1 + connected + ok;
+  // "Connected (lifted)" = calls Plivo confirmed were answered. This MUST match the
+  // Reports/analytics definition (press1 + connected) so the two screens reconcile.
+  // Note it excludes `ok`: on a call job `ok` means "place-call accepted but no
+  // hangup callback ever scored a final outcome" — an unknown outcome, NOT a
+  // confirmed connect. Folding `ok` in here is what made Bulk read higher than
+  // Reports.
+  const connectedLifted = press1 + connected;
+  // `good` stays inclusive of `ok` for progress math only: an `ok` row is terminal
+  // (won't be retried), so it counts toward "done", just not toward "connected".
+  const good = connectedLifted + ok;
   const bad = busy + noAnswer + rejected + error + failed;
   const dialed = total - pending - dialing;
   return {
     press1, connected, ok, busy, noAnswer, rejected, error, failed, pending, dialing,
-    total, good, bad, dialed,
+    total, good, connectedLifted, bad, dialed,
     retryable: busy + noAnswer + error + failed,
     donePct: total ? Math.round(((good + bad) / total) * 100) : 0,
   };
@@ -541,7 +550,7 @@ export default function BulkTab() {
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <StatusPill status={j.status} pending={s.pending} small />
-                    <Badge tone="ok">{s.good.toLocaleString()}</Badge>
+                    <Badge tone="ok">{s.connectedLifted.toLocaleString()}</Badge>
                     {s.bad > 0 && <Badge tone="danger">{s.bad.toLocaleString()}</Badge>}
                     <span className="text-muted">/ {s.total.toLocaleString()}</span>
                   </div>
@@ -665,7 +674,7 @@ function LiveDashboard({ counts, cpm, running }: { counts: Counts; cpm: number; 
   const total = counts.total || 0;
   const dialed = counts.dialed;
   const dialedPct = total ? Math.round((dialed / total) * 100) : 0;
-  const connected = counts.good;
+  const connected = counts.connectedLifted;
   const noAnswer = counts.noAnswer;
   const failed = counts.busy + counts.rejected + counts.error + counts.failed;
   const pctOf = (n: number) => (dialed > 0 ? Math.round((n / dialed) * 100) : 0);
@@ -831,12 +840,13 @@ function fmtClockShort(sec: number): string {
 function CampaignSummaryModal({ data, onClose, onNew }: { data: SummaryData; onClose: () => void; onNew: () => void }) {
   const c = summarize(data.job);
   const total = c.total;
-  const connected = c.good;                              // lifted / connected
+  const connected = c.connectedLifted;                   // lifted / connected (answered) — matches Reports
   const press1 = c.press1;
+  const placed = c.ok;                                   // place-call accepted, but no hangup callback → outcome unknown
   const busy = c.busy;
   const noAnswer = c.noAnswer;
   const failedError = c.rejected + c.error + c.failed;   // place/carrier failures + invalid
-  const dialed = connected + busy + noAnswer;            // calls that actually reached the network
+  const dialed = connected + placed + busy + noAnswer;   // calls that actually reached the network
 
   const pctOf = (n: number, base: number) => (base > 0 ? Math.round((n / base) * 100) : 0);
   const pct1 = (n: number, base: number) => (base > 0 ? Math.round((n / base) * 1000) / 10 : 0);
@@ -871,6 +881,9 @@ function CampaignSummaryModal({ data, onClose, onNew }: { data: SummaryData; onC
         <SumRow label="Successfully Dialed" value={`${dialed.toLocaleString()} ✅`} tone="text-ink" />
         <SumRow label="Connected (Lifted)" value={`${connected.toLocaleString()}`} pct={`${pctOf(connected, dialed)}%`} tone="text-ok" />
         <SumRow label="└─ Pressed 1" value={`${press1.toLocaleString()}`} pct={`${pct1(press1, total)}%`} sub />
+        {placed > 0 && (
+          <SumRow label="Placed – no final status" value={`${placed.toLocaleString()}`} pct={`${pctOf(placed, dialed)}%`} tone="text-muted" />
+        )}
         <SumRow label="Busy" value={`${busy.toLocaleString()}`} pct={`${pctOf(busy, dialed)}%`} tone="text-warn" />
         <SumRow label="No Answer" value={`${noAnswer.toLocaleString()}`} pct={`${pctOf(noAnswer, dialed)}%`} tone="text-warn" />
         <SumRow label="Failed / Error" value={`${failedError.toLocaleString()}`} pct={`${pctOf(failedError, total)}%`} tone="text-danger" />
