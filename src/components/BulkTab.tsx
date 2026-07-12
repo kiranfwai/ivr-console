@@ -434,7 +434,7 @@ export default function BulkTab() {
           title={
             <div className="flex items-center gap-2">
               <span>Campaign progress</span>
-              <StatusPill status={job.status} pending={counts.pending} />
+              <StatusPill status={job.status} remaining={counts.pending + counts.dialing} />
             </div>
           }
           description={
@@ -447,7 +447,7 @@ export default function BulkTab() {
             <div className="flex gap-2">
               {running
                 ? <Button variant="danger" leftIcon={<Square size={12} />} onClick={pause}>Stop</Button>
-                : counts.pending > 0
+                : counts.pending + counts.dialing > 0
                   ? <Button leftIcon={<Play size={12} />} onClick={() => resume(job.id)}>Resume</Button>
                   : null}
             </div>
@@ -549,7 +549,7 @@ export default function BulkTab() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs">
-                    <StatusPill status={j.status} pending={s.pending} small />
+                    <StatusPill status={j.status} remaining={s.pending + s.dialing} small />
                     <Badge tone="ok">{s.connectedLifted.toLocaleString()}</Badge>
                     {s.bad > 0 && <Badge tone="danger">{s.bad.toLocaleString()}</Badge>}
                     <span className="text-muted">/ {s.total.toLocaleString()}</span>
@@ -629,10 +629,13 @@ export default function BulkTab() {
   );
 }
 
-function StatusPill({ status, pending, small }: { status: string; pending: number; small?: boolean }) {
+// `remaining` = rows still recoverable by a Resume (pending + dialing). A paused
+// job with wedged 'dialing' rows has remaining > 0 even though pending is 0, so
+// it reads "paused" (Resume-able), not "stopped" (truly nothing left to dial).
+function StatusPill({ status, remaining, small }: { status: string; remaining: number; small?: boolean }) {
   const map: Record<string, { tone: "ok" | "warn" | "muted"; label: string; dot?: boolean }> = {
     running: { tone: "warn", label: "running", dot: true },
-    paused: { tone: "muted", label: pending > 0 ? "paused" : "stopped" },
+    paused: { tone: "muted", label: remaining > 0 ? "paused" : "stopped" },
     completed: { tone: "ok", label: "complete" },
   };
   const m = map[status] ?? { tone: "muted", label: status };

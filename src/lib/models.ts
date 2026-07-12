@@ -89,6 +89,7 @@ export interface BulkJob {
   delayMs: number;           // optional pacing between claims (0 = run at full concurrency)
   jitterPct?: number;        // 0-80, WhatsApp-only pacing randomness
   status: BulkJobStatus;     // running | paused (Stop) | completed
+  pausedReason?: string;     // why paused: 'low_balance' (worker auto-pause, auto-resumes) vs undefined (user Stop)
   total: number;             // number of recipient rows
   createdAt: string;
   startedAt?: string;

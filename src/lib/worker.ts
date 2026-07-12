@@ -3,8 +3,10 @@ import {
   countDialing,
   countLive,
   countPending,
+  listGatedJobs,
   listRunningJobs,
   migrateBulkJobsFromKv,
+  requeueStaleDialingRows,
   resetDialingRows,
   setJobStatus,
 } from "./bulk";
@@ -53,6 +55,12 @@ const CLAIM_BATCH = Number(process.env.WORKER_CLAIM_BATCH) || 50;
 
 const pumping = new Set<string>();            // jobId -> a pumpJob claim is in progress
 const nextClaimAt = new Map<string, number>(); // jobId -> earliest next claim (delay pacing)
+const ungating = new Set<string>();           // jobId -> an auto-resume check is in progress
+const nextGateCheckAt = new Map<string, number>(); // jobId -> earliest next balance re-check
+// How often to re-check a balance-paused job's wallet before auto-resuming it.
+// Tick runs every 200ms; this throttles the (cheap, indexed) canDial reads and
+// stops a still-underfunded job from flapping every tick.
+const GATE_RECHECK_MS = Number(process.env.WORKER_GATE_RECHECK_MS) || 5000;
 const G = globalThis as unknown as { __ivrWorkerStarted?: boolean };
 
 export async function startWorker(): Promise<void> {
@@ -103,6 +111,46 @@ async function tick(): Promise<void> {
       pumping.delete(job.id),
     );
   }
+
+  await autoResumeGatedJobs(now);
+}
+
+/**
+ * Auto-resume pass: bring back jobs the worker paused for low balance once the
+ * wallet can cover a call again (e.g. after a top-up), so a paused campaign
+ * un-sticks itself without a manual Resume. User-initiated Stops (paused_reason
+ * NULL) are not in this list, so they stay stopped. Each candidate is re-checked
+ * at most every GATE_RECHECK_MS to avoid flapping a still-underfunded job.
+ */
+async function autoResumeGatedJobs(now: number): Promise<void> {
+  let jobs;
+  try {
+    jobs = await listGatedJobs();
+  } catch (e) {
+    console.error("[worker] tick: listGatedJobs failed:", e);
+    return;
+  }
+  for (const job of jobs) {
+    if (job.kind !== "call") continue;
+    if (ungating.has(job.id)) continue;
+    if ((nextGateCheckAt.get(job.id) ?? 0) > now) continue;
+    nextGateCheckAt.set(job.id, now + GATE_RECHECK_MS);
+    ungating.add(job.id);
+    void runWithTenant(job.clientId ?? "", () => tryUngate(job))
+      .catch((e) => console.error(`[worker] auto-resume error ${job.id}:`, e))
+      .finally(() => ungating.delete(job.id));
+  }
+}
+
+async function tryUngate(job: { id: string; clientId?: string }): Promise<void> {
+  const gate = await canDial(job.clientId ?? "");
+  if (!gate.ok) return; // still can't afford a call — leave it gated
+  // Recover any stale 'dialing' rows and flip back to running (clears
+  // paused_reason). The next tick pumps it from the remaining pending rows.
+  await resetDialingRows(job.id);
+  await setJobStatus(job.id, "running");
+  nextGateCheckAt.delete(job.id);
+  console.info(`[worker] job ${job.id} auto-resumed — wallet balance recovered (₹${gate.balance})`);
 }
 
 async function pumpJob(
@@ -135,7 +183,9 @@ async function pumpJob(
   // (no client) return ok with rate 0 and are never capped.
   const gate = await canDial(job.clientId ?? "");
   if (!gate.ok) {
-    await setJobStatus(job.id, "paused");
+    // Tag the pause as balance-gated so the tick's auto-resume pass can bring it
+    // back once the wallet is topped up — no manual Resume needed.
+    await setJobStatus(job.id, "paused", "low_balance");
     console.warn(
       `[worker] job ${job.id} paused — insufficient wallet balance (₹${gate.balance} < ₹${gate.rate}/call)`,
     );
@@ -189,9 +239,19 @@ async function pumpJob(
  * rows still 'dialing'. Calls that are merely 'live' (placed, awaiting hangup)
  * do not block completion — the job is "done dialing", and the hangup webhooks
  * keep finalizing those rows afterward.
+ *
+ * Before checking, sweep any rows wedged in 'dialing' past the live window back
+ * to 'pending' (see requeueStaleDialingRows): those are orphans from a failed
+ * fireOne write that would otherwise keep countDialing > 0 forever and stall the
+ * job at ~99% "running". Re-queued rows re-dial next tick and then finalize.
  */
 async function maybeComplete(jobId: string): Promise<void> {
   try {
+    const requeued = await requeueStaleDialingRows(jobId, MAX_CALL_SEC);
+    if (requeued > 0) {
+      console.warn(`[worker] job ${jobId}: re-queued ${requeued} stale 'dialing' row(s) to pending`);
+      return; // let the next tick claim + finalize them before we consider completion
+    }
     if ((await countPending(jobId)) === 0 && (await countDialing(jobId)) === 0) {
       await setJobStatus(jobId, "completed");
       nextClaimAt.delete(jobId);

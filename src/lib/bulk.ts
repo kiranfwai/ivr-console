@@ -57,6 +57,7 @@ type JobDbRow = {
   delay_ms: number;
   jitter_pct: number | null;
   status: string;
+  paused_reason: string | null;
   total: number;
   created_at: Date;
   started_at: Date | null;
@@ -74,6 +75,7 @@ function mapJob(r: JobDbRow): BulkJob {
     delayMs: r.delay_ms,
     jitterPct: r.jitter_pct ?? undefined,
     status: r.status as BulkJobStatus,
+    pausedReason: r.paused_reason ?? undefined,
     total: r.total,
     createdAt: r.created_at.toISOString(),
     startedAt: r.started_at ? r.started_at.toISOString() : undefined,
@@ -82,7 +84,7 @@ function mapJob(r: JobDbRow): BulkJob {
 }
 
 const JOB_COLS = `id, client_id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct,
-  status, total, created_at, started_at, completed_at`;
+  status, paused_reason, total, created_at, started_at, completed_at`;
 
 function mapRow(r: any): BulkRow {
   return {
@@ -447,15 +449,57 @@ export async function resetDialingRows(jobId: string): Promise<number> {
   return rowCount ?? 0;
 }
 
+/**
+ * Re-queue rows stuck in "dialing" for longer than `maxAgeSec` back to pending.
+ *
+ * A row is normally 'dialing' only for the moment between claim and placeCall
+ * settling (bounded by placeCall's own timeout). But if fireOne's DB writes
+ * (recordCall / updateBulkRow) throw — e.g. transient pressure during a big
+ * burst — the row is never moved off 'dialing' and nothing re-queues it (unlike
+ * resetDialingRows, this doesn't need a boot/resume). `countLive` ages such a
+ * row out of the live cap after the same window, but `countDialing` keeps the
+ * job from ever completing. Sweeping them here lets the tail re-dial, finalize,
+ * and the job complete on its own. Bounded by age so a genuinely in-flight
+ * placement is never yanked.
+ */
+export async function requeueStaleDialingRows(jobId: string, maxAgeSec: number): Promise<number> {
+  const params: any[] = [jobId, maxAgeSec];
+  const t = rowTenant(params);
+  const { rowCount } = await query(
+    `UPDATE bulk_row SET status='pending'
+       WHERE job_id=$1 AND status='dialing'
+         AND (attempted_at IS NULL OR attempted_at < now() - make_interval(secs => $2::int))${t}`,
+    params,
+  );
+  return rowCount ?? 0;
+}
+
 // --- job status (stop / resume / complete) -----------------------------------
 
-export async function setJobStatus(jobId: string, status: BulkJobStatus): Promise<BulkJob | null> {
+/**
+ * `pausedReason` records WHY a job is paused, and is only meaningful when
+ * status='paused': pass 'low_balance' when the worker auto-pauses for wallet
+ * balance (the worker auto-resumes these once the balance recovers). A
+ * user-initiated Stop passes no reason, so paused_reason is cleared to NULL and
+ * the job stays paused until the user resumes. Any non-paused status also clears
+ * it, so a resumed job is never mistaken for still-gated.
+ */
+export async function setJobStatus(
+  jobId: string,
+  status: BulkJobStatus,
+  pausedReason?: string,
+): Promise<BulkJob | null> {
   const completedAt = status === "completed" ? "now()" : "completed_at";
   const startedAt = status === "running" ? "COALESCE(started_at, now())" : "started_at";
   const params: any[] = [jobId, status];
+  // paused_reason = the given reason only while pausing; NULL for running/completed
+  // or a reason-less (user) pause.
+  const reason = status === "paused" ? pausedReason ?? null : null;
+  params.push(reason);
+  const reasonPh = params.length;
   const t = jobTenant(params);
   const { rows } = await query<JobDbRow>(
-    `UPDATE bulk_job SET status=$2, completed_at=${completedAt}, started_at=${startedAt}
+    `UPDATE bulk_job SET status=$2, paused_reason=$${reasonPh}, completed_at=${completedAt}, started_at=${startedAt}
      WHERE id=$1${t} RETURNING ${JOB_COLS}`,
     params,
   );
@@ -470,6 +514,20 @@ export async function setJobStatus(jobId: string, status: BulkJobStatus): Promis
 export async function listRunningJobs(): Promise<BulkJob[]> {
   const { rows } = await query<JobDbRow>(
     `SELECT ${JOB_COLS} FROM bulk_job WHERE status='running' ORDER BY created_at`,
+  );
+  return rows.map(mapJob);
+}
+
+/**
+ * ALL jobs the worker auto-paused for insufficient wallet balance, across every
+ * client (no tenant filter — same rationale as listRunningJobs). The worker
+ * re-checks these each tick and resumes any whose wallet can now cover a call,
+ * so a top-up un-sticks the campaign without a manual Resume. A user Stop
+ * (paused_reason NULL) is intentionally excluded.
+ */
+export async function listGatedJobs(): Promise<BulkJob[]> {
+  const { rows } = await query<JobDbRow>(
+    `SELECT ${JOB_COLS} FROM bulk_job WHERE status='paused' AND paused_reason='low_balance' ORDER BY created_at`,
   );
   return rows.map(mapJob);
 }

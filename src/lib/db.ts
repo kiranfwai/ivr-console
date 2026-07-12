@@ -159,6 +159,14 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE bulk_job ADD COLUMN IF NOT EXISTS client_id text;
     CREATE INDEX IF NOT EXISTS bulk_job_client ON bulk_job (client_id);
 
+    -- Why a job is paused. NULL / '' = a user-initiated Stop (stays paused until
+    -- the user resumes). 'low_balance' = the worker auto-paused it because the
+    -- wallet couldn't cover a call; the worker auto-resumes these once the balance
+    -- recovers, so a top-up un-sticks the campaign without a manual Resume.
+    ALTER TABLE bulk_job ADD COLUMN IF NOT EXISTS paused_reason text;
+    CREATE INDEX IF NOT EXISTS bulk_job_gated ON bulk_job (paused_reason)
+      WHERE status='paused' AND paused_reason='low_balance';
+
     -- Client logins. The admin is env-based (ADMIN_EMAIL / ADMIN_PASSWORD); every
     -- other login is a row here. perms is the JSON array of feature-tab ids the
     -- admin has granted this client (e.g. dial, bulk, reports).
