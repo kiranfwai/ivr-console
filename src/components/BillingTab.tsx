@@ -24,33 +24,91 @@ const TXN_LABEL: Record<WalletTxnApi["type"], { label: string; tone: "ok" | "dan
   refund: { label: "Refund", tone: "ok" },
 };
 
+const PAGE_SIZE = 25;
+type TxnFilter = "all" | "topup" | "usage" | "adjustment";
+const FILTERS: { id: TxnFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "topup", label: "Top-up" },
+  { id: "usage", label: "Usage" },
+  { id: "adjustment", label: "Adjustment" },
+];
+
 export default function BillingTab() {
   const [balance, setBalance] = useState<number | null>(null);
   const [currency, setCurrency] = useState("INR");
   const [txns, setTxns] = useState<WalletTxnApi[] | null>(null);
+  const [txnLoading, setTxnLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [filter, setFilter] = useState<TxnFilter>("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [topupOpen, setTopupOpen] = useState(false);
   const [success, setSuccess] = useState<{ amount: number | null } | null>(null);
   const verifiedRef = useRef(false);
 
-  const load = useCallback(async () => {
-    setErr(null);
+  const loadBalance = useCallback(async () => {
     try {
-      const [w, t] = await Promise.all([
-        api<{ balance: number; currency: string }>("/api/wallet"),
-        api<{ transactions: WalletTxnApi[] }>("/api/wallet/transactions?limit=200"),
-      ]);
+      const w = await api<{ balance: number; currency: string }>("/api/wallet");
       setBalance(w.balance);
       setCurrency(w.currency || "INR");
-      setTxns(t.transactions);
     } catch (e: any) {
       setErr(String(e?.message || e));
     }
   }, []);
 
+  // Shared query string for the ledger list + CSV export (type + date filters).
+  const txnQuery = useCallback(() => {
+    const p = new URLSearchParams();
+    p.set("type", filter);
+    if (from) p.set("from", `${from}T00:00:00.000`);
+    if (to) p.set("to", `${to}T23:59:59.999`);
+    return p;
+  }, [filter, from, to]);
+
+  const loadTxns = useCallback(async () => {
+    setTxnLoading(true);
+    setErr(null);
+    try {
+      const p = txnQuery();
+      // Fetch one extra row to know whether a next page exists.
+      p.set("limit", String(PAGE_SIZE + 1));
+      p.set("offset", String(page * PAGE_SIZE));
+      const t = await api<{ transactions: WalletTxnApi[] }>(`/api/wallet/transactions?${p.toString()}`);
+      setHasMore(t.transactions.length > PAGE_SIZE);
+      setTxns(t.transactions.slice(0, PAGE_SIZE));
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    }
+    setTxnLoading(false);
+  }, [txnQuery, page]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    loadBalance();
+  }, [loadBalance]);
+
+  useEffect(() => {
+    loadTxns();
+  }, [loadTxns]);
+
+  // Changing a filter or date range starts back at the first page.
+  function changeFilter(f: TxnFilter) {
+    setFilter(f);
+    setPage(0);
+  }
+  function changeFrom(v: string) {
+    setFrom(v);
+    setPage(0);
+  }
+  function changeTo(v: string) {
+    setTo(v);
+    setPage(0);
+  }
+  function refresh() {
+    loadBalance();
+    loadTxns();
+  }
 
   // Coming back from Cashfree checkout: verify the order, then clean the URL.
   useEffect(() => {
@@ -75,10 +133,11 @@ export default function BillingTab() {
         const url = new URL(window.location.href);
         url.searchParams.delete("cf_order");
         window.history.replaceState(null, "", url);
-        load();
+        loadBalance();
+        loadTxns();
       }
     })();
-  }, [load]);
+  }, [loadBalance, loadTxns]);
 
   return (
     <Section>
@@ -114,14 +173,14 @@ export default function BillingTab() {
         action={
           <div className="flex items-center gap-1.5">
             <button
-              onClick={load}
+              onClick={refresh}
               className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
               title="Refresh"
             >
-              <RefreshCw size={13} /> Refresh
+              <RefreshCw size={13} className={txnLoading ? "animate-spin" : ""} /> Refresh
             </button>
             <a
-              href="/api/wallet/transactions/csv"
+              href={`/api/wallet/transactions/csv?${txnQuery().toString()}`}
               className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
             >
               <Download size={13} /> Export CSV
@@ -129,6 +188,55 @@ export default function BillingTab() {
           </div>
         }
       >
+        {/* Filters: type segmented control + date range */}
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="inline-flex p-0.5 bg-elev/60 border border-line rounded-lg">
+            {FILTERS.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => changeFilter(f.id)}
+                className={`px-2.5 py-1 rounded-md text-xs transition-all ${
+                  filter === f.id ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 ml-auto">
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => changeFrom(e.target.value)}
+              className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2 py-1.5 text-xs outline-none"
+              title="From date"
+            />
+            <span className="text-muted text-xs">→</span>
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => changeTo(e.target.value)}
+              className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2 py-1.5 text-xs outline-none"
+              title="To date"
+            />
+            {(from || to) && (
+              <button
+                onClick={() => {
+                  setFrom("");
+                  setTo("");
+                  setPage(0);
+                }}
+                className="text-xs text-muted hover:text-ink px-1.5 py-1 rounded-md hover:bg-elev"
+                title="Clear dates"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
         {txns === null ? (
           <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
             <Spinner size={16} /> Loading…
@@ -136,45 +244,78 @@ export default function BillingTab() {
         ) : txns.length === 0 ? (
           <EmptyState
             icon={<Wallet size={20} />}
-            title="No transactions yet"
-            description="Top up your wallet to start — charges from connected calls will appear here."
+            title={filter !== "all" || from || to ? "No matching transactions" : "No transactions yet"}
+            description={
+              filter !== "all" || from || to
+                ? "No transactions match these filters. Try a wider date range or a different type."
+                : "Top up your wallet to start — charges from connected calls will appear here."
+            }
           />
         ) : (
-          <div className="overflow-auto -mx-1">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                  <th className="font-medium py-2 px-1">Date</th>
-                  <th className="font-medium px-1">Type</th>
-                  <th className="font-medium px-1">Description</th>
-                  <th className="font-medium px-1 text-right">Amount</th>
-                  <th className="font-medium px-1 text-right">Balance after</th>
-                </tr>
-              </thead>
-              <tbody>
-                {txns.map((t) => {
-                  const positive = t.amount >= 0;
-                  const meta = TXN_LABEL[t.type];
-                  return (
-                    <tr key={t.id} className="border-t border-line hover:bg-elev/40 transition-colors">
-                      <td className="py-2 px-1 whitespace-nowrap text-muted text-xs">{formatDate(t.createdAt)}</td>
-                      <td className="px-1">
-                        <Badge tone={meta.tone}>{meta.label}</Badge>
-                      </td>
-                      <td className="px-1 max-w-[240px] truncate text-ink2">{t.description}</td>
-                      <td className={`px-1 text-right font-mono tabular-nums ${positive ? "text-ok" : "text-danger"}`}>
-                        {positive ? "+" : "−"}
-                        {formatINR(Math.abs(t.amount))}
-                      </td>
-                      <td className="px-1 text-right font-mono tabular-nums text-ink2">
-                        {formatINR(t.balanceAfter)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="overflow-auto -mx-1">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+                    <th className="font-medium py-2 px-1">Date</th>
+                    <th className="font-medium px-1">Type</th>
+                    <th className="font-medium px-1">Description</th>
+                    <th className="font-medium px-1 text-right">Amount</th>
+                    <th className="font-medium px-1 text-right">Balance after</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {txns.map((t) => {
+                    const positive = t.amount >= 0;
+                    const meta = TXN_LABEL[t.type];
+                    return (
+                      <tr key={t.id} className="border-t border-line hover:bg-elev/40 transition-colors">
+                        <td className="py-2 px-1 whitespace-nowrap text-muted text-xs">{formatDate(t.createdAt)}</td>
+                        <td className="px-1">
+                          <Badge tone={meta.tone}>{meta.label}</Badge>
+                        </td>
+                        <td className="px-1 max-w-[240px] truncate text-ink2">{t.description}</td>
+                        <td className={`px-1 text-right font-mono tabular-nums ${positive ? "text-ok" : "text-danger"}`}>
+                          {positive ? "+" : "−"}
+                          {formatINR(Math.abs(t.amount))}
+                        </td>
+                        <td className="px-1 text-right font-mono tabular-nums text-ink2">
+                          {formatINR(t.balanceAfter)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            <div className="flex items-center justify-between gap-3 pt-3 mt-1 border-t border-line/60">
+              <span className="text-xs text-muted tabular-nums">
+                {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + txns.length}
+                {page === 0 && !hasMore ? ` · ${txns.length} total` : ""}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={page === 0 || txnLoading}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                >
+                  Prev
+                </Button>
+                <span className="text-xs text-muted tabular-nums px-1">Page {page + 1}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!hasMore || txnLoading}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </>
         )}
       </Card>
 

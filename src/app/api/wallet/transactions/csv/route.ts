@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentClientId } from "@/lib/tenant";
 import { listTxns } from "@/lib/wallet";
+import { txnTypesForFilter } from "@/lib/txn-filter";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,8 +19,9 @@ export async function GET(req: NextRequest) {
   const u = new URL(req.url);
   const from = u.searchParams.get("from") || undefined;
   const to = u.searchParams.get("to") || undefined;
+  const types = txnTypesForFilter(u.searchParams.get("type"));
 
-  const txns = await listTxns(clientId, { from, to, limit: 5000 });
+  const txns = await listTxns(clientId, { from, to, types, limit: 5000 });
   const header = ["Date", "Type", "Description", "Amount (INR)", "Balance after (INR)", "Reference"];
   const lines = [header.join(",")];
   for (const t of txns) {

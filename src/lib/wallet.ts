@@ -262,7 +262,7 @@ export async function creditOrderPaid(orderId: string): Promise<{ credited: bool
 /** Ledger rows, newest first. Optional IST-agnostic ISO date-range filter. */
 export async function listTxns(
   clientId: string,
-  opts?: { limit?: number; offset?: number; from?: string; to?: string },
+  opts?: { limit?: number; offset?: number; from?: string; to?: string; types?: string[] },
 ): Promise<WalletTxn[]> {
   if (!clientId) return [];
   const params: any[] = [clientId];
@@ -274,6 +274,10 @@ export async function listTxns(
   if (opts?.to) {
     params.push(opts.to);
     where += ` AND created_at <= $${params.length}`;
+  }
+  if (opts?.types && opts.types.length) {
+    params.push(opts.types);
+    where += ` AND type = ANY($${params.length})`;
   }
   const limit = Math.min(Math.max(1, opts?.limit ?? 100), 5000);
   params.push(limit);
