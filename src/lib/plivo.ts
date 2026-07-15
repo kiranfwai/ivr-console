@@ -243,6 +243,99 @@ export async function testPlivoCreds(
   }
 }
 
+export interface AvailableNumber {
+  number: string;            // digits (no +)
+  country: string;
+  region: string;
+  numberType: string;        // fixed | mobile | tollfree
+  monthlyRentalRate: string;
+  setupRate: string;
+  voiceEnabled: boolean;
+  smsEnabled: boolean;
+}
+
+/**
+ * Search Plivo numbers available to BUY on the given account. `countryIso` is a
+ * 2-letter code (e.g. "IN", "US"); `type` is fixed|mobile|tollfree (omit for
+ * any). Returns up to 20. Voice-capable only (this is an IVR dialer).
+ */
+export async function searchAvailableNumbers(
+  creds: { authId: string; authToken: string },
+  opts: { countryIso: string; type?: string; pattern?: string },
+): Promise<AvailableNumber[]> {
+  const params = new URLSearchParams();
+  params.set("country_iso", opts.countryIso);
+  params.set("services", "voice");
+  params.set("limit", "20");
+  if (opts.type) params.set("type", opts.type);
+  if (opts.pattern) params.set("pattern", opts.pattern);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(
+      `https://api.plivo.com/v1/Account/${creds.authId}/PhoneNumber/?${params.toString()}`,
+      { headers: { Authorization: authHeader(creds.authId, creds.authToken) }, signal: controller.signal },
+    );
+    if (!res.ok) {
+      const body: any = await res.json().catch(() => null);
+      const msg = body?.error || body?.message || `Plivo search failed (HTTP ${res.status})`;
+      throw new Error(String(msg));
+    }
+    const json: any = await res.json();
+    const objects: any[] = Array.isArray(json?.objects) ? json.objects : [];
+    return objects.map((o) => ({
+      number: String(o?.number ?? ""),
+      country: String(o?.country ?? ""),
+      region: String(o?.region ?? ""),
+      numberType: String(o?.type ?? o?.number_type ?? ""),
+      monthlyRentalRate: String(o?.monthly_rental_rate ?? ""),
+      setupRate: String(o?.setup_rate ?? ""),
+      voiceEnabled: !!o?.voice_enabled,
+      smsEnabled: !!o?.sms_enabled,
+    }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Rent (buy) a Plivo number onto the given account. Costs real money on that
+ * account's balance. Returns Plivo's status + any message (e.g. a KYC /
+ * compliance block for India numbers surfaces here).
+ */
+export async function buyNumber(
+  creds: { authId: string; authToken: string },
+  number: string,
+): Promise<{ ok: boolean; status: number; message: string }> {
+  const digits = String(number || "").replace(/\D+/g, "");
+  if (!digits) return { ok: false, status: 400, message: "invalid number" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(
+      `https://api.plivo.com/v1/Account/${creds.authId}/PhoneNumber/${digits}/`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: authHeader(creds.authId, creds.authToken) },
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      },
+    );
+    let message = "";
+    try {
+      const j: any = await res.json();
+      message = j?.message || j?.error || (Array.isArray(j?.numbers) ? j.numbers[0]?.status : "") || "";
+    } catch {
+      /* non-JSON body */
+    }
+    return { ok: res.ok, status: res.status, message: String(message || (res.ok ? "purchased" : `HTTP ${res.status}`)) };
+  } catch (e: any) {
+    return { ok: false, status: 0, message: e?.name === "AbortError" ? "timeout" : String(e?.message || "error") };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function listRecentCalls(limit = 20, offset = 0) {
   const res = await fetch(
     `https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/?limit=${limit}&offset=${offset}`,

@@ -1,5 +1,11 @@
 import { getClientPlivoCreds } from "./plivo-config";
-import { listAccountNumbers, type PlivoNumber } from "./plivo";
+import {
+  listAccountNumbers,
+  searchAvailableNumbers,
+  buyNumber,
+  type PlivoNumber,
+  type AvailableNumber,
+} from "./plivo";
 
 /**
  * A client's own Plivo caller-ID numbers.
@@ -47,4 +53,36 @@ export async function getClientAccountNumbers(clientId: string): Promise<ClientA
     .map((n) => ({ ...n, e164: toE164(n.number), isDefault: !!defKey && numKey(n.number) === defKey }))
     .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.number.localeCompare(b.number));
   return { connected: true, numbers: decorated, total, defaultFrom: creds.fromNumber };
+}
+
+export interface AvailableForBuy extends AvailableNumber {
+  e164: string;
+}
+
+/**
+ * Search numbers this client can buy — ON THEIR OWN connected account. A client
+ * that hasn't connected can't search/buy (we'd otherwise be spending on the
+ * shared FWAI account), so `connected:false` is returned instead.
+ */
+export async function searchNumbersForClient(
+  clientId: string,
+  opts: { countryIso: string; type?: string; pattern?: string },
+): Promise<{ connected: boolean; numbers: AvailableForBuy[] }> {
+  const creds = await getClientPlivoCreds(clientId);
+  if (creds.source !== "client") return { connected: false, numbers: [] };
+  const found = await searchAvailableNumbers({ authId: creds.authId, authToken: creds.authToken }, opts);
+  return { connected: true, numbers: found.map((n) => ({ ...n, e164: toE164(n.number) })) };
+}
+
+/** Buy a number onto this client's own connected account. */
+export async function buyNumberForClient(
+  clientId: string,
+  number: string,
+): Promise<{ connected: boolean; ok: boolean; status: number; message: string }> {
+  const creds = await getClientPlivoCreds(clientId);
+  if (creds.source !== "client") {
+    return { connected: false, ok: false, status: 400, message: "Connect your own Plivo account first." };
+  }
+  const r = await buyNumber({ authId: creds.authId, authToken: creds.authToken }, number);
+  return { connected: true, ...r };
 }

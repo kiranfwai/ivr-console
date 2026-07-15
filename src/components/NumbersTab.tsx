@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Phone, Download, Search, Link2, Link2Off, CheckCircle2, Star } from "lucide-react";
+import { Phone, Download, Search, Link2, Link2Off, CheckCircle2, Star, ShoppingCart } from "lucide-react";
 import {
   Button,
   Card,
   Section,
   Input,
   Label,
+  Select,
+  Modal,
   Badge,
   Spinner,
   EmptyState,
@@ -52,6 +54,7 @@ export default function NumbersTab() {
   const [data, setData] = useState<NumbersResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
+  const [buyOpen, setBuyOpen] = useState(false);
 
   const loadConfig = useCallback(async () => {
     const c = await api<PlivoConfig>("/api/plivo-config").catch(() => null);
@@ -110,6 +113,9 @@ export default function NumbersTab() {
           action={
             <div className="flex items-center gap-2">
               <Badge tone="accent">{numbers.length} total</Badge>
+              <Button size="sm" leftIcon={<ShoppingCart size={13} />} onClick={() => setBuyOpen(true)}>
+                Buy number
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -196,7 +202,140 @@ export default function NumbersTab() {
           )}
         </Card>
       )}
+
+      <BuyNumberModal open={buyOpen} onClose={() => setBuyOpen(false)} onBought={reload} />
     </Section>
+  );
+}
+
+interface AvailableNumber {
+  number: string;
+  e164: string;
+  country: string;
+  region: string;
+  numberType: string;
+  monthlyRentalRate: string;
+  setupRate: string;
+  voiceEnabled: boolean;
+  smsEnabled: boolean;
+}
+
+const BUY_COUNTRIES = [
+  { iso: "IN", label: "India (IN)" },
+  { iso: "US", label: "United States (US)" },
+  { iso: "GB", label: "United Kingdom (GB)" },
+  { iso: "CA", label: "Canada (CA)" },
+  { iso: "AU", label: "Australia (AU)" },
+  { iso: "SG", label: "Singapore (SG)" },
+  { iso: "AE", label: "UAE (AE)" },
+];
+
+/** Search Plivo numbers available to buy on the client's account, and rent one. */
+function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: () => void; onBought: () => void }) {
+  const [country, setCountry] = useState("IN");
+  const [type, setType] = useState("");
+  const [pattern, setPattern] = useState("");
+  const [results, setResults] = useState<AvailableNumber[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [buying, setBuying] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function search() {
+    setSearching(true);
+    setErr(null);
+    setResults(null);
+    try {
+      const qs = new URLSearchParams({ country });
+      if (type) qs.set("type", type);
+      if (pattern.trim()) qs.set("pattern", pattern.trim());
+      const r = await api<{ connected: boolean; numbers: AvailableNumber[] }>(`/api/numbers/search?${qs.toString()}`);
+      if (!r.connected) {
+        setErr("Connect your Plivo account first.");
+      } else {
+        setResults(r.numbers);
+      }
+    } catch (e: any) {
+      setErr(e.message || "Search failed");
+    }
+    setSearching(false);
+  }
+
+  async function buy(n: AvailableNumber) {
+    if (!window.confirm(`Rent ${n.e164} for ${n.monthlyRentalRate || "?"} / month on your Plivo account? This charges your Plivo balance.`)) return;
+    setBuying(n.number);
+    try {
+      await api("/api/numbers/buy", { method: "POST", body: JSON.stringify({ number: n.number }) });
+      toast(`Bought ${n.e164}.`, "ok");
+      setResults((cur) => (cur ? cur.filter((x) => x.number !== n.number) : cur));
+      onBought();
+    } catch (e: any) {
+      toast(e.message || "Purchase failed", "danger");
+    }
+    setBuying("");
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Buy a number" size="md">
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div>
+            <Label>Country</Label>
+            <Select value={country} onChange={(e) => setCountry(e.target.value)}>
+              {BUY_COUNTRIES.map((c) => (
+                <option key={c.iso} value={c.iso}>{c.label}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label>Type</Label>
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              <option value="">Any</option>
+              <option value="fixed">Local / landline</option>
+              <option value="mobile">Mobile</option>
+              <option value="tollfree">Toll-free</option>
+            </Select>
+          </div>
+          <div>
+            <Label hint="optional">Starts with</Label>
+            <Input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder="e.g. 80" />
+          </div>
+        </div>
+        <Button onClick={search} loading={searching} leftIcon={<Search size={14} />}>Search available</Button>
+
+        {country === "IN" && (
+          <div className="text-xs text-warn bg-warn/5 border border-warn/20 rounded-lg px-3 py-2">
+            India numbers require completed KYC / address verification on your Plivo account. If a purchase is blocked,
+            finish verification in the Plivo console, then try again.
+          </div>
+        )}
+
+        {err && <div className="text-sm text-danger">{err}</div>}
+
+        {results && (
+          results.length === 0 ? (
+            <div className="text-sm text-muted py-4 text-center">No available numbers for this search.</div>
+          ) : (
+            <div className="max-h-72 overflow-auto space-y-1 border border-line rounded-lg p-2">
+              {results.map((n) => (
+                <div key={n.number} className="flex items-center justify-between gap-2 rounded-lg bg-bg/50 px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="font-mono text-sm tabular-nums">{n.e164}</div>
+                    <div className="text-[11px] text-muted truncate">
+                      {[n.numberType, n.region || n.country].filter(Boolean).join(" · ")}
+                      {n.monthlyRentalRate ? ` · ${n.monthlyRentalRate}/mo` : ""}
+                      {n.setupRate && n.setupRate !== "0" && n.setupRate !== "0.00000" ? ` · setup ${n.setupRate}` : ""}
+                    </div>
+                  </div>
+                  <Button size="sm" leftIcon={<ShoppingCart size={13} />} loading={buying === n.number} onClick={() => buy(n)}>
+                    Buy
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+    </Modal>
   );
 }
 
