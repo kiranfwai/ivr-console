@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Phone, LogIn, AlertCircle } from "lucide-react";
+import { LogIn, AlertCircle } from "lucide-react";
 import { Button, Input, Label, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
@@ -62,11 +62,13 @@ function LoginForm() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="flex flex-col items-center mb-8">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand to-brand2 flex items-center justify-center text-bg shadow-glow mb-3">
-            <Phone size={20} strokeWidth={2.5} />
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/fwai-logo.png"
+            alt="FWAI"
+            className="w-12 h-12 rounded-xl shadow-glow mb-3"
+          />
           <div className="text-lg font-semibold">IVR Console</div>
-          <div className="text-xs text-muted mt-1">FWAI — outbound + WhatsApp control</div>
         </div>
 
         <form
@@ -115,10 +117,6 @@ function LoginForm() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
-
-        <div className="text-center mt-6 text-xs text-muted">
-          v2 · Upstash Redis · Vercel Blob
-        </div>
       </div>
     </div>
   );
