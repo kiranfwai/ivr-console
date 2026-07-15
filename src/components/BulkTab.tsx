@@ -23,6 +23,7 @@ function summarize(job: BulkJobWithCounts) {
   const press1 = c.press1 ?? 0, connected = c.connected ?? 0, ok = c.ok ?? 0;
   const busy = c.busy ?? 0, noAnswer = c["no-answer"] ?? 0, rejected = c.rejected ?? 0;
   const error = c.error ?? 0, failed = c.failed ?? 0;
+  const skipped = c.dnd ?? 0; // on the client's DND list — intentionally not dialed
   const pending = c.pending ?? 0, dialing = c.dialing ?? 0;
   const total = job.total || 0;
   // "Connected (lifted)" = calls Plivo confirmed were answered. This MUST match the
@@ -36,12 +37,15 @@ function summarize(job: BulkJobWithCounts) {
   // (won't be retried), so it counts toward "done", just not toward "connected".
   const good = connectedLifted + ok;
   const bad = busy + noAnswer + rejected + error + failed;
+  // 'dialed' = anything no longer awaiting placement (includes DND-skipped rows,
+  // which are terminal). 'skipped' also counts toward "done" so a job with DND
+  // rows still reaches 100% and never looks stuck.
   const dialed = total - pending - dialing;
   return {
-    press1, connected, ok, busy, noAnswer, rejected, error, failed, pending, dialing,
+    press1, connected, ok, busy, noAnswer, rejected, error, failed, skipped, pending, dialing,
     total, good, connectedLifted, bad, dialed,
     retryable: busy + noAnswer + error + failed,
-    donePct: total ? Math.round(((good + bad) / total) * 100) : 0,
+    donePct: total ? Math.round(((good + bad + skipped) / total) * 100) : 0,
   };
 }
 
@@ -479,6 +483,7 @@ export default function BulkTab() {
             <Stat label="Rejected" value={counts.rejected} tone="danger" />
             <Stat label="Error" value={counts.error + counts.failed} tone="danger" />
             <Stat label="Pending" value={counts.pending} tone="muted" />
+            {counts.skipped > 0 && <Stat label="Skipped (DND)" value={counts.skipped} tone="muted" />}
             <Stat label="Total" value={counts.total} tone="muted" />
           </div>
 
@@ -666,9 +671,10 @@ function RowStatus({ row }: { row: BulkRow }) {
   const tone =
     row.status === "press1" || row.status === "connected" || row.status === "ok" ? "text-ok"
       : row.status === "dialing" ? "text-warn"
-      : row.status === "pending" ? "text-muted"
+      : row.status === "pending" || row.status === "dnd" ? "text-muted"
       : "text-danger";
-  return <span className={`${tone} whitespace-nowrap`}>{row.status}{row.hangupCause ? ` · ${row.hangupCause}` : ""}</span>;
+  const label = row.status === "dnd" ? "skipped · DND" : row.status;
+  return <span className={`${tone} whitespace-nowrap`}>{label}{row.hangupCause ? ` · ${row.hangupCause}` : ""}</span>;
 }
 
 // Real-time dialing dashboard (FEATURE 2). Percentages are of *dialed* (settled)
@@ -890,6 +896,9 @@ function CampaignSummaryModal({ data, onClose, onNew }: { data: SummaryData; onC
         <SumRow label="Busy" value={`${busy.toLocaleString()}`} pct={`${pctOf(busy, dialed)}%`} tone="text-warn" />
         <SumRow label="No Answer" value={`${noAnswer.toLocaleString()}`} pct={`${pctOf(noAnswer, dialed)}%`} tone="text-warn" />
         <SumRow label="Failed / Error" value={`${failedError.toLocaleString()}`} pct={`${pctOf(failedError, total)}%`} tone="text-danger" />
+        {c.skipped > 0 && (
+          <SumRow label="Skipped (DND)" value={`${c.skipped.toLocaleString()}`} pct={`${pctOf(c.skipped, total)}%`} tone="text-muted" />
+        )}
         <div className="h-px bg-line my-2.5" />
         <SumRow label="Avg Call Duration" value={`${avgDur} seconds`} />
         <SumRow label="Total Duration" value={`~${formatCallTime(data.durationSum)} of call time`} />

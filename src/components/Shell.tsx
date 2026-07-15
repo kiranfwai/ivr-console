@@ -12,6 +12,7 @@ import {
   Wallet,
   ShieldCheck,
   Coins,
+  Ban,
   LogOut,
   Menu,
   X,
@@ -27,6 +28,7 @@ export type TabId =
   | "reports"
   | "whatsapp"
   | "billing"
+  | "dnd"
   | "admin"
   | "adminReports"
   | "adminCalls"
@@ -38,6 +40,7 @@ const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
   { id: "bulk",       label: "Bulk calls", icon: <Users size={16} />,        group: "Call" },
   { id: "campaigns",  label: "Campaigns",  icon: <Megaphone size={16} />,    group: "Manage" },
   { id: "audios",     label: "Audios",     icon: <Music size={16} />,        group: "Manage" },
+  { id: "dnd",        label: "Do Not Disturb", icon: <Ban size={16} />,      group: "Manage" },
   { id: "reports",    label: "Reports",    icon: <BarChart3 size={16} />,    group: "Insights" },
   { id: "whatsapp",   label: "WhatsApp",   icon: <MessageCircle size={16} />, group: "Insights" },
   { id: "billing",    label: "Billing",    icon: <Wallet size={16} />,       group: "Billing" },

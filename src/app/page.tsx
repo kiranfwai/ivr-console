@@ -9,6 +9,7 @@ import AudiosTab from "@/components/AudiosTab";
 import ReportsTab from "@/components/ReportsTab";
 import WhatsAppTab from "@/components/WhatsAppTab";
 import BillingTab from "@/components/BillingTab";
+import DndTab from "@/components/DndTab";
 import AdminTab, { type AdminView } from "@/components/AdminTab";
 import { Spinner, Toaster } from "@/components/ui";
 import { Shell, TabId } from "@/components/Shell";
@@ -21,6 +22,7 @@ const META: Record<TabId, { title: string; desc: string }> = {
   reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
   whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
   billing:   { title: "Billing",         desc: "Wallet balance, top-ups, transactions and phone numbers" },
+  dnd:       { title: "Do Not Disturb",  desc: "Numbers that must never be called — skipped across single, trigger and bulk" },
   admin:          { title: "Clients",       desc: "Create client logins and set feature permissions" },
   adminReports:   { title: "Reports",       desc: "Client-wise volumes, outcomes and lift" },
   adminCalls:     { title: "Callers",       desc: "Every number dialed — per client, date range and charge" },
@@ -112,12 +114,15 @@ export default function Page() {
       if (viewClient) {
         // In client view. Until the client list loads (perms unknown), show the
         // full data-tab set optimistically; narrow to the client's grants once known.
+        // DND is always available to every client (not a gated feature).
         const perms = selectedClient?.perms;
-        return perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
+        const base = perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
+        return [...base, "dnd"];
       }
       return [...ADMIN_TABS];
     }
-    return DATA_TABS.filter((t) => me.perms.includes(t));
+    // Every client always gets the DND tab regardless of their feature grants.
+    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "dnd"];
   }, [me, isAdmin, viewClient, selectedClient]);
 
   // Load the client list for the admin's "viewing as" switcher.
@@ -273,6 +278,7 @@ export default function Page() {
             {tab === "reports" && <ReportsTab />}
             {tab === "whatsapp" && <WhatsAppTab />}
             {tab === "billing" && <BillingTab />}
+            {tab === "dnd" && <DndTab />}
           </div>
         )}
       </Shell>

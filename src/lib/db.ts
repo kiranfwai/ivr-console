@@ -140,7 +140,7 @@ async function bootstrap(): Promise<void> {
       phone        text NOT NULL,
       name         text,
       email        text,
-      status       text NOT NULL DEFAULT 'pending',  -- pending|dialing|ok|failed|press1|connected|busy|no-answer|rejected|error
+      status       text NOT NULL DEFAULT 'pending',  -- pending|dialing|ok|failed|press1|connected|busy|no-answer|rejected|error|dnd
       call_uuid    text,
       error        text,
       hangup_cause text,

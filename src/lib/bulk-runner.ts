@@ -3,6 +3,7 @@ import { placeCall } from "./plivo";
 import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
 import { currentClientId } from "./tenant";
+import { isDnd } from "./dnd";
 import type { Campaign } from "./models";
 
 export interface ClaimedRow {
@@ -29,6 +30,18 @@ export async function fireOne(
     await updateBulkRow(jobId, row.index, {
       status: "failed",
       error: "invalid phone",
+      attemptedAt: new Date().toISOString(),
+    });
+    return { ok: false };
+  }
+
+  // Do-Not-Disturb: skip numbers on the client's DND list. Terminal outcome
+  // ('dnd'), so the worker never re-dials it and the job still completes — but
+  // no call is placed, no record is written, and no wallet charge is incurred.
+  if (await isDnd(to)) {
+    await updateBulkRow(jobId, row.index, {
+      status: "dnd",
+      error: "on DND list",
       attemptedAt: new Date().toISOString(),
     });
     return { ok: false };

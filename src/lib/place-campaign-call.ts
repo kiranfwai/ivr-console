@@ -4,6 +4,7 @@ import { recordCall } from "./calls";
 import { updateBulkRow } from "./bulk";
 import { currentClientId } from "./tenant";
 import { canDial } from "./wallet";
+import { isDnd } from "./dnd";
 import type { Campaign, CallRecord } from "./models";
 
 /** Thrown by placeCampaignCall when the client's prepaid wallet can't cover a call. */
@@ -12,6 +13,15 @@ export class InsufficientBalanceError extends Error {
   constructor(public balance: number, public rate: number) {
     super("insufficient_balance");
     this.name = "InsufficientBalanceError";
+  }
+}
+
+/** Thrown by placeCampaignCall when the number is on the client's Do-Not-Disturb list. */
+export class DndSkipError extends Error {
+  code = "dnd" as const;
+  constructor(public to: string) {
+    super("dnd");
+    this.name = "DndSkipError";
   }
 }
 
@@ -56,6 +66,20 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   // Carry the owning client on the webhook URLs so Plivo's (session-less)
   // answer/dtmf/hangup callbacks re-enter this client's data scope.
   const clientId = currentClientId() ?? "";
+
+  // Do-Not-Disturb gate: never dial a number on this client's DND list, even if
+  // it's present in a campaign / bulk upload. Mark the linked bulk row (if any)
+  // as skipped and abort — no Plivo call, no call record, no wallet charge.
+  if (await isDnd(to)) {
+    if (bulkJobId && typeof bulkRowIndex === "number") {
+      await updateBulkRow(bulkJobId, bulkRowIndex, {
+        status: "dnd",
+        error: "on DND list",
+        attemptedAt: new Date().toISOString(),
+      });
+    }
+    throw new DndSkipError(to);
+  }
 
   // Prepaid gate: block dialing when the wallet can't cover a connected call.
   const gate = await canDial(clientId);

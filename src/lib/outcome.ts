@@ -66,5 +66,5 @@ export function deriveOutcome(
 /** Statuses worth retrying in a "retry failed" run. */
 export const RETRY_STATUSES = new Set<BulkRowStatus>(["no-answer", "busy", "error", "failed"]);
 
-/** Statuses you shouldn't retry (already engaged or known-bad number). */
-export const SKIP_RETRY_STATUSES = new Set<BulkRowStatus>(["press1", "connected", "rejected", "ok"]);
+/** Statuses you shouldn't retry (already engaged, known-bad number, or DND-skipped). */
+export const SKIP_RETRY_STATUSES = new Set<BulkRowStatus>(["press1", "connected", "rejected", "ok", "dnd"]);

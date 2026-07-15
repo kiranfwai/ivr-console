@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { constantTimeEqual } from "@/lib/hmac";
 import { findCampaignByNameOrId } from "@/lib/campaigns";
-import { placeCampaignCall, InsufficientBalanceError } from "@/lib/place-campaign-call";
+import { placeCampaignCall, InsufficientBalanceError, DndSkipError } from "@/lib/place-campaign-call";
 import { runWithTenant } from "@/lib/tenant";
 import { getClient } from "@/lib/clients";
 
@@ -71,6 +71,17 @@ export async function POST(req: NextRequest) {
     try {
       result = await placeCampaignCall({ campaign, phone, callerName: name, email, req });
     } catch (e) {
+      if (e instanceof DndSkipError) {
+        // Number is on the client's DND list — intentionally skipped, not an error.
+        return NextResponse.json({
+          success: true,
+          skipped: true,
+          reason: "dnd",
+          message: "contact is on the DND list — call skipped",
+          campaign: campaign.name,
+          contact: name,
+        });
+      }
       if (e instanceof InsufficientBalanceError) {
         return fail("insufficient wallet balance — top up to place calls", 402, {
           code: "insufficient_balance",

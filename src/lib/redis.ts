@@ -158,6 +158,16 @@ function makeApi(q: (text: string, params?: any[]) => Promise<{ rows: any[]; row
       return rows.map((r) => r.member as string);
     },
 
+    async sismember(key: string, member: string): Promise<boolean> {
+      const { rows } = await q(`SELECT 1 FROM sset WHERE k=$1 AND member=$2 LIMIT 1`, [scopeKey(key), member]);
+      return rows.length > 0;
+    },
+
+    async scard(key: string): Promise<number> {
+      const { rows } = await q(`SELECT count(*)::int AS n FROM sset WHERE k=$1`, [scopeKey(key)]);
+      return rows[0]?.n ?? 0;
+    },
+
     async hset(key: string, obj: Record<string, unknown>): Promise<number> {
       const k = scopeKey(key);
       const entries = Object.entries(obj);

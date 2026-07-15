@@ -55,7 +55,8 @@ export type BulkRowStatus =
   | "busy"        // line busy
   | "no-answer"   // rang, not picked up
   | "rejected"    // invalid number / blocked
-  | "error";      // carrier / Plivo error reaching answer URL
+  | "error"       // carrier / Plivo error reaching answer URL
+  | "dnd";        // skipped: number is on the client's Do-Not-Disturb list (never dialed)
 
 export interface BulkRow {
   idx?: number;              // row index within the job (stable, 0-based)
