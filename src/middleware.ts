@@ -12,6 +12,7 @@ const PUBLIC_PREFIXES = [
   "/audios",
   "/_next",
   "/favicon",
+  "/fwai-logo", // login-page logo, served before auth
 ];
 
 // Admin-only. Everything under here requires role === "admin".
