@@ -69,6 +69,7 @@ export default function BulkTab() {
   const [job, setJob] = useState<BulkJobWithCounts | null>(null);
   const [log, setLog] = useState<BulkRow[]>([]);
   const [failed, setFailed] = useState<BulkRow[]>([]);
+  const [skipped, setSkipped] = useState<BulkRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [confirm, setConfirm] = useState<null | "warn" | "blocked">(null); // FEATURE 4
   const [testPhone, setTestPhone] = useState(""); // FEATURE 5 — test call before launch
@@ -130,6 +131,9 @@ export default function BulkTab() {
         }
         api<{ rows: BulkRow[] }>(`/api/bulk/${activeJobId}/rows?view=failed&limit=100`)
           .then((r) => alive && setFailed(r.rows)).catch(() => {});
+        // DND-skipped rows (never dialed) — shown as their own list, like failed.
+        api<{ rows: BulkRow[] }>(`/api/bulk/${activeJobId}/rows?status=dnd&limit=100`)
+          .then((r) => alive && setSkipped(r.rows)).catch(() => {});
       } catch {
         if (alive) setStale(true);
       }
@@ -527,6 +531,25 @@ export default function BulkTab() {
                   <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
                     <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
                     <span className="text-muted">{r.status}{r.hangupCause ? ` · ${r.hangupCause}` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {skipped.length > 0 && (
+            <details className="mt-3">
+              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
+                See skipped (DND) numbers ({skipped.length}{skipped.length >= 100 ? "+" : ""})
+              </summary>
+              <div className="mt-1.5 mb-2 text-[11px] text-muted">
+                These numbers are on the Do-Not-Disturb list, so they were never called.
+              </div>
+              <div className="max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
+                {skipped.map((r, i) => (
+                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
+                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
+                    <span className="text-muted">skipped · DND</span>
                   </div>
                 ))}
               </div>
