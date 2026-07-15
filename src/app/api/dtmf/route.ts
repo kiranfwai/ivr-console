@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
+import { sigTokenForClient } from "@/lib/plivo-config";
 import { getCall, patchCall } from "@/lib/calls";
 import { recordPress1 } from "@/lib/stats";
 import { digitsOnly } from "@/lib/phone";
@@ -37,7 +38,8 @@ async function handle(req: NextRequest) {
 }
 
 async function handleInner(req: NextRequest) {
-  const guard = await plivoGuard(req);
+  const sigClient = new URL(req.url).searchParams.get("client") || "";
+  const guard = await plivoGuard(req, await sigTokenForClient(sigClient));
   if (!guard.ok) return xml(`<Response><Hangup/></Response>`, 401);
 
   const url = new URL(req.url);

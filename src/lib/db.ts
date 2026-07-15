@@ -191,6 +191,15 @@ async function bootstrap(): Promise<void> {
     -- billing model). NULL = inherit the global default in app_config('pricing').
     ALTER TABLE app_client ADD COLUMN IF NOT EXISTS per_conn_call_cost double precision;
 
+    -- Per-client Plivo account. When a client connects their OWN Plivo account,
+    -- their numbers listing AND their outbound calls run through these creds; when
+    -- these are NULL the client falls back to the shared account (PLIVO_* env), so
+    -- existing clients are unchanged. plivo_from_number is the client's default
+    -- caller-ID (must be one of their own Plivo numbers).
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS plivo_auth_id     text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS plivo_auth_token  text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS plivo_from_number text;
+
     -- Global admin settings (key/value). Holds the default call-cost pricing at
     -- key 'pricing' and Cashfree config at key 'cashfree'. Admin-scoped only;
     -- never tenant-partitioned.

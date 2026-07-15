@@ -15,6 +15,7 @@ import { publicBaseUrl } from "./plivo";
 import { fireOne } from "./bulk-runner";
 import { runWithTenant } from "./tenant";
 import { canDial } from "./wallet";
+import { getClientPlivoCreds } from "./plivo-config";
 
 /**
  * In-process bulk-call worker — CPS-paced, live-capped dial pump.
@@ -225,10 +226,15 @@ async function pumpJob(
   if (job.delayMs) nextClaimAt.set(job.id, Date.now() + job.delayMs);
   const base = publicBaseUrl();
 
+  // Resolve the client's Plivo account ONCE per pump (not per row): connected
+  // clients dial through their own account, everyone else through the shared env
+  // account. Cheap indexed lookup; keeps the per-call hot path free of DB reads.
+  const creds = await getClientPlivoCreds(job.clientId ?? "");
+
   // Fire independently; placeCall() self-paces on the CPS bucket. No in-memory
   // in-flight counter — the live ceiling is derived from the DB each tick.
   for (const row of claimed) {
-    void fireOne(job.id, row, campaign, base).catch((e) =>
+    void fireOne(job.id, row, campaign, base, creds).catch((e) =>
       console.error(`[worker] fireOne error ${job.id}#${row.index}:`, e),
     );
   }

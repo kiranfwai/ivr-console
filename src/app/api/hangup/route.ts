@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { plivoGuard, parseFormBody } from "@/lib/plivo";
+import { sigTokenForClient } from "@/lib/plivo-config";
 import { getCall, patchCall } from "@/lib/calls";
 import { updateBulkRowByCallUuid } from "@/lib/bulk";
 import { deriveOutcome } from "@/lib/outcome";
@@ -24,7 +25,8 @@ async function handle(req: NextRequest) {
 }
 
 async function handleInner(req: NextRequest) {
-  const guard = await plivoGuard(req);
+  const sigClient = new URL(req.url).searchParams.get("client") || "";
+  const guard = await plivoGuard(req, await sigTokenForClient(sigClient));
   if (!guard.ok) return NextResponse.json({ ok: false }, { status: 401 });
 
   const url = new URL(req.url);

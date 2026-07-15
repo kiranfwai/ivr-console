@@ -24,6 +24,7 @@ export async function fireOne(
   row: ClaimedRow,
   campaign: Campaign,
   base: string,
+  creds?: { authId: string; authToken: string; fromNumber: string },
 ): Promise<{ ok: boolean }> {
   const to = normalizePhone(row.phone);
   if (!to) {
@@ -57,12 +58,18 @@ export async function fireOne(
   const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
   const hangupUrl = `${base}/api/hangup?req=${internalId}${cq}`;
 
+  // Dial through the client's own Plivo account when connected (creds passed by
+  // the worker); else the shared env account. Caller ID: campaign's own number,
+  // else the client's default.
+  const fromNumber = campaign.fromNumber || creds?.fromNumber || undefined;
   const result = await placeCall({
     to,
     answerUrl,
     hangupUrl,
     callerName: row.name,
-    fromNumber: campaign.fromNumber || undefined,
+    fromNumber,
+    authId: creds?.authId || undefined,
+    authToken: creds?.authToken || undefined,
   });
 
   // A 429 means we were rate-limited, NOT that the number is bad. With the CPS
@@ -83,7 +90,7 @@ export async function fireOne(
     campaignId: campaign.id,
     campaignName: campaign.name,
     to,
-    from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
+    from: fromNumber || process.env.PLIVO_FROM_NUMBER || "",
     email: row.email,
     audioId: campaign.audioId,
     webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",

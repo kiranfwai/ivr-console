@@ -5,8 +5,10 @@ const AUTH_ID = () => process.env.PLIVO_AUTH_ID || "";
 const AUTH_TOKEN = () => process.env.PLIVO_AUTH_TOKEN || "";
 const DEFAULT_FROM = () => process.env.PLIVO_FROM_NUMBER || "+918031340818";
 
-function authHeader(): string {
-  return "Basic " + Buffer.from(`${AUTH_ID()}:${AUTH_TOKEN()}`).toString("base64");
+function authHeader(authId?: string, authToken?: string): string {
+  const id = authId || AUTH_ID();
+  const tok = authToken || AUTH_TOKEN();
+  return "Basic " + Buffer.from(`${id}:${tok}`).toString("base64");
 }
 
 export interface PlaceCallOptions {
@@ -16,6 +18,10 @@ export interface PlaceCallOptions {
   callerName?: string;
   fromNumber?: string;
   answerMethod?: "GET" | "POST";
+  // Per-client Plivo account. When absent, the shared env account is used, so
+  // existing callers that pass no creds keep dialing exactly as before.
+  authId?: string;
+  authToken?: string;
 }
 
 // A single hung Plivo request must never wedge a whole batch: at high
@@ -62,13 +68,16 @@ export async function placeCall(opts: PlaceCallOptions) {
   // With this in place 429s should be rare; the loop below still handles any.
   await takeCpsToken();
 
+  // Use the caller-supplied Plivo account when provided (a client's own account),
+  // else the shared env account. accountId scopes the API URL to that account.
+  const accountId = opts.authId || AUTH_ID();
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
     try {
-      const res = await fetch(`https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/`, {
+      const res = await fetch(`https://api.plivo.com/v1/Account/${accountId}/Call/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: authHeader() },
+        headers: { "Content-Type": "application/json", Authorization: authHeader(opts.authId, opts.authToken) },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -138,6 +147,102 @@ export async function fetchAccountLiveCount(maxAgeMs = 3000): Promise<number | n
   }
 }
 
+export interface PlivoNumber {
+  number: string;            // digits as Plivo returns (no leading +)
+  numberType: string;        // fixed | mobile | tollfree | ...
+  country: string;
+  region: string;
+  voiceEnabled: boolean;
+  smsEnabled: boolean;
+  monthlyRentalRate: string; // as returned by Plivo (string)
+  addedOn: string;
+  application: string;
+}
+
+function mapPlivoNumber(o: any): PlivoNumber {
+  return {
+    number: String(o?.number ?? ""),
+    numberType: String(o?.number_type ?? o?.type ?? ""),
+    country: String(o?.country ?? ""),
+    region: String(o?.region ?? ""),
+    voiceEnabled: !!o?.voice_enabled,
+    smsEnabled: !!o?.sms_enabled,
+    monthlyRentalRate: String(o?.monthly_rental_rate ?? o?.carrier?.rate ?? ""),
+    addedOn: String(o?.added_on ?? ""),
+    application: String(o?.application ?? ""),
+  };
+}
+
+/**
+ * List ALL rented numbers on the Plivo account (GET /Number/), paging through
+ * until every one is fetched. Read-only; uses the same Basic-auth creds as every
+ * other call here. Returns the numbers plus the account-wide total. Bounded by a
+ * hard page cap so a surprising response can never loop forever.
+ */
+export async function listAccountNumbers(
+  creds?: { authId: string; authToken: string },
+): Promise<{ numbers: PlivoNumber[]; total: number }> {
+  const accountId = creds?.authId || AUTH_ID();
+  const PAGE = 20;
+  const MAX_PAGES = 50; // 1000 numbers — far beyond any real account
+  const out: PlivoNumber[] = [];
+  let total = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const offset = page * PAGE;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let json: any;
+    try {
+      const res = await fetch(
+        `https://api.plivo.com/v1/Account/${accountId}/Number/?limit=${PAGE}&offset=${offset}`,
+        { headers: { Authorization: authHeader(creds?.authId, creds?.authToken) }, signal: controller.signal },
+      );
+      if (!res.ok) break;
+      json = await res.json();
+    } catch {
+      break;
+    } finally {
+      clearTimeout(timer);
+    }
+    total = Number(json?.meta?.total_count ?? total) || total;
+    const objects: any[] = Array.isArray(json?.objects) ? json.objects : [];
+    for (const o of objects) out.push(mapPlivoNumber(o));
+    if (objects.length < PAGE || out.length >= total) break;
+  }
+  // If Plivo didn't report a total, fall back to what we collected.
+  if (!total) total = out.length;
+  return { numbers: out, total };
+}
+
+/**
+ * Validate a Plivo Auth ID + Token by hitting the account endpoint. Returns ok
+ * only on HTTP 200. Used when a client connects their own account.
+ */
+export async function testPlivoCreds(
+  authId: string,
+  authToken: string,
+): Promise<{ ok: boolean; status: number; name?: string }> {
+  if (!authId || !authToken) return { ok: false, status: 0 };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`https://api.plivo.com/v1/Account/${authId}/`, {
+      headers: { Authorization: authHeader(authId, authToken) },
+      signal: controller.signal,
+    });
+    let name: string | undefined;
+    if (res.ok) {
+      const j: any = await res.json().catch(() => null);
+      name = j?.name || j?.account_type || undefined;
+    }
+    return { ok: res.ok, status: res.status, name };
+  } catch {
+    return { ok: false, status: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function listRecentCalls(limit = 20, offset = 0) {
   const res = await fetch(
     `https://api.plivo.com/v1/Account/${AUTH_ID()}/Call/?limit=${limit}&offset=${offset}`,
@@ -163,11 +268,17 @@ export function publicBaseUrl(req?: Request): string {
  * Sign value = base64(hmacSHA256(authToken, nonce + url + body))
  * Body is empty string for GET; for POST it's the raw request body (we read the form back).
  */
-export async function verifyPlivoSignature(req: Request, rawBody: string): Promise<boolean> {
+export async function verifyPlivoSignature(
+  req: Request,
+  rawBody: string,
+  authToken?: string,
+): Promise<boolean> {
   const sigHeader = req.headers.get("x-plivo-signature-v3");
   const nonce = req.headers.get("x-plivo-signature-v3-nonce");
   if (!sigHeader || !nonce) return false;
-  const token = AUTH_TOKEN();
+  // The signature is computed with the token of the account that placed the call.
+  // For a client-account call that's the client's token (passed in); else env.
+  const token = authToken || AUTH_TOKEN();
   if (!token) return false;
 
   const url = req.url;
@@ -175,11 +286,15 @@ export async function verifyPlivoSignature(req: Request, rawBody: string): Promi
   return constantTimeEqual(sigHeader, expected);
 }
 
-/** Convenience: enforce signature if VERIFY_PLIVO_SIG=1, else allow. Reads body once. */
-export async function plivoGuard(req: Request): Promise<{ ok: boolean; rawBody: string }> {
+/**
+ * Convenience: enforce signature if VERIFY_PLIVO_SIG=1, else allow. Reads body
+ * once. `authToken` is the token of the account that placed the call (the
+ * client's own when the callback carries ?client=…), falling back to env.
+ */
+export async function plivoGuard(req: Request, authToken?: string): Promise<{ ok: boolean; rawBody: string }> {
   const rawBody = req.method === "POST" ? await req.text() : "";
   if (process.env.VERIFY_PLIVO_SIG !== "1") return { ok: true, rawBody };
-  const ok = await verifyPlivoSignature(req, rawBody);
+  const ok = await verifyPlivoSignature(req, rawBody, authToken);
   return { ok, rawBody };
 }
 

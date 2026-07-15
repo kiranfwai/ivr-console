@@ -10,6 +10,7 @@ import ReportsTab from "@/components/ReportsTab";
 import WhatsAppTab from "@/components/WhatsAppTab";
 import BillingTab from "@/components/BillingTab";
 import DndTab from "@/components/DndTab";
+import NumbersTab from "@/components/NumbersTab";
 import AdminTab, { type AdminView } from "@/components/AdminTab";
 import { Spinner, Toaster } from "@/components/ui";
 import { Shell, TabId } from "@/components/Shell";
@@ -22,6 +23,7 @@ const META: Record<TabId, { title: string; desc: string }> = {
   reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
   whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
   billing:   { title: "Billing",         desc: "Wallet balance, top-ups, transactions and phone numbers" },
+  numbers:   { title: "Phone Numbers",   desc: "Your Plivo caller-ID numbers — take from the pool, release, export" },
   dnd:       { title: "Do Not Disturb",  desc: "Numbers that must never be called — skipped across single, trigger and bulk" },
   admin:          { title: "Clients",       desc: "Create client logins and set feature permissions" },
   adminReports:   { title: "Reports",       desc: "Client-wise volumes, outcomes and lift" },
@@ -114,15 +116,15 @@ export default function Page() {
       if (viewClient) {
         // In client view. Until the client list loads (perms unknown), show the
         // full data-tab set optimistically; narrow to the client's grants once known.
-        // DND is always available to every client (not a gated feature).
+        // Phone Numbers + DND are always available to every client (not gated).
         const perms = selectedClient?.perms;
         const base = perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
-        return [...base, "dnd"];
+        return [...base, "numbers", "dnd"];
       }
       return [...ADMIN_TABS];
     }
-    // Every client always gets the DND tab regardless of their feature grants.
-    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "dnd"];
+    // Every client always gets the Phone Numbers + DND tabs regardless of grants.
+    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "numbers", "dnd"];
   }, [me, isAdmin, viewClient, selectedClient]);
 
   // Load the client list for the admin's "viewing as" switcher.
@@ -278,6 +280,7 @@ export default function Page() {
             {tab === "reports" && <ReportsTab />}
             {tab === "whatsapp" && <WhatsAppTab />}
             {tab === "billing" && <BillingTab />}
+            {tab === "numbers" && <NumbersTab />}
             {tab === "dnd" && <DndTab />}
           </div>
         )}

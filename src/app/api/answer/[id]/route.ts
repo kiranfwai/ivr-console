@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getCampaign } from "@/lib/campaigns";
 import { getAudio } from "@/lib/audios";
 import { plivoGuard, publicBaseUrl, parseFormBody } from "@/lib/plivo";
+import { sigTokenForClient } from "@/lib/plivo-config";
 import { patchCall, getCall } from "@/lib/calls";
 import { recordAnswered } from "@/lib/stats";
 import { redis } from "@/lib/redis";
@@ -40,7 +41,8 @@ async function handle(req: NextRequest, { params }: { params: { id: string } }) 
 }
 
 async function handleInner(req: NextRequest, id: string) {
-  const guard = await plivoGuard(req);
+  const sigClient = new URL(req.url).searchParams.get("client") || "";
+  const guard = await plivoGuard(req, await sigTokenForClient(sigClient));
   if (!guard.ok) return xml(`<Response><Hangup/></Response>`, 401);
 
   const campaign = await getCampaign(id);

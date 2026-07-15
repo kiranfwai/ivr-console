@@ -5,6 +5,7 @@ import { updateBulkRow } from "./bulk";
 import { currentClientId } from "./tenant";
 import { canDial } from "./wallet";
 import { isDnd } from "./dnd";
+import { getClientPlivoCreds } from "./plivo-config";
 import type { Campaign, CallRecord } from "./models";
 
 /** Thrown by placeCampaignCall when the client's prepaid wallet can't cover a call. */
@@ -89,12 +90,20 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
   const hangupUrl = `${base}/api/hangup?req=${internalId}${cq}`;
 
+  // Dial through the client's OWN Plivo account when they've connected one; else
+  // the shared env account (unconnected clients dial exactly as before). Caller
+  // ID: the campaign's own from-number, else the client's default, else env.
+  const creds = await getClientPlivoCreds(clientId);
+  const fromNumber = campaign.fromNumber || creds.fromNumber || undefined;
+
   const result = await placeCall({
     to,
     answerUrl,
     hangupUrl,
     callerName: callerName || undefined,
-    fromNumber: campaign.fromNumber || undefined,
+    fromNumber,
+    authId: creds.authId || undefined,
+    authToken: creds.authToken || undefined,
   });
 
   const plivoRequestUuid = result.body && (result.body as any).request_uuid;
@@ -104,7 +113,7 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
     campaignId: campaign.id,
     campaignName: campaign.name,
     to,
-    from: campaign.fromNumber || process.env.PLIVO_FROM_NUMBER || "",
+    from: fromNumber || process.env.PLIVO_FROM_NUMBER || "",
     email: email || undefined,
     audioId: campaign.audioId,
     webhookUrl: campaign.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "",
