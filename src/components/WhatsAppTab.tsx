@@ -136,6 +136,10 @@ function BulkSend() {
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   const [running, setRunning] = useState(false);
   const stopRef = useRef(false);
+  // Guards a SECOND drive() loop from starting while one is already trickling —
+  // without this, leaving the tab and coming back + Resume would run two loops
+  // that both pull the same pending rows and double-send (the "pushing" bug).
+  const drivingRef = useRef(false);
 
   // Bulk WhatsApp is browser-paced, so closing the tab actually halts the trickle.
   // Warn before leaving while a send is in progress (BUG 1).
@@ -149,6 +153,23 @@ function BulkSend() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [running]);
+
+  // Stop the browser-paced trickle when this tab unmounts (switching app tabs /
+  // navigating away). Otherwise the drive() loop keeps sending invisibly in the
+  // background, and coming back + Resume spins up a SECOND loop → duplicate
+  // sends. On unmount we halt cleanly; the job stays paused and can be resumed.
+  useEffect(() => {
+    return () => {
+      stopRef.current = true;
+    };
+  }, []);
+
+  // Keep the "Recent WA jobs" list fresh without a manual refresh: poll the jobs
+  // list (fast while a send is running, slow when idle).
+  useEffect(() => {
+    const h = setInterval(() => reloadJobs(), running ? 3000 : 10000);
+    return () => clearInterval(h);
+  }, [running, reloadJobs]);
 
   useEffect(() => {
     if (!activeJobId) return;
@@ -192,6 +213,10 @@ function BulkSend() {
   // WhatsApp stays a browser-paced trickle (anti-ban). /next returns the next
   // pending row inline; the row state itself lives in the per-row backend store.
   async function drive(jobId: string, hookOverride: string) {
+    // Never run two trickle loops at once (would double-send). If one is already
+    // driving, ignore this call.
+    if (drivingRef.current) return;
+    drivingRef.current = true;
     stopRef.current = false;
     setRunning(true);
     try {
@@ -215,6 +240,7 @@ function BulkSend() {
         await sleep(delayMsForRate(rate, jitterPct));
       }
     } finally {
+      drivingRef.current = false;
       setRunning(false);
       reloadJobs();
     }
