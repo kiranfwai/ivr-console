@@ -22,6 +22,10 @@ export interface PlaceCallOptions {
   // existing callers that pass no creds keep dialing exactly as before.
   authId?: string;
   authToken?: string;
+  // Hard cap (seconds) on a connected call's duration → Plivo `time_limit`. Set
+  // from a campaign's Call Ending Duration so a call auto-hangs-up once the audio
+  // has played once, even if the caller stays on the line. Omitted → Plivo default.
+  timeLimitSec?: number;
 }
 
 // A single hung Plivo request must never wedge a whole batch: at high
@@ -53,7 +57,15 @@ function rateLimitDelayMs(attempt: number, retryAfter: string | null): number {
 }
 
 export async function placeCall(opts: PlaceCallOptions) {
-  const body = {
+  // Plivo hangs a connected call up after `time_limit` seconds. We set it from
+  // the campaign's Call Ending Duration (audio length + a small buffer) so a call
+  // never lingers past one playthrough of the audio. Guard to a sane integer.
+  const timeLimit =
+    Number.isFinite(opts.timeLimitSec) && (opts.timeLimitSec as number) > 0
+      ? Math.min(3600, Math.max(5, Math.round(opts.timeLimitSec as number)))
+      : undefined;
+
+  const body: Record<string, unknown> = {
     from: opts.fromNumber || DEFAULT_FROM(),
     to: opts.to,
     answer_url: opts.answerUrl,
@@ -61,6 +73,7 @@ export async function placeCall(opts: PlaceCallOptions) {
     hangup_url: opts.hangupUrl,
     hangup_method: "POST",
     caller_name: opts.callerName,
+    ...(timeLimit ? { time_limit: timeLimit } : {}),
   };
 
   // Account-wide CPS gate: block until a token is free so the combined

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Plus,
   Edit2,
@@ -311,7 +311,26 @@ function CampaignEditor({
   const [prompt, setPrompt] = useState(seed?.prompt ?? "Press 1 to receive your WhatsApp message.");
   const [webhookUrl, setWebhookUrl] = useState(seed?.webhookUrl ?? "");
   const [fromNumber, setFromNumber] = useState(seed?.fromNumber ?? "");
+  // Call Ending Duration (seconds). The call auto-hangs-up after this long, so
+  // the audio plays once and the line doesn't linger. Auto-filled from the linked
+  // audio's detected length (+ a small buffer) but editable.
+  const CALL_END_BUFFER_SEC = 5;
+  const [callEndSec, setCallEndSec] = useState(seed?.callEndSec ? String(seed.callEndSec) : "");
+  // Once the user types their own value we stop auto-overwriting it from the audio.
+  const [callEndTouched, setCallEndTouched] = useState(!!seed?.callEndSec);
   const [busy, setBusy] = useState(false);
+
+  const selectedAudio = audios.find((a) => a.id === audioId) ?? null;
+  const audioDuration = selectedAudio?.durationSec;
+
+  // Auto-suggest the call-ending duration from the selected audio's length,
+  // unless the user has already entered one manually.
+  useEffect(() => {
+    if (callEndTouched) return;
+    if (audioDuration && audioDuration > 0) {
+      setCallEndSec(String(Math.round(audioDuration) + CALL_END_BUFFER_SEC));
+    }
+  }, [audioDuration, callEndTouched]);
 
   const webhookValid = isValidHttpsUrl(webhookUrl);
   const fromEmpty = !fromNumber.trim();
@@ -324,7 +343,14 @@ function CampaignEditor({
     if (!canSave) return;
     setBusy(true);
     try {
-      const payload = { name, audioId: audioId || null, prompt, webhookUrl, fromNumber };
+      const payload = {
+        name,
+        audioId: audioId || null,
+        prompt,
+        webhookUrl,
+        fromNumber,
+        callEndSec: callEndSec.trim() ? Number(callEndSec) : null,
+      };
       if (initial) {
         await api(`/api/campaigns/${initial.id}`, { method: "PATCH", body: JSON.stringify(payload) });
         toast("Saved", "ok");
@@ -378,6 +404,28 @@ function CampaignEditor({
               {audios.length ? "Select an audio for this campaign." : "No audios yet — add one in the Audios tab first."}
             </div>
           )}
+        </div>
+        <div>
+          <Label hint={audioDuration ? `audio is ${audioDuration}s` : "auto-filled from audio"}>
+            Call ending duration (seconds)
+          </Label>
+          <Input
+            type="number"
+            min={5}
+            value={callEndSec}
+            onChange={(e) => {
+              setCallEndTouched(true);
+              setCallEndSec(e.target.value);
+            }}
+            placeholder="auto"
+          />
+          <div className="text-xs text-muted mt-1">
+            The call hangs up automatically after this many seconds, so the audio plays once and the line
+            doesn&apos;t stay connected. Auto-filled from the audio length; adjust if needed.
+            {!audioDuration && selectedAudio && (
+              <span className="text-warn"> This audio has no detected length — re-add it in the Audios tab to auto-fill, or set a value here.</span>
+            )}
+          </div>
         </div>
         <div>
           <Label hint="optional">Press-1 webhook URL</Label>

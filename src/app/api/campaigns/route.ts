@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       prompt: body.prompt,
       webhookUrl: body.webhookUrl,
       fromNumber: body.fromNumber,
+      callEndSec: body.callEndSec,
     });
     return NextResponse.json({ campaign: c }, { status: 201 });
   } catch (e) {

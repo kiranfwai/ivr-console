@@ -104,6 +104,8 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
     fromNumber,
     authId: creds.authId || undefined,
     authToken: creds.authToken || undefined,
+    // Auto-hang-up once the audio has played once (campaign's Call Ending Duration).
+    timeLimitSec: campaign.callEndSec || undefined,
   });
 
   const plivoRequestUuid = result.body && (result.body as any).request_uuid;

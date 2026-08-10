@@ -70,6 +70,8 @@ export async function fireOne(
     fromNumber,
     authId: creds?.authId || undefined,
     authToken: creds?.authToken || undefined,
+    // Auto-hang-up once the audio has played once (campaign's Call Ending Duration).
+    timeLimitSec: campaign.callEndSec || undefined,
   });
 
   // A 429 means we were rate-limited, NOT that the number is bad. With the CPS

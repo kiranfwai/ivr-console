@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       label: body.label || "Untitled",
       url: body.url,
       source: body.source || "url",
+      durationSec: body.durationSec,
     });
     return NextResponse.json({ audio: a }, { status: 201 });
   } catch (e) {

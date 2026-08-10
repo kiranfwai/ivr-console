@@ -4,6 +4,11 @@ export interface Audio {
   url: string;
   source: "url" | "blob";
   createdAt: string;
+  // Playback length in seconds, detected in the browser at add/upload time.
+  // Used to auto-fill a campaign's Call Ending Duration so the call hangs up
+  // once the audio has played once. May be absent for older audios or when the
+  // browser couldn't read metadata (e.g. some signed CDN URLs).
+  durationSec?: number;
 }
 
 export interface Campaign {
@@ -14,6 +19,11 @@ export interface Campaign {
   webhookUrl: string;
   fromNumber: string;
   createdAt: string;
+  // Hard cap (seconds) on how long a connected call may last, sent to Plivo as
+  // `time_limit`. Auto-filled from the linked audio's duration (+ a small buffer)
+  // but editable per campaign. When unset, no hard cap is sent and the call still
+  // ends after the audio plays once (answer XML uses retries=1 + a short grace).
+  callEndSec?: number;
 }
 
 export type CallStatus =

@@ -93,9 +93,26 @@ async function handleInner(req: NextRequest, id: string) {
   const clientQ = client ? `&client=${encodeURIComponent(client)}` : "";
   const dtmfAction = `${base}/api/dtmf?req=${encodeURIComponent(req_)}${clientQ}`;
 
+  // The audio plays INSIDE <GetDigits>, so a keypress during playback interrupts
+  // the audio and is captured immediately (barge-in) — this is what makes Press-1
+  // reliable while the message is still playing.
+  //
+  // Two attributes fix the "audio repeats + call never ends" bug:
+  //   • retries="1"  — the audio is played exactly ONCE. (The old retries="3"
+  //     replayed the whole message up to 3 times whenever no digit was pressed,
+  //     which is what callers heard as "silence, then the audio again".)
+  //   • timeout      — how long we wait for a digit AFTER the audio finishes.
+  //     A short grace keeps a late press working without a long trailing silence;
+  //     when it lapses we fall straight through to <Hangup/> and the call ends.
+  //
+  // A hard <Hangup/> follows, and the call also carries Plivo `time_limit`
+  // (= the campaign's Call Ending Duration) as a backstop, so the call is
+  // guaranteed to disconnect about one audio-length after it connects.
+  const POST_AUDIO_GRACE_SEC = 4;
+
   return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <GetDigits action="${esc(dtmfAction)}" method="POST" timeout="20" numDigits="1" retries="3" validDigits="0123456789" playBeep="true" redirect="true">
+  <GetDigits action="${esc(dtmfAction)}" method="POST" timeout="${POST_AUDIO_GRACE_SEC}" numDigits="1" retries="1" validDigits="1" playBeep="false" redirect="true">
     <Play>${esc(audioUrl)}</Play>
   </GetDigits>
   <Hangup/>

@@ -19,6 +19,9 @@ export async function POST(req: NextRequest) {
   const form = await req.formData();
   const file = form.get("file");
   const label = String(form.get("label") || "Untitled");
+  // Duration is measured in the browser (Web Audio) and sent along so we can
+  // auto-fill a campaign's Call Ending Duration without decoding audio server-side.
+  const durationSec = Number(form.get("durationSec")) || undefined;
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file required" }, { status: 400 });
   }
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
       })
     );
     const url = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-    const audio = await createAudio({ label, url, source: "url" });
+    const audio = await createAudio({ label, url, source: "url", durationSec });
     return NextResponse.json({ audio });
   } catch (e) {
     console.error("[audios/upload] failed:", e);

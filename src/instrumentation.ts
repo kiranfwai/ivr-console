@@ -5,6 +5,10 @@
  * in the edge runtime or during the build.
  */
 export async function register() {
+  // Local-dev escape hatch: skip the DB-backed dial worker when there's no
+  // database configured (set WORKER_DISABLED=1 in .env.local). Defaults to off,
+  // so deployed behavior is unchanged.
+  if (process.env.WORKER_DISABLED === "1") return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { startWorker } = await import("./lib/worker");
     await startWorker();

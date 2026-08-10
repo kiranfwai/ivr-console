@@ -117,8 +117,18 @@ function SingleSend() {
   );
 }
 
-function delayMsForRate(ratePerMin: number, jitterPct: number): number {
-  const baseMs = 60000 / Math.max(1, ratePerMin);
+// Rows claimed + sent concurrently by the server per batch request. The browser
+// fires one batch, waits out the remainder of the batch's time budget, then fires
+// the next — so overall throughput tracks the configured messages/minute while
+// each batch goes out in parallel (server-side concurrency + retry).
+const BATCH_SIZE = 20;
+
+// Recommended safe ceiling; above this we warn (provider limits — see explainer).
+const SAFE_MAX_RATE = 600;
+
+/** Time budget (ms) for one batch so the running average hits `ratePerMin`. */
+function batchBudgetMs(ratePerMin: number, batch: number, jitterPct: number): number {
+  const baseMs = (batch / Math.max(1, ratePerMin)) * 60000;
   const jitter = baseMs * (jitterPct / 100);
   return Math.round(baseMs - jitter + Math.random() * jitter * 2);
 }
@@ -130,8 +140,10 @@ function BulkSend() {
   // Persisted across tab switches + refresh (BUG 1) — recipients and settings survive.
   const [csv, setCsv] = usePersistentState<string>("ivr.wa.csv", "phone,name,email\n");
   const [webhookUrl, setWebhookUrl] = usePersistentState("ivr.wa.webhookUrl", "");
-  const [rate, setRate] = usePersistentState("ivr.wa.rate", 6);
-  const [jitterPct, setJitterPct] = usePersistentState("ivr.wa.jitterPct", 30);
+  // Messages per minute. New key (not the old "ivr.wa.rate", which capped at ~60)
+  // so existing users pick up the faster default. 300/min ≈ 18k/hour.
+  const [ratePerMin, setRatePerMin] = usePersistentState("ivr.wa.ratePerMin", 300);
+  const [jitterPct, setJitterPct] = usePersistentState("ivr.wa.jitterPct", 20);
   const [activeJobId, setActiveJobId] = usePersistentState<string | null>("ivr.wa.activeJobId", null);
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   const [running, setRunning] = useState(false);
@@ -195,7 +207,7 @@ function BulkSend() {
           kind: "whatsapp",
           rows,
           webhookUrl: webhookUrl || undefined,
-          delayMs: Math.round(60000 / Math.max(1, rate)),
+          delayMs: Math.round(60000 / Math.max(1, ratePerMin)),
           jitterPct,
           idempotencyKey,
         }),
@@ -210,34 +222,46 @@ function BulkSend() {
     }
   }
 
-  // WhatsApp stays a browser-paced trickle (anti-ban). /next returns the next
-  // pending row inline; the row state itself lives in the per-row backend store.
+  // Browser-paced BATCH sender. Each iteration asks the server to claim + send a
+  // batch concurrently (with retry); we then wait out the remainder of the batch's
+  // time budget so the running average tracks the configured messages/minute.
+  // The tab must stay open (same as before) — closing it halts the loop cleanly.
   async function drive(jobId: string, hookOverride: string) {
-    // Never run two trickle loops at once (would double-send). If one is already
-    // driving, ignore this call.
+    // Never run two loops at once (would over-send). If one is already driving,
+    // ignore this call.
     if (drivingRef.current) return;
     drivingRef.current = true;
     stopRef.current = false;
     setRunning(true);
     try {
       while (!stopRef.current) {
-        const nx = await api<{ done: boolean; index?: number; row?: { phone: string; name?: string; email?: string }; webhookUrl?: string }>(
-          `/api/bulk/${jobId}/next`,
-        );
-        if (nx.done || !nx.row) break;
-        const hookForRow = hookOverride || nx.webhookUrl || undefined;
-        await api(`/api/whatsapp/send`, {
-          method: "POST",
-          body: JSON.stringify({
-            phone: nx.row.phone,
-            name: nx.row.name,
-            email: nx.row.email,
-            webhookUrl: hookForRow,
-            bulkJobId: jobId,
-            bulkRowIndex: nx.index,
-          }),
-        }).catch(() => {});
-        await sleep(delayMsForRate(rate, jitterPct));
+        const t0 = Date.now();
+        let res: { done: boolean; claimed: number; sent: number; failed: number };
+        try {
+          res = await api(`/api/bulk/${jobId}/send-batch`, {
+            method: "POST",
+            body: JSON.stringify({
+              n: BATCH_SIZE,
+              concurrency: BATCH_SIZE,
+              webhookUrl: hookOverride || undefined,
+            }),
+          });
+        } catch {
+          // Transient network/server error — pause briefly and retry the batch.
+          await sleep(2000);
+          continue;
+        }
+        if (res.done) break;
+        // Nothing claimable right now (rows mid-flight in another batch) — poll again.
+        if (!res.claimed) {
+          await sleep(1000);
+          continue;
+        }
+        // Pace: sleep only the remainder of the budget, so slow sends don't get
+        // extra delay and we never exceed the target rate.
+        const budget = batchBudgetMs(ratePerMin, res.claimed, jitterPct);
+        const elapsed = Date.now() - t0;
+        if (!stopRef.current && elapsed < budget) await sleep(budget - elapsed);
       }
     } finally {
       drivingRef.current = false;
@@ -259,11 +283,11 @@ function BulkSend() {
   const counts = activeJob ? tally(activeJob) : null;
   const parsed = useMemo(() => parseContacts(csv), [csv]);
   const previewCount = parsed.rows.length;
-  const estimatedMin = previewCount > 0 ? Math.max(1, Math.ceil(previewCount / Math.max(1, rate))) : 0;
+  const estimatedMin = previewCount > 0 ? Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))) : 0;
 
   return (
     <>
-      <Card title="Bulk WhatsApp via Pabbly" description="Browser-paced trickle send. Persists across tab close.">
+      <Card title="Bulk WhatsApp via Pabbly" description="Batched concurrent send with retries. Keep this tab open while it runs.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
             <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
@@ -275,15 +299,24 @@ function BulkSend() {
           </div>
 
           <div>
-            <Label hint={`${rate} msg/min`}>Rate</Label>
-            <input
-              type="range"
-              min={1}
-              max={60}
-              value={rate}
-              onChange={(e) => setRate(Number(e.target.value))}
-              className="w-full"
+            <Label hint="messages / minute">Rate</Label>
+            <Input
+              type="number"
+              min={10}
+              max={1200}
+              step={10}
+              value={ratePerMin}
+              onChange={(e) => setRatePerMin(Math.max(1, Number(e.target.value) || 0))}
             />
+            <div className="text-xs mt-1 text-muted">
+              {ratePerMin > SAFE_MAX_RATE ? (
+                <span className="text-warn">
+                  Above {SAFE_MAX_RATE}/min — only go this high if Pabbly + your WhatsApp provider allow it.
+                </span>
+              ) : (
+                <>Recommended 300–600/min. ~{Math.ceil(20000 / Math.max(1, ratePerMin))}m for 20k.</>
+              )}
+            </div>
           </div>
           <div>
             <Label hint={`±${jitterPct}%`}>Jitter</Label>
@@ -295,6 +328,7 @@ function BulkSend() {
               onChange={(e) => setJitterPct(Number(e.target.value))}
               className="w-full"
             />
+            <div className="text-xs mt-1 text-muted">Randomizes spacing so sends don&apos;t look robotic.</div>
           </div>
         </div>
 

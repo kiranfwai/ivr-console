@@ -243,6 +243,12 @@ export default function AudiosTab() {
   const [dragOver, setDragOver] = useState(false);
   const [fileObjUrl, setFileObjUrl] = useState<string | null>(null);
 
+  // Detect playback duration in the browser so we can store it on the audio and
+  // later auto-fill a campaign's Call Ending Duration. Probes the current URL (URL
+  // mode) or the picked file's object URL (upload mode).
+  const urlMeta = useAudioMeta(mode === "url" && url.trim() ? url.trim() : null);
+  const fileMeta = useAudioMeta(mode === "upload" ? fileObjUrl : null);
+
   // Validate then accept a picked/dropped file (FEATURE 5).
   function pickFile(f: File | null | undefined) {
     if (!f) return;
@@ -293,7 +299,11 @@ export default function AudiosTab() {
     try {
       await api("/api/audios", {
         method: "POST",
-        body: JSON.stringify({ label: label || "Untitled", url: v }),
+        body: JSON.stringify({
+          label: label || "Untitled",
+          url: v,
+          durationSec: urlMeta.duration && isFinite(urlMeta.duration) ? Math.round(urlMeta.duration) : undefined,
+        }),
       });
       setUrl("");
       setLabel("");
@@ -316,6 +326,9 @@ export default function AudiosTab() {
     const fd = new FormData();
     fd.append("file", f);
     fd.append("label", label || f.name);
+    if (fileMeta.duration && isFinite(fileMeta.duration)) {
+      fd.append("durationSec", String(Math.round(fileMeta.duration)));
+    }
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;

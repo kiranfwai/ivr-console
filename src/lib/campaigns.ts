@@ -35,9 +35,19 @@ export interface CampaignInput {
   prompt?: string;
   webhookUrl?: string;
   fromNumber?: string;
+  callEndSec?: number | null;
+}
+
+/** Coerce a Call Ending Duration input into a positive integer, or undefined. */
+function normalizeCallEndSec(v: unknown): number | undefined {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  // Clamp to a sane range: at least 5s, at most 1 hour.
+  return Math.min(3600, Math.max(5, Math.round(n)));
 }
 
 export async function createCampaign(input: CampaignInput): Promise<Campaign> {
+  const callEndSec = normalizeCallEndSec(input.callEndSec);
   const c: Campaign = {
     id: newId("cmp"),
     name: input.name,
@@ -46,6 +56,7 @@ export async function createCampaign(input: CampaignInput): Promise<Campaign> {
     webhookUrl: input.webhookUrl ?? "",
     fromNumber: input.fromNumber ?? "",
     createdAt: new Date().toISOString(),
+    ...(callEndSec ? { callEndSec } : {}),
   };
   const r = redis();
   await r.set(KEY(c.id), c);
@@ -64,6 +75,9 @@ export async function updateCampaign(id: string, patch: Partial<CampaignInput>):
     ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
     ...(patch.webhookUrl !== undefined ? { webhookUrl: patch.webhookUrl } : {}),
     ...(patch.fromNumber !== undefined ? { fromNumber: patch.fromNumber } : {}),
+    // Call Ending Duration: a value sets the cap, an explicit null/0 clears it
+    // (fall back to "audio plays once" behavior with no hard time_limit).
+    ...(patch.callEndSec !== undefined ? { callEndSec: normalizeCallEndSec(patch.callEndSec) } : {}),
   };
   await r.set(KEY(id), next);
   return next;

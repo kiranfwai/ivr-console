@@ -18,13 +18,15 @@ export async function getAudio(id: string): Promise<Audio | null> {
   return (await redis().get<Audio>(KEY(id))) ?? null;
 }
 
-export async function createAudio(input: { label: string; url: string; source?: "url" | "blob" }): Promise<Audio> {
+export async function createAudio(input: { label: string; url: string; source?: "url" | "blob"; durationSec?: number }): Promise<Audio> {
+  const dur = Number(input.durationSec);
   const a: Audio = {
     id: newId("aud"),
     label: input.label || "Untitled",
     url: input.url,
     source: input.source || "url",
     createdAt: new Date().toISOString(),
+    ...(Number.isFinite(dur) && dur > 0 ? { durationSec: Math.round(dur) } : {}),
   };
   const r = redis();
   await r.set(KEY(a.id), a);
