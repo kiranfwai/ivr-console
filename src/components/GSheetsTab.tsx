@@ -69,6 +69,8 @@ export default function GSheetsTab() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [polling, setPolling]   = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [deletingSelected, setDeletingSelected] = useState(false);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -164,9 +166,46 @@ export default function GSheetsTab() {
     try {
       await api(`/api/gsheets/leads/${id}`, { method: "DELETE" });
       setLeads((l) => l.filter((x) => x.id !== id));
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
     } catch (e: any) {
       toast(e.message || "Could not remove", "danger");
     }
+  }
+
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const queuedLeads = leads.filter((l) => l.status === "queued");
+  const allQueuedSelected = queuedLeads.length > 0 && queuedLeads.every((l) => selectedIds.has(l.id));
+
+  function toggleSelectAllQueued() {
+    if (allQueuedSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(queuedLeads.map((l) => l.id)));
+    }
+  }
+
+  async function deleteSelected() {
+    if (!selectedIds.size) return;
+    setDeletingSelected(true);
+    const ids = Array.from(selectedIds);
+    try {
+      for (const id of ids) {
+        await api(`/api/gsheets/leads/${id}`, { method: "DELETE" });
+      }
+      setLeads((l) => l.filter((x) => !selectedIds.has(x.id)));
+      setSelectedIds(new Set());
+      toast(`${ids.length} lead(s) removed.`, "info");
+    } catch (e: any) {
+      toast(e.message || "Could not delete selected", "danger");
+    }
+    setDeletingSelected(false);
   }
 
   if (config === undefined) {
@@ -217,6 +256,17 @@ export default function GSheetsTab() {
                 >
                   Poll now
                 </Button>
+                {selectedIds.size > 0 && (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    leftIcon={<Trash2 size={13} />}
+                    onClick={deleteSelected}
+                    loading={deletingSelected}
+                  >
+                    Delete selected ({selectedIds.size})
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="danger"
@@ -225,7 +275,7 @@ export default function GSheetsTab() {
                   loading={clearing}
                   disabled={leads.length === 0}
                 >
-                  Clear queue
+                  Clear all
                 </Button>
               </div>
             }
@@ -241,6 +291,16 @@ export default function GSheetsTab() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+                      <th className="py-2 px-1 w-6">
+                        <input
+                          type="checkbox"
+                          checked={allQueuedSelected}
+                          disabled={queuedLeads.length === 0}
+                          onChange={toggleSelectAllQueued}
+                          title="Select all queued"
+                          className="cursor-pointer accent-brand"
+                        />
+                      </th>
                       <th className="font-medium py-2 px-1">Name</th>
                       <th className="font-medium px-1">Phone</th>
                       <th className="font-medium px-1 hidden sm:table-cell">Email</th>
@@ -256,6 +316,8 @@ export default function GSheetsTab() {
                       <LeadRow
                         key={lead.id}
                         lead={lead}
+                        selected={selectedIds.has(lead.id)}
+                        onToggleSelect={() => toggleSelect(lead.id)}
                         onCall={() => callLead(lead.id)}
                         onRemove={() => removeLead(lead.id)}
                       />
@@ -277,10 +339,14 @@ export default function GSheetsTab() {
 
 function LeadRow({
   lead,
+  selected,
+  onToggleSelect,
   onCall,
   onRemove,
 }: {
   lead: GSheetLead;
+  selected: boolean;
+  onToggleSelect: () => void;
   onCall: () => void;
   onRemove: () => void;
 }) {
@@ -295,7 +361,15 @@ function LeadRow({
   }
 
   return (
-    <tr className="border-t border-line hover:bg-elev/40">
+    <tr className={`border-t border-line hover:bg-elev/40 ${selected ? "bg-brand/5" : ""}`}>
+      <td className="py-2 px-1 w-6">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          className="cursor-pointer accent-brand"
+        />
+      </td>
       <td className="py-2 px-1 font-medium truncate max-w-[120px]" title={lead.name ?? ""}>
         {lead.name || <span className="text-muted">—</span>}
       </td>
