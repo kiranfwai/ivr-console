@@ -101,6 +101,7 @@ export async function api<T = any>(url: string, init?: RequestInit): Promise<T> 
   try {
     r = await fetch(url, {
       ...init,
+      cache: "no-store",
       headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     });
   } catch (e: any) {
