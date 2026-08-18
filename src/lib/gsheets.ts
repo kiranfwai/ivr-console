@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { query } from "./db";
 import { runWithTenant } from "./tenant";
 import { getCampaign } from "./campaigns";
@@ -7,7 +8,12 @@ import { placeCampaignCall } from "./place-campaign-call";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface GSheetConfig {
+/**
+ * A single Sheet Auto-Dial connection.  Each client can have multiple of these
+ * running in parallel — each with its own sheet, tab, campaign, and window.
+ */
+export interface GSheetConn {
+  id: string;           // unique connection ID (UUID or 'legacy-<clientId>')
   clientId: string;
   sheetId: string;
   tabName: string;
@@ -20,6 +26,9 @@ export interface GSheetConfig {
   lastError: string | null;
   createdAt: string;
 }
+
+/** Backward-compatibility alias — existing code that imports GSheetConfig still works. */
+export type GSheetConfig = GSheetConn;
 
 export type LeadStatus = "queued" | "calling" | "called" | "failed";
 
@@ -35,6 +44,7 @@ export type CallOutcome =
 export interface GSheetLead {
   id: number;
   clientId: string;
+  connId: string | null;    // which connection this lead belongs to
   sheetId: string;
   rowIndex: number;
   name: string | null;
@@ -54,7 +64,8 @@ export interface GSheetLead {
 // DB row types (internal)
 // ---------------------------------------------------------------------------
 
-type ConfigRow = {
+type ConnRow = {
+  id: string;
   client_id: string;
   sheet_id: string;
   tab_name: string;
@@ -71,6 +82,7 @@ type ConfigRow = {
 type LeadRow = {
   id: string;
   client_id: string;
+  conn_id: string | null;
   sheet_id: string;
   row_index: number;
   name: string | null;
@@ -86,8 +98,9 @@ type LeadRow = {
   called_at: Date | null;
 };
 
-function toConfig(r: ConfigRow): GSheetConfig {
+function toConn(r: ConnRow): GSheetConn {
   return {
+    id: r.id,
     clientId: r.client_id,
     sheetId: r.sheet_id,
     tabName: r.tab_name,
@@ -106,6 +119,7 @@ function toLead(r: LeadRow): GSheetLead {
   return {
     id: Number(r.id),
     clientId: r.client_id,
+    connId: r.conn_id,
     sheetId: r.sheet_id,
     rowIndex: r.row_index,
     name: r.name,
@@ -123,18 +137,32 @@ function toLead(r: LeadRow): GSheetLead {
 }
 
 // ---------------------------------------------------------------------------
-// Config CRUD
+// Connection CRUD
 // ---------------------------------------------------------------------------
 
-export async function getGSheetConfig(clientId: string): Promise<GSheetConfig | null> {
-  const { rows } = await query<ConfigRow>(
-    `SELECT * FROM gsheet_config WHERE client_id = $1`,
+export async function listGSheetConns(clientId: string): Promise<GSheetConn[]> {
+  const { rows } = await query<ConnRow>(
+    `SELECT * FROM gsheet_conn WHERE client_id = $1 ORDER BY created_at ASC`,
     [clientId],
   );
-  return rows.length ? toConfig(rows[0]) : null;
+  return rows.map(toConn);
 }
 
-export interface SaveGSheetConfigInput {
+export async function getGSheetConn(connId: string): Promise<GSheetConn | null> {
+  const { rows } = await query<ConnRow>(
+    `SELECT * FROM gsheet_conn WHERE id = $1`,
+    [connId],
+  );
+  return rows.length ? toConn(rows[0]) : null;
+}
+
+/** Backward-compat: return the first (oldest) connection for this client, or null. */
+export async function getGSheetConfig(clientId: string): Promise<GSheetConn | null> {
+  const conns = await listGSheetConns(clientId);
+  return conns.length ? conns[0] : null;
+}
+
+export interface SaveGSheetConnInput {
   sheetId: string;
   tabName?: string;
   campaignId: string;
@@ -142,44 +170,101 @@ export interface SaveGSheetConfigInput {
   callEndHour?: number;
 }
 
-export async function saveGSheetConfig(
+export async function createGSheetConn(
   clientId: string,
-  input: SaveGSheetConfigInput,
-): Promise<GSheetConfig> {
+  input: SaveGSheetConnInput,
+): Promise<GSheetConn> {
+  const id = randomUUID();
   const tabName = input.tabName?.trim() || "Sheet1";
   const callStartHour = input.callStartHour ?? 9;
   const callEndHour = input.callEndHour ?? 21;
-  const { rows } = await query<ConfigRow>(
-    `INSERT INTO gsheet_config (client_id, sheet_id, tab_name, campaign_id, call_start_hour, call_end_hour)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (client_id) DO UPDATE SET
-       sheet_id        = EXCLUDED.sheet_id,
-       tab_name        = EXCLUDED.tab_name,
-       campaign_id     = EXCLUDED.campaign_id,
-       call_start_hour = EXCLUDED.call_start_hour,
-       call_end_hour   = EXCLUDED.call_end_hour,
-       enabled         = true,
-       last_error      = NULL
+  const { rows } = await query<ConnRow>(
+    `INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, campaign_id, call_start_hour, call_end_hour)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [clientId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour],
+    [id, clientId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour],
   );
-  return toConfig(rows[0]);
+  return toConn(rows[0]);
 }
 
+export async function updateGSheetConn(
+  clientId: string,
+  connId: string,
+  input: SaveGSheetConnInput,
+): Promise<GSheetConn> {
+  const tabName = input.tabName?.trim() || "Sheet1";
+  const callStartHour = input.callStartHour ?? 9;
+  const callEndHour = input.callEndHour ?? 21;
+  const { rows } = await query<ConnRow>(
+    `UPDATE gsheet_conn
+     SET sheet_id = $3, tab_name = $4, campaign_id = $5,
+         call_start_hour = $6, call_end_hour = $7,
+         enabled = true, last_error = NULL
+     WHERE client_id = $1 AND id = $2
+     RETURNING *`,
+    [clientId, connId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour],
+  );
+  if (!rows.length) throw new Error("Connection not found");
+  return toConn(rows[0]);
+}
+
+export async function deleteGSheetConn(clientId: string, connId: string): Promise<void> {
+  await query(`DELETE FROM gsheet_conn WHERE client_id = $1 AND id = $2`, [clientId, connId]);
+  await query(`DELETE FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2`, [clientId, connId]);
+}
+
+export async function setGSheetConnEnabled(
+  clientId: string,
+  connId: string,
+  enabled: boolean,
+): Promise<void> {
+  await query(
+    `UPDATE gsheet_conn SET enabled = $3 WHERE client_id = $1 AND id = $2`,
+    [clientId, connId, enabled],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compat wrappers (used by the old single-connection API route)
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use createGSheetConn / updateGSheetConn instead. */
+export async function saveGSheetConfig(
+  clientId: string,
+  input: SaveGSheetConnInput,
+  connId?: string,
+): Promise<GSheetConn> {
+  if (connId) return updateGSheetConn(clientId, connId, input);
+  return createGSheetConn(clientId, input);
+}
+
+/** @deprecated Deletes ALL connections for this client. */
 export async function deleteGSheetConfig(clientId: string): Promise<void> {
-  await query(`DELETE FROM gsheet_config WHERE client_id = $1`, [clientId]);
+  await query(`DELETE FROM gsheet_conn WHERE client_id = $1`, [clientId]);
   await query(`DELETE FROM gsheet_lead WHERE client_id = $1`, [clientId]);
 }
 
+/** @deprecated Toggles ALL connections for this client. */
 export async function setGSheetEnabled(clientId: string, enabled: boolean): Promise<void> {
-  await query(`UPDATE gsheet_config SET enabled = $2 WHERE client_id = $1`, [clientId, enabled]);
+  await query(`UPDATE gsheet_conn SET enabled = $2 WHERE client_id = $1`, [clientId, enabled]);
 }
 
 // ---------------------------------------------------------------------------
 // Leads CRUD
 // ---------------------------------------------------------------------------
 
-export async function listLeads(clientId: string, limit = 300): Promise<GSheetLead[]> {
+export async function listLeads(
+  clientId: string,
+  connId?: string,
+  limit = 300,
+): Promise<GSheetLead[]> {
+  if (connId) {
+    const { rows } = await query<LeadRow>(
+      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2 ORDER BY queued_at DESC LIMIT $3`,
+      [clientId, connId, limit],
+    );
+    return rows.map(toLead);
+  }
   const { rows } = await query<LeadRow>(
     `SELECT * FROM gsheet_lead WHERE client_id = $1 ORDER BY queued_at DESC LIMIT $2`,
     [clientId, limit],
@@ -191,8 +276,15 @@ export async function deleteLead(clientId: string, id: number): Promise<void> {
   await query(`DELETE FROM gsheet_lead WHERE client_id = $1 AND id = $2`, [clientId, id]);
 }
 
-export async function clearLeads(clientId: string): Promise<void> {
+export async function clearLeads(clientId: string, connId?: string): Promise<void> {
   // Delete lead records but keep last_row so we don't re-process already-seen rows.
+  if (connId) {
+    await query(
+      `DELETE FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2`,
+      [clientId, connId],
+    );
+    return;
+  }
   await query(`DELETE FROM gsheet_lead WHERE client_id = $1`, [clientId]);
 }
 
@@ -282,10 +374,13 @@ function isInWindow(startHour: number, endHour: number): boolean {
 // Call trigger
 // ---------------------------------------------------------------------------
 
-/** Place a call for one lead row, updating its status before and after. */
+/**
+ * Place a call for one lead row, updating its DB status before and after.
+ * Uses the lead's DB id for all updates (no row_hash dependency).
+ */
 async function fireLeadCall(
   clientId: string,
-  rowHash: string,
+  leadId: number,
   campaignId: string,
   phone: string,
   name: string | null,
@@ -293,8 +388,8 @@ async function fireLeadCall(
 ): Promise<{ ok: boolean; error?: string }> {
   await query(
     `UPDATE gsheet_lead SET status = 'calling'
-     WHERE client_id = $1 AND row_hash = $2 AND status IN ('queued', 'failed')`,
-    [clientId, rowHash],
+     WHERE client_id = $1 AND id = $2 AND status IN ('queued', 'failed')`,
+    [clientId, leadId],
   );
 
   try {
@@ -311,16 +406,16 @@ async function fireLeadCall(
 
     await query(
       `UPDATE gsheet_lead SET status = 'called', call_uuid = $3, called_at = now(), error = NULL
-       WHERE client_id = $1 AND row_hash = $2`,
-      [clientId, rowHash, result.callUuid],
+       WHERE client_id = $1 AND id = $2`,
+      [clientId, leadId, result.callUuid],
     );
     return { ok: true };
   } catch (e: any) {
     const error = String(e?.message || "call failed");
     await query(
       `UPDATE gsheet_lead SET status = 'failed', error = $3, called_at = now()
-       WHERE client_id = $1 AND row_hash = $2`,
-      [clientId, rowHash, error],
+       WHERE client_id = $1 AND id = $2`,
+      [clientId, leadId, error],
     );
     return { ok: false, error };
   }
@@ -338,18 +433,16 @@ export async function triggerLeadCallById(
   if (!leads.length) return { ok: false, error: "Lead not found" };
   const lead = leads[0];
 
-  const { rows: configs } = await query<{ campaign_id: string }>(
-    `SELECT campaign_id FROM gsheet_config WHERE client_id = $1`,
-    [clientId],
-  );
-  if (!configs.length) return { ok: false, error: "Sheet not configured" };
+  if (!lead.conn_id) return { ok: false, error: "Lead has no connection reference" };
 
-  const rowHash = `${clientId}:${lead.sheet_id}:${lead.row_index}`;
-  return fireLeadCall(clientId, rowHash, configs[0].campaign_id, lead.phone, lead.name, lead.email);
+  const conn = await getGSheetConn(lead.conn_id);
+  if (!conn) return { ok: false, error: "Sheet connection not found" };
+
+  return fireLeadCall(clientId, leadId, conn.campaignId, lead.phone, lead.name, lead.email);
 }
 
 // ---------------------------------------------------------------------------
-// Poll one client
+// Poll one connection
 // ---------------------------------------------------------------------------
 
 export interface PollResult {
@@ -360,23 +453,38 @@ export interface PollResult {
   error?: string;
 }
 
-export async function pollClient(config: GSheetConfig): Promise<PollResult> {
+/**
+ * Build the row_hash for a given connection + row index.
+ *
+ * Legacy connections (id starts with 'legacy-') keep the old hash format so
+ * existing DB rows are still recognised as "already processed", preventing
+ * duplicate leads on upgrade.  New connections use a compact connId-based hash.
+ */
+function makeRowHash(conn: GSheetConn, rowIndex: number): string {
+  if (conn.id.startsWith("legacy-")) {
+    // Old format: clientId:sheetId:rowIndex — must match what was inserted before the upgrade.
+    return `${conn.clientId}:${conn.sheetId}:${rowIndex}`;
+  }
+  return `${conn.id}:${rowIndex}`;
+}
+
+export async function pollClient(conn: GSheetConn): Promise<PollResult> {
   let rows: string[][];
   try {
-    rows = await fetchSheetRows(config.sheetId, config.tabName);
+    rows = await fetchSheetRows(conn.sheetId, conn.tabName);
   } catch (e: any) {
     const error = String(e?.message || "fetch failed");
     await query(
-      `UPDATE gsheet_config SET last_error = $2, last_synced_at = now() WHERE client_id = $1`,
-      [config.clientId, error],
+      `UPDATE gsheet_conn SET last_error = $2, last_synced_at = now() WHERE id = $1`,
+      [conn.id, error],
     );
     return { newRows: 0, called: 0, queued: 0, flushed: 0, error };
   }
 
   if (rows.length < 1) {
     await query(
-      `UPDATE gsheet_config SET last_synced_at = now(), last_error = NULL WHERE client_id = $1`,
-      [config.clientId],
+      `UPDATE gsheet_conn SET last_synced_at = now(), last_error = NULL WHERE id = $1`,
+      [conn.id],
     );
     return { newRows: 0, called: 0, queued: 0, flushed: 0 };
   }
@@ -389,15 +497,15 @@ export async function pollClient(config: GSheetConfig): Promise<PollResult> {
   if (phoneCol < 0) {
     const error = "No 'phone' column found in sheet header row";
     await query(
-      `UPDATE gsheet_config SET last_error = $2, last_synced_at = now() WHERE client_id = $1`,
-      [config.clientId, error],
+      `UPDATE gsheet_conn SET last_error = $2, last_synced_at = now() WHERE id = $1`,
+      [conn.id, error],
     );
     return { newRows: 0, called: 0, queued: 0, flushed: 0, error };
   }
 
   // data rows = everything after header; new = not yet processed
   const dataRows = rows.slice(1);
-  const newDataRows = dataRows.slice(config.lastRow);
+  const newDataRows = dataRows.slice(conn.lastRow);
 
   let newRows = 0, called = 0, queued = 0;
 
@@ -408,20 +516,22 @@ export async function pollClient(config: GSheetConfig): Promise<PollResult> {
 
     const name     = nameCol  >= 0 ? (row[nameCol]  ?? "").trim() || null : null;
     const email    = emailCol >= 0 ? (row[emailCol] ?? "").trim() || null : null;
-    const rowIndex = config.lastRow + i + 1; // 1-based data row index
-    const rowHash  = `${config.clientId}:${config.sheetId}:${rowIndex}`;
+    const rowIndex = conn.lastRow + i + 1; // 1-based data row index
+    const rowHash  = makeRowHash(conn, rowIndex);
 
-    const { rowCount } = await query(
-      `INSERT INTO gsheet_lead (client_id, sheet_id, row_index, name, email, phone, row_hash, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued')
-       ON CONFLICT (client_id, row_hash) DO NOTHING`,
-      [config.clientId, config.sheetId, rowIndex, name, email, phone, rowHash],
+    const { rows: inserted } = await query<{ id: string }>(
+      `INSERT INTO gsheet_lead (client_id, conn_id, sheet_id, row_index, name, email, phone, row_hash, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')
+       ON CONFLICT (client_id, row_hash) DO NOTHING
+       RETURNING id`,
+      [conn.clientId, conn.id, conn.sheetId, rowIndex, name, email, phone, rowHash],
     );
-    if (!rowCount) continue; // already processed
+    if (!inserted.length) continue; // already processed
 
     newRows++;
-    if (isInWindow(config.callStartHour, config.callEndHour)) {
-      await fireLeadCall(config.clientId, rowHash, config.campaignId, phone, name, email);
+    const leadId = Number(inserted[0].id);
+    if (isInWindow(conn.callStartHour, conn.callEndHour)) {
+      await fireLeadCall(conn.clientId, leadId, conn.campaignId, phone, name, email);
       called++;
     } else {
       queued++;
@@ -429,23 +539,22 @@ export async function pollClient(config: GSheetConfig): Promise<PollResult> {
   }
 
   // Advance the last-read pointer
-  const newLastRow = config.lastRow + newDataRows.length;
+  const newLastRow = conn.lastRow + newDataRows.length;
   await query(
-    `UPDATE gsheet_config SET last_row = $2, last_synced_at = now(), last_error = NULL
-     WHERE client_id = $1`,
-    [config.clientId, newLastRow],
+    `UPDATE gsheet_conn SET last_row = $2, last_synced_at = now(), last_error = NULL WHERE id = $1`,
+    [conn.id, newLastRow],
   );
 
-  // Flush previously-queued leads if we are now within the calling window
+  // Flush previously-queued leads if we are now within the calling window.
+  // Filter by conn_id so each connection only flushes its own leads.
   let flushed = 0;
-  if (isInWindow(config.callStartHour, config.callEndHour)) {
+  if (isInWindow(conn.callStartHour, conn.callEndHour)) {
     const { rows: pending } = await query<LeadRow>(
-      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND status = 'queued' ORDER BY queued_at`,
-      [config.clientId],
+      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2 AND status = 'queued' ORDER BY queued_at`,
+      [conn.clientId, conn.id],
     );
     for (const r of pending) {
-      const rowHash = `${config.clientId}:${r.sheet_id}:${r.row_index}`;
-      await fireLeadCall(config.clientId, rowHash, config.campaignId, r.phone, r.name, r.email);
+      await fireLeadCall(conn.clientId, Number(r.id), conn.campaignId, r.phone, r.name, r.email);
       flushed++;
     }
   }
@@ -478,30 +587,30 @@ export async function updateLeadOutcomeByCallUuid(
 }
 
 // ---------------------------------------------------------------------------
-// Poll all clients (called by the poller interval)
+// Poll all clients (called by the background poller interval)
 // ---------------------------------------------------------------------------
 
 export async function pollAllClients(): Promise<void> {
-  let configs: ConfigRow[];
+  let conns: ConnRow[];
   try {
-    const res = await query<ConfigRow>(`SELECT * FROM gsheet_config WHERE enabled = true`);
-    configs = res.rows;
+    const res = await query<ConnRow>(`SELECT * FROM gsheet_conn WHERE enabled = true`);
+    conns = res.rows;
   } catch (e) {
-    console.error("[gsheets] pollAllClients: failed to load configs:", e);
+    console.error("[gsheets] pollAllClients: failed to load connections:", e);
     return;
   }
 
-  for (const row of configs) {
-    const config = toConfig(row);
+  for (const row of conns) {
+    const conn = toConn(row);
     try {
-      const r = await pollClient(config);
+      const r = await pollClient(conn);
       console.info(
-        `[gsheets] poll client=${config.clientId}: +${r.newRows} rows, ` +
+        `[gsheets] poll conn=${conn.id} client=${conn.clientId}: +${r.newRows} rows, ` +
         `${r.called} called, ${r.queued} queued, ${r.flushed} flushed` +
         (r.error ? `, error: ${r.error}` : ""),
       );
     } catch (e) {
-      console.error(`[gsheets] poll error client=${config.clientId}:`, e);
+      console.error(`[gsheets] poll error conn=${conn.id} client=${conn.clientId}:`, e);
     }
   }
 }

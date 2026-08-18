@@ -282,6 +282,37 @@ async function bootstrap(): Promise<void> {
     CREATE INDEX IF NOT EXISTS gsheet_lead_client_status ON gsheet_lead (client_id, status);
     CREATE INDEX IF NOT EXISTS gsheet_lead_queued ON gsheet_lead (client_id, queued_at) WHERE status = 'queued';
     CREATE INDEX IF NOT EXISTS gsheet_lead_call_uuid ON gsheet_lead (call_uuid) WHERE call_uuid IS NOT NULL;
+
+    -- Multi-connection Google Sheet auto-dial (replaces the single-connection gsheet_config).
+    -- Each client can have multiple independent sheet connections; gsheet_config is kept
+    -- as a legacy table and migrated into this one on first boot.
+    CREATE TABLE IF NOT EXISTS gsheet_conn (
+      id              text PRIMARY KEY,
+      client_id       text NOT NULL,
+      sheet_id        text NOT NULL,
+      tab_name        text NOT NULL DEFAULT 'Sheet1',
+      campaign_id     text NOT NULL,
+      call_start_hour int  NOT NULL DEFAULT 9,
+      call_end_hour   int  NOT NULL DEFAULT 21,
+      last_row        int  NOT NULL DEFAULT 0,
+      enabled         boolean NOT NULL DEFAULT true,
+      last_synced_at  timestamptz,
+      last_error      text,
+      created_at      timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS gsheet_conn_client ON gsheet_conn (client_id);
+
+    -- One-time migration: copy any existing single-connection rows into gsheet_conn.
+    -- Uses a stable legacy ID so subsequent restarts are no-ops (ON CONFLICT DO NOTHING).
+    INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, campaign_id,
+                             call_start_hour, call_end_hour, last_row, enabled,
+                             last_synced_at, last_error, created_at)
+    SELECT 'legacy-' || client_id,
+           client_id, sheet_id, tab_name, campaign_id,
+           call_start_hour, call_end_hour, last_row, enabled,
+           last_synced_at, last_error, created_at
+    FROM   gsheet_config
+    ON CONFLICT (id) DO NOTHING;
   `;
   await pool().query(sql);
 
@@ -290,6 +321,8 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS call_outcome text;
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS hangup_cause text;
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS duration_sec int;
+    ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS conn_id text;
+    UPDATE gsheet_lead SET conn_id = 'legacy-' || client_id WHERE conn_id IS NULL;
   `;
   await pool().query(alterSql);
 }

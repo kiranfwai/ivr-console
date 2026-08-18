@@ -1,25 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentClientId } from "@/lib/tenant";
 import {
-  getGSheetConfig,
-  saveGSheetConfig,
-  deleteGSheetConfig,
-  setGSheetEnabled,
+  listGSheetConns,
+  createGSheetConn,
   extractSheetId,
 } from "@/lib/gsheets";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET — return the current sheet config for this client. */
+/** GET — return all sheet connections for this client. */
 export async function GET() {
   const clientId = currentClientId();
   if (!clientId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const config = await getGSheetConfig(clientId);
-  return NextResponse.json({ config });
+  const connections = await listGSheetConns(clientId);
+  return NextResponse.json({ connections });
 }
 
-/** POST — save (upsert) the sheet config. */
+/** POST — create a new sheet connection (does NOT replace existing ones). */
 export async function POST(req: NextRequest) {
   const clientId = currentClientId();
   if (!clientId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -44,33 +42,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid calling window hours" }, { status: 400 });
   }
 
-  const config = await saveGSheetConfig(clientId, {
+  const connection = await createGSheetConn(clientId, {
     sheetId,
     tabName:       (body.tabName ?? "Sheet1").trim() || "Sheet1",
     campaignId,
     callStartHour,
     callEndHour,
   });
-  return NextResponse.json({ ok: true, config });
-}
-
-/** PATCH — toggle enabled/disabled. */
-export async function PATCH(req: NextRequest) {
-  const clientId = currentClientId();
-  if (!clientId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const body = await req.json().catch(() => ({}));
-  if (typeof body.enabled !== "boolean") {
-    return NextResponse.json({ error: "enabled (boolean) required" }, { status: 400 });
-  }
-  await setGSheetEnabled(clientId, body.enabled);
-  return NextResponse.json({ ok: true });
-}
-
-/** DELETE — disconnect the sheet and clear all lead records. */
-export async function DELETE() {
-  const clientId = currentClientId();
-  if (!clientId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  await deleteGSheetConfig(clientId);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, connection });
 }
