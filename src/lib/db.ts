@@ -248,6 +248,48 @@ async function bootstrap(): Promise<void> {
       paid_at     timestamptz
     );
     CREATE INDEX IF NOT EXISTS wallet_order_client ON wallet_order (client_id, created_at DESC);
+
+    -- Google Sheet auto-dial feature: per-client sheet config + lead queue.
+    CREATE TABLE IF NOT EXISTS gsheet_config (
+      client_id       text PRIMARY KEY,
+      sheet_id        text NOT NULL,
+      tab_name        text NOT NULL DEFAULT 'Sheet1',
+      campaign_id     text NOT NULL,
+      call_start_hour int  NOT NULL DEFAULT 9,
+      call_end_hour   int  NOT NULL DEFAULT 21,
+      last_row        int  NOT NULL DEFAULT 0,
+      enabled         boolean NOT NULL DEFAULT true,
+      last_synced_at  timestamptz,
+      last_error      text,
+      created_at      timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS gsheet_lead (
+      id          bigserial PRIMARY KEY,
+      client_id   text NOT NULL,
+      sheet_id    text NOT NULL,
+      row_index   int  NOT NULL,
+      name        text,
+      email       text,
+      phone       text NOT NULL,
+      row_hash    text NOT NULL,
+      status      text NOT NULL DEFAULT 'queued',
+      call_uuid   text,
+      error       text,
+      queued_at   timestamptz NOT NULL DEFAULT now(),
+      called_at   timestamptz,
+      UNIQUE (client_id, row_hash)
+    );
+    CREATE INDEX IF NOT EXISTS gsheet_lead_client_status ON gsheet_lead (client_id, status);
+    CREATE INDEX IF NOT EXISTS gsheet_lead_queued ON gsheet_lead (client_id, queued_at) WHERE status = 'queued';
+    CREATE INDEX IF NOT EXISTS gsheet_lead_call_uuid ON gsheet_lead (call_uuid) WHERE call_uuid IS NOT NULL;
   `;
   await pool().query(sql);
+
+  // Idempotent column additions for existing deployments.
+  const alterSql = `
+    ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS call_outcome text;
+    ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS hangup_cause text;
+    ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS duration_sec int;
+  `;
+  await pool().query(alterSql);
 }

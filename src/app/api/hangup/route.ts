@@ -4,6 +4,7 @@ import { sigTokenForClient } from "@/lib/plivo-config";
 import { getCall, patchCall } from "@/lib/calls";
 import { updateBulkRowByCallUuid } from "@/lib/bulk";
 import { deriveOutcome } from "@/lib/outcome";
+import { updateLeadOutcomeByCallUuid } from "@/lib/gsheets";
 import { recordFinalized } from "@/lib/stats";
 import { redis } from "@/lib/redis";
 import { runWithTenant, currentClientId } from "@/lib/tenant";
@@ -59,6 +60,8 @@ async function handleInner(req: NextRequest) {
     const keepPress1 = cur?.status === "press1";
     const dur = Number(duration) || 0;
     const cause = hangupCause || callStatus;
+    const outcome = deriveOutcome(cause, cur?.digit, !!cur?.answeredAt);
+
     // Finalize the report counters once, on the first hangup only.
     if (cur && !cur.hangupAt) {
       await recordFinalized(cur, cause, dur);
@@ -66,7 +69,6 @@ async function handleInner(req: NextRequest) {
       // "connected" or "press1"). Idempotent on the call id (ref) so Plivo
       // hangup retries never double-charge. Non-fatal: a billing hiccup must
       // never break call finalization, so we swallow + log.
-      const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
       const clientId = currentClientId();
       if (clientId && (outcome === "connected" || outcome === "press1")) {
         try {
@@ -92,12 +94,19 @@ async function handleInner(req: NextRequest) {
     // Propagate the outcome to the parent bulk row by call UUID — a single
     // indexed update (no whole-job scan), so high call volume doesn't contend.
     if (cur?.bulkJobId) {
-      const outcome = deriveOutcome(cause, cur.digit, !!cur.answeredAt);
       await updateBulkRowByCallUuid(internalId, {
         status: outcome,
         hangupCause: cause,
         durationSec: dur,
       });
+    }
+
+    // Propagate the outcome to a GSheets lead if this call originated from one.
+    // Non-fatal: a missed update just means the UI shows no outcome badge.
+    try {
+      await updateLeadOutcomeByCallUuid(internalId, outcome as import("@/lib/gsheets").CallOutcome, cause, dur);
+    } catch (e) {
+      console.error("[hangup] gsheet lead outcome update failed:", e);
     }
   }
   return NextResponse.json({ ok: true });

@@ -12,5 +12,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { startWorker } = await import("./lib/worker");
     await startWorker();
+    const { startGsheetsPoller } = await import("./lib/gsheets");
+    await startGsheetsPoller();
   }
 }

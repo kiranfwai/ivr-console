@@ -11,13 +11,15 @@ import WhatsAppTab from "@/components/WhatsAppTab";
 import BillingTab from "@/components/BillingTab";
 import DndTab from "@/components/DndTab";
 import NumbersTab from "@/components/NumbersTab";
+import GSheetsTab from "@/components/GSheetsTab";
 import AdminTab, { type AdminView } from "@/components/AdminTab";
 import { Spinner, Toaster } from "@/components/ui";
 import { Shell, TabId } from "@/components/Shell";
 
 const META: Record<TabId, { title: string; desc: string }> = {
-  dial:      { title: "Single call",     desc: "Place an outbound IVR call from a campaign" },
-  bulk:      { title: "Bulk calls",      desc: "Run a paced batch through a campaign" },
+  dial:      { title: "Single call",       desc: "Place an outbound IVR call from a campaign" },
+  bulk:      { title: "Bulk calls",        desc: "Run a paced batch through a campaign" },
+  gsheets:   { title: "Sheet Auto-Dial",  desc: "Auto-call new Google Sheet rows within a calling window" },
   campaigns: { title: "Campaigns",       desc: "Audio, prompt, webhook, and from-number per campaign" },
   audios:    { title: "Audio library",   desc: "Upload or link MP3s used by campaigns" },
   reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
@@ -119,12 +121,12 @@ export default function Page() {
         // Phone Numbers + DND are always available to every client (not gated).
         const perms = selectedClient?.perms;
         const base = perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
-        return [...base, "numbers", "dnd"];
+        return [...base, "numbers", "dnd", "gsheets"];
       }
       return [...ADMIN_TABS];
     }
-    // Every client always gets the Phone Numbers + DND tabs regardless of grants.
-    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "numbers", "dnd"];
+    // Every client always gets Phone Numbers, DND, and Sheet Auto-Dial regardless of grants.
+    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "numbers", "dnd", "gsheets"];
   }, [me, isAdmin, viewClient, selectedClient]);
 
   // Load the client list for the admin's "viewing as" switcher.
@@ -275,6 +277,7 @@ export default function Page() {
           <div key={viewClient}>
             {tab === "dial" && <DialTab />}
             {tab === "bulk" && <BulkTab />}
+            {tab === "gsheets" && <GSheetsTab />}
             {tab === "campaigns" && <CampaignsTab onCreated={onCampaignCreated} />}
             {tab === "audios" && <AudiosTab />}
             {tab === "reports" && <ReportsTab />}

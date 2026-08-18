@@ -17,12 +17,14 @@ import {
   Menu,
   X,
   Circle,
+  FileSpreadsheet,
 } from "lucide-react";
 import { IconButton } from "./ui";
 
 export type TabId =
   | "dial"
   | "bulk"
+  | "gsheets"
   | "campaigns"
   | "audios"
   | "reports"
@@ -37,8 +39,9 @@ export type TabId =
   | "adminPricing";
 
 const NAV: { id: TabId; label: string; icon: ReactNode; group: string }[] = [
-  { id: "dial",       label: "Dial",       icon: <Phone size={16} />,        group: "Call" },
-  { id: "bulk",       label: "Bulk calls", icon: <Users size={16} />,        group: "Call" },
+  { id: "dial",       label: "Dial",           icon: <Phone size={16} />,            group: "Call" },
+  { id: "bulk",       label: "Bulk calls",     icon: <Users size={16} />,            group: "Call" },
+  { id: "gsheets",    label: "Sheet Auto-Dial", icon: <FileSpreadsheet size={16} />, group: "Call" },
   { id: "campaigns",  label: "Campaigns",  icon: <Megaphone size={16} />,    group: "Manage" },
   { id: "audios",     label: "Audios",     icon: <Music size={16} />,        group: "Manage" },
   { id: "numbers",    label: "Phone Numbers",  icon: <PhoneCall size={16} />, group: "Manage" },
