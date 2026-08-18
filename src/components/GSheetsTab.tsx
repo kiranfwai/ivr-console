@@ -717,7 +717,7 @@ function LeadRow({
   }
 
   const connLabel = conn
-    ? `${conn.tabName}`
+    ? (conn.connName || conn.tabName)
     : lead.connId
       ? lead.connId.replace(/^legacy-/, "")
       : "—";
