@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
     campaignId,
     callStartHour,
     callEndHour,
+    connName:      (body.connName ?? "").trim() || null,
   });
   return NextResponse.json({ ok: true, connection });
 }

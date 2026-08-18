@@ -323,6 +323,7 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS duration_sec int;
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS conn_id text;
     UPDATE gsheet_lead SET conn_id = 'legacy-' || client_id WHERE conn_id IS NULL;
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS conn_name text;
   `;
   await pool().query(alterSql);
 }

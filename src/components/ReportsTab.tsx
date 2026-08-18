@@ -65,7 +65,7 @@ interface DrillRow {
   hangupCause: string | null;
 }
 
-type RecentRow = CallRecord & { outcome: string | null };
+type RecentRow = CallRecord & { outcome: string | null; gsheetConnName?: string | null };
 
 // Report day buckets are IST (Asia/Kolkata) — match the server. Compute the
 // calendar day by shifting the instant by +5:30 and reading the UTC date.
@@ -528,7 +528,7 @@ function KVList({ rows }: { rows: Record<string, number> }) {
   );
 }
 
-type SortKey = "time" | "to" | "campaign" | "outcome" | "digit" | "duration";
+type SortKey = "time" | "to" | "campaign" | "outcome" | "digit" | "duration" | "sheet";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE = 25;
@@ -544,7 +544,7 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
     } else {
       setSortKey(key);
       // Sensible defaults: text asc, numeric/time desc.
-      setSortDir(key === "to" || key === "campaign" || key === "outcome" ? "asc" : "desc");
+      setSortDir(key === "to" || key === "campaign" || key === "outcome" || key === "sheet" ? "asc" : "desc");
     }
     setVisible(PAGE_SIZE);
   }
@@ -559,6 +559,7 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
         case "outcome": return OUTCOME_LABEL[r.outcome || "pending"] || r.outcome || "pending";
         case "digit": return r.digit || "";
         case "duration": return r.durationSec ?? -1;
+        case "sheet": return (r.gsheetConnName || "").toLowerCase();
       }
     };
     return [...rows].sort((a, b) => {
@@ -589,6 +590,7 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
               <Th label="Time" col="time" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
               <Th label="To" col="to" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
               <Th label="Campaign" col="campaign" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
+              <Th label="Source Sheet" col="sheet" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1 hidden md:table-cell" />
               <Th label="Outcome" col="outcome" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
               <Th label="Digit" col="digit" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
               <Th label="Dur" col="duration" sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" className="px-1" />
@@ -602,6 +604,9 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
                   <td className="py-2 px-1 font-mono text-xs text-muted">{istTimeOfDay(r.triggeredAt)}</td>
                   <td className="px-1 font-mono text-xs">{r.to}</td>
                   <td className="px-1 truncate max-w-[160px]">{r.campaignName}</td>
+                  <td className="px-1 text-xs text-muted truncate max-w-[140px] hidden md:table-cell" title={r.gsheetConnName ?? ""}>
+                    {r.gsheetConnName || "—"}
+                  </td>
                   <td className="px-1">
                     <Badge tone={OUTCOME_TONE[o] || "muted"}>{OUTCOME_LABEL[o] || o}</Badge>
                   </td>

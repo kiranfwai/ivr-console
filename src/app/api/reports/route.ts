@@ -4,6 +4,7 @@ import { listCampaigns } from "@/lib/campaigns";
 import { listRecentCalls } from "@/lib/plivo";
 import { deriveOutcome } from "@/lib/outcome";
 import { readRange } from "@/lib/stats";
+import { resolveConnNamesByCallUuids } from "@/lib/gsheets";
 
 export const dynamic = "force-dynamic";
 
@@ -75,12 +76,25 @@ export async function GET(req: NextRequest) {
 
   // ----- recent table: only the latest rows are needed, fetched directly -----
   const recentCalls = await listCalls({ limit: 50, day, from: fromDay, to: toDay, campaignId });
+
+  // Resolve which recent calls originated from a Sheet Auto-Dial lead so we can
+  // show the sheet's display name in the call log.  Non-fatal: a failure here
+  // must not break the entire reports endpoint.
+  let sheetNameByUuid = new Map<string, string>();
+  try {
+    const uuids = recentCalls.map((c) => c.callUuid).filter(Boolean);
+    sheetNameByUuid = await resolveConnNamesByCallUuids(uuids);
+  } catch {
+    // non-fatal — sheet name column will just be empty
+  }
+
   const recent = recentCalls.map((c) => ({
     ...c,
     outcome:
       c.hangupAt || c.status === "failed"
         ? deriveOutcome(c.hangupCause, c.digit, !!c.answeredAt)
         : null,
+    gsheetConnName: sheetNameByUuid.get(c.callUuid) ?? null,
   }));
 
   // ----- hangup causes from Plivo's recent call history (separate source) -----

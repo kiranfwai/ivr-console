@@ -25,6 +25,7 @@ export interface GSheetConn {
   lastSyncedAt: string | null;
   lastError: string | null;
   createdAt: string;
+  connName: string | null; // user-supplied display name (e.g. "August Evening Leads")
 }
 
 /** Backward-compatibility alias — existing code that imports GSheetConfig still works. */
@@ -77,6 +78,7 @@ type ConnRow = {
   last_synced_at: Date | null;
   last_error: string | null;
   created_at: Date;
+  conn_name: string | null;
 };
 
 type LeadRow = {
@@ -112,6 +114,7 @@ function toConn(r: ConnRow): GSheetConn {
     lastSyncedAt: r.last_synced_at ? r.last_synced_at.toISOString() : null,
     lastError: r.last_error,
     createdAt: r.created_at.toISOString(),
+    connName: r.conn_name ?? null,
   };
 }
 
@@ -168,6 +171,7 @@ export interface SaveGSheetConnInput {
   campaignId: string;
   callStartHour?: number;
   callEndHour?: number;
+  connName?: string | null; // optional display name for the connection
 }
 
 export async function createGSheetConn(
@@ -178,11 +182,12 @@ export async function createGSheetConn(
   const tabName = input.tabName?.trim() || "Sheet1";
   const callStartHour = input.callStartHour ?? 9;
   const callEndHour = input.callEndHour ?? 21;
+  const connName = input.connName?.trim() || null;
   const { rows } = await query<ConnRow>(
-    `INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, campaign_id, call_start_hour, call_end_hour)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, campaign_id, call_start_hour, call_end_hour, conn_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [id, clientId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour],
+    [id, clientId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour, connName],
   );
   return toConn(rows[0]);
 }
@@ -195,14 +200,15 @@ export async function updateGSheetConn(
   const tabName = input.tabName?.trim() || "Sheet1";
   const callStartHour = input.callStartHour ?? 9;
   const callEndHour = input.callEndHour ?? 21;
+  const connName = input.connName?.trim() || null;
   const { rows } = await query<ConnRow>(
     `UPDATE gsheet_conn
      SET sheet_id = $3, tab_name = $4, campaign_id = $5,
          call_start_hour = $6, call_end_hour = $7,
-         enabled = true, last_error = NULL
+         conn_name = $8, enabled = true, last_error = NULL
      WHERE client_id = $1 AND id = $2
      RETURNING *`,
-    [clientId, connId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour],
+    [clientId, connId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour, connName],
   );
   if (!rows.length) throw new Error("Connection not found");
   return toConn(rows[0]);
@@ -613,6 +619,40 @@ export async function pollAllClients(): Promise<void> {
       console.error(`[gsheets] poll error conn=${conn.id} client=${conn.clientId}:`, e);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Call-UUID → conn name resolution (used by the Reports API)
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a list of Plivo call UUIDs, return a Map of callUuid → connName for
+ * any calls that originated from a Sheet Auto-Dial lead.
+ *
+ * Falls back to the tab name when conn_name is NULL (i.e. the connection was
+ * created before the custom-name feature was added).
+ *
+ * Non-gsheet calls simply won't appear in the map — callers should treat a
+ * missing entry as "no sheet source" rather than erroring.
+ */
+export async function resolveConnNamesByCallUuids(
+  callUuids: string[],
+): Promise<Map<string, string>> {
+  if (!callUuids.length) return new Map();
+  const { rows } = await query<{ call_uuid: string; conn_name: string | null; tab_name: string }>(
+    `SELECT gl.call_uuid, gc.conn_name, gc.tab_name
+     FROM gsheet_lead gl
+     JOIN gsheet_conn gc ON gl.conn_id = gc.id
+     WHERE gl.call_uuid = ANY($1)`,
+    [callUuids],
+  );
+  const result = new Map<string, string>();
+  for (const r of rows) {
+    if (r.call_uuid) {
+      result.set(r.call_uuid, r.conn_name?.trim() || r.tab_name || "Sheet");
+    }
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

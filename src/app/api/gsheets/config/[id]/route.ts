@@ -59,6 +59,7 @@ export async function PATCH(
     campaignId,
     callStartHour,
     callEndHour,
+    connName:      (body.connName ?? "").trim() || null,
   });
   return NextResponse.json({ ok: true, connection: updated });
 }

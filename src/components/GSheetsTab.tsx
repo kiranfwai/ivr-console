@@ -455,7 +455,7 @@ function SheetConnectionCard({
       title={
         <span className="flex items-center gap-2">
           <CheckCircle2 size={16} className={conn.enabled ? "text-ok" : "text-muted"} />
-          <span>Sheet connected</span>
+          <span>{conn.connName || "Sheet connected"}</span>
           {conn.enabled ? (
             <Badge tone="ok">Active</Badge>
           ) : (
@@ -536,6 +536,7 @@ function ConnectSheetForm({
   onSaved: () => Promise<void>;
   onCancel: () => void;
 }) {
+  const [connName, setConnName]     = useState(existing?.connName ?? "");
   const [sheetUrl, setSheetUrl]     = useState(existing ? `https://docs.google.com/spreadsheets/d/${existing.sheetId}` : "");
   const [tabName, setTabName]       = useState(existing?.tabName ?? "Sheet1");
   const [campaignId, setCampaignId] = useState(existing?.campaignId ?? "");
@@ -555,6 +556,7 @@ function ConnectSheetForm({
         await api(`/api/gsheets/config/${existing.id}`, {
           method: "PATCH",
           body: JSON.stringify({
+            connName:      connName.trim() || null,
             sheetUrl,
             tabName:       tabName.trim() || "Sheet1",
             campaignId,
@@ -568,6 +570,7 @@ function ConnectSheetForm({
         await api("/api/gsheets/config", {
           method: "POST",
           body: JSON.stringify({
+            connName:      connName.trim() || null,
             sheetUrl,
             tabName:       tabName.trim() || "Sheet1",
             campaignId,
@@ -600,6 +603,16 @@ function ConnectSheetForm({
             <AlertCircle size={14} /> {err}
           </div>
         )}
+
+        <div>
+          <Label hint="optional">Connection name</Label>
+          <Input
+            value={connName}
+            onChange={(e) => setConnName(e.target.value)}
+            placeholder="e.g. August Evening Leads, Hyderabad Campaign…"
+          />
+          <p className="mt-1 text-xs text-muted">A display name to identify this sheet connection (shown in the card header and call logs).</p>
+        </div>
 
         <div>
           <Label required>Google Sheet URL</Label>
