@@ -324,6 +324,12 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS conn_id text;
     UPDATE gsheet_lead SET conn_id = 'legacy-' || client_id WHERE conn_id IS NULL;
     ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS conn_name text;
+
+    -- Leads are de-duplicated by phone number against the rows in this table, so
+    -- removing a row would make the sheet look new again and re-dial the person.
+    -- Clearing or deleting a lead therefore stamps deleted_at (hidden in the UI,
+    -- still remembered by the poller) rather than deleting the row.
+    ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
   `;
   await pool().query(alterSql);
 }

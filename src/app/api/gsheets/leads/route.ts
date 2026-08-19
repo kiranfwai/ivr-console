@@ -13,7 +13,7 @@ export async function GET() {
   return NextResponse.json({ leads });
 }
 
-/** DELETE — clear all leads (keeps last_row pointer so no rows are re-processed). */
+/** DELETE — empty the visible queue (rows are kept as tombstones so nobody is re-dialled). */
 export async function DELETE() {
   const clientId = currentClientId();
   if (!clientId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

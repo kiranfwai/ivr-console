@@ -3,6 +3,7 @@ import { query } from "./db";
 import { runWithTenant } from "./tenant";
 import { getCampaign } from "./campaigns";
 import { placeCampaignCall } from "./place-campaign-call";
+import { normalizePhone } from "./phone";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -266,32 +267,49 @@ export async function listLeads(
 ): Promise<GSheetLead[]> {
   if (connId) {
     const { rows } = await query<LeadRow>(
-      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2 ORDER BY queued_at DESC LIMIT $3`,
+      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2 AND deleted_at IS NULL
+       ORDER BY queued_at DESC LIMIT $3`,
       [clientId, connId, limit],
     );
     return rows.map(toLead);
   }
   const { rows } = await query<LeadRow>(
-    `SELECT * FROM gsheet_lead WHERE client_id = $1 ORDER BY queued_at DESC LIMIT $2`,
+    `SELECT * FROM gsheet_lead WHERE client_id = $1 AND deleted_at IS NULL
+     ORDER BY queued_at DESC LIMIT $2`,
     [clientId, limit],
   );
   return rows.map(toLead);
 }
 
+/**
+ * Remove a lead from the queue the user sees.
+ *
+ * Soft delete, deliberately: leads are de-duplicated by phone against the rows
+ * in this table, so a hard DELETE would make that number look brand new on the
+ * very next poll and call the person again. The row stays as a tombstone.
+ */
 export async function deleteLead(clientId: string, id: number): Promise<void> {
-  await query(`DELETE FROM gsheet_lead WHERE client_id = $1 AND id = $2`, [clientId, id]);
+  await query(
+    `UPDATE gsheet_lead SET deleted_at = now()
+     WHERE client_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    [clientId, id],
+  );
 }
 
+/** Empty the visible queue. Soft delete, for the reason given on deleteLead. */
 export async function clearLeads(clientId: string, connId?: string): Promise<void> {
-  // Delete lead records but keep last_row so we don't re-process already-seen rows.
   if (connId) {
     await query(
-      `DELETE FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2`,
+      `UPDATE gsheet_lead SET deleted_at = now()
+       WHERE client_id = $1 AND conn_id = $2 AND deleted_at IS NULL`,
       [clientId, connId],
     );
     return;
   }
-  await query(`DELETE FROM gsheet_lead WHERE client_id = $1`, [clientId]);
+  await query(
+    `UPDATE gsheet_lead SET deleted_at = now() WHERE client_id = $1 AND deleted_at IS NULL`,
+    [clientId],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -304,10 +322,17 @@ export function extractSheetId(urlOrId: string): string {
   return m ? m[1] : urlOrId.trim();
 }
 
+/**
+ * Where the CSV export is fetched from. Always Google in production; overridable
+ * so the dedupe/poll logic can be exercised against a local fixture server
+ * without hitting the network. Never set this in a deployed environment.
+ */
+const CSV_BASE = process.env.GSHEETS_CSV_BASE || "https://docs.google.com";
+
 /** Fetch all rows from a publicly-shared Google Sheet as a 2-D string array. */
 async function fetchSheetRows(sheetId: string, tabName: string): Promise<string[][]> {
   const url =
-    `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}` +
+    `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}` +
     `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
@@ -433,7 +458,7 @@ export async function triggerLeadCallById(
   leadId: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const { rows: leads } = await query<LeadRow>(
-    `SELECT * FROM gsheet_lead WHERE client_id = $1 AND id = $2`,
+    `SELECT * FROM gsheet_lead WHERE client_id = $1 AND id = $2 AND deleted_at IS NULL`,
     [clientId, leadId],
   );
   if (!leads.length) return { ok: false, error: "Lead not found" };
@@ -456,25 +481,109 @@ export interface PollResult {
   called: number;
   queued: number;
   flushed: number;
+  /** Rows whose phone cell was missing or unparseable, so no lead was created. */
+  skippedInvalid?: number;
   error?: string;
 }
 
 /**
- * Build the row_hash for a given connection + row index.
+ * Build the row_hash that identifies a lead within a connection.
  *
- * Legacy connections (id starts with 'legacy-') keep the old hash format so
- * existing DB rows are still recognised as "already processed", preventing
- * duplicate leads on upgrade.  New connections use a compact connId-based hash.
+ * A lead is identified by its NORMALIZED PHONE NUMBER, never by its position in
+ * the sheet. The old scheme hashed the row index, which broke the moment anyone
+ * inserted or deleted a row in the middle of a sheet: every row below shifted,
+ * so people already called looked "new" (and were called again) while genuinely
+ * new rows landed on an index we had already processed (and were never called).
+ *
+ * Scoped to the connection, not the client: two different sheets may legitimately
+ * target the same person for different campaigns.
  */
-function makeRowHash(conn: GSheetConn, rowIndex: number): string {
-  if (conn.id.startsWith("legacy-")) {
-    // Old format: clientId:sheetId:rowIndex — must match what was inserted before the upgrade.
-    return `${conn.clientId}:${conn.sheetId}:${rowIndex}`;
+const HASH_PREFIX = "p1:";
+
+function makeRowHash(conn: GSheetConn, phoneE164: string): string {
+  return `${HASH_PREFIX}${conn.id}:${phoneE164}`;
+}
+
+// ---------------------------------------------------------------------------
+// One-time migration: position-based row_hash -> phone-based row_hash
+// ---------------------------------------------------------------------------
+
+const HASH_SCHEME_KEY = "gsheet_hash_scheme";
+const HASH_SCHEME_VERSION = 2;
+let hashMigrationDone = false;
+
+/**
+ * Rewrite every existing lead's row_hash to the phone-based scheme, once.
+ *
+ * Without this, the first poll after the upgrade would see brand-new hashes for
+ * everybody already in the queue and re-call the lot. Rows are processed oldest
+ * first, so when the same number appears twice the original row wins; the loser
+ * keeps its old hash, which is harmless — it is history, and a stale hash can
+ * never block a future insert (nothing generates that shape any more).
+ *
+ * Idempotent and cheap to call: guarded in memory and by an app_config marker.
+ */
+export async function ensurePhoneHashMigration(): Promise<void> {
+  if (hashMigrationDone) return;
+
+  const { rows: marker } = await query<{ v: any }>(
+    `SELECT v FROM app_config WHERE k = $1`,
+    [HASH_SCHEME_KEY],
+  );
+  if (marker.length && Number(marker[0].v?.version) >= HASH_SCHEME_VERSION) {
+    hashMigrationDone = true;
+    return;
   }
-  return `${conn.id}:${rowIndex}`;
+
+  let migrated = 0, kept = 0, lastId = 0;
+  for (;;) {
+    const { rows: batch } = await query<{
+      id: string; conn_id: string | null; phone: string; row_hash: string;
+    }>(
+      `SELECT id, conn_id, phone, row_hash FROM gsheet_lead
+       WHERE id > $1 ORDER BY id LIMIT 500`,
+      [lastId],
+    );
+    if (!batch.length) break;
+
+    for (const r of batch) {
+      lastId = Number(r.id);
+      const phone = normalizePhone(r.phone);
+      if (!r.conn_id || !phone) { kept++; continue; }
+
+      const next = `${HASH_PREFIX}${r.conn_id}:${phone}`;
+      if (r.row_hash === next) continue;
+
+      // Skip rather than fail when another row already holds the target hash —
+      // that row is the one that owns this phone number for this connection.
+      const { rowCount } = await query(
+        `UPDATE gsheet_lead g SET row_hash = $2
+         WHERE g.id = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM gsheet_lead x
+             WHERE x.client_id = g.client_id AND x.row_hash = $2
+           )`,
+        [r.id, next],
+      );
+      if (rowCount) migrated++; else kept++;
+    }
+  }
+
+  await query(
+    `INSERT INTO app_config (k, v) VALUES ($1, $2::jsonb)
+     ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [HASH_SCHEME_KEY, JSON.stringify({ version: HASH_SCHEME_VERSION })],
+  );
+  hashMigrationDone = true;
+  console.info(
+    `[gsheets] row_hash -> phone scheme: ${migrated} migrated, ${kept} left on the old hash (duplicates/unparseable)`,
+  );
 }
 
 export async function pollClient(conn: GSheetConn): Promise<PollResult> {
+  // No-op after the first call; must run before any hash is read or written.
+  await ensurePhoneHashMigration();
+
   let rows: string[][];
   try {
     rows = await fetchSheetRows(conn.sheetId, conn.tabName);
@@ -509,43 +618,85 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
     return { newRows: 0, called: 0, queued: 0, flushed: 0, error };
   }
 
-  // data rows = everything after header; new = not yet processed
+  // Scan EVERY data row, not just the ones past `lastRow`. Identity is the phone
+  // number (see makeRowHash), so a re-scan is idempotent — and it is the only way
+  // to stay correct when rows are inserted or deleted mid-sheet, which shifts every
+  // row below them. The whole CSV is fetched on every poll regardless, so this
+  // costs one extra SELECT, not an extra download.
   const dataRows = rows.slice(1);
-  const newDataRows = dataRows.slice(conn.lastRow);
 
+  interface Candidate {
+    phone: string;      // normalized E.164 — what we dial and what we store
+    rowHash: string;
+    name: string | null;
+    email: string | null;
+    rowIndex: number;   // 1-based, for display only
+  }
+
+  const candidates: Candidate[] = [];
+  const seenInSheet = new Set<string>();
+  let skippedInvalid = 0;
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    const raw = (row[phoneCol] ?? "").trim();
+    if (!raw) continue;
+
+    const phone = normalizePhone(raw);
+    // Guard against a stray "12" or a header repeated mid-sheet becoming a call.
+    if (phone.replace(/\D+/g, "").length < 8) { skippedInvalid++; continue; }
+    // The same number listed twice in one sheet is one person, so one call.
+    if (seenInSheet.has(phone)) continue;
+    seenInSheet.add(phone);
+
+    candidates.push({
+      phone,
+      rowHash: makeRowHash(conn, phone),
+      name:  nameCol  >= 0 ? (row[nameCol]  ?? "").trim() || null : null,
+      email: emailCol >= 0 ? (row[emailCol] ?? "").trim() || null : null,
+      rowIndex: i + 1,
+    });
+  }
+
+  // One round-trip to find which of these we already hold, instead of an INSERT
+  // per row: on a settled 5,000-row sheet a poll then writes nothing at all.
+  const known = new Set<string>();
+  if (candidates.length) {
+    const { rows: hits } = await query<{ row_hash: string }>(
+      `SELECT row_hash FROM gsheet_lead WHERE client_id = $1 AND row_hash = ANY($2::text[])`,
+      [conn.clientId, candidates.map((c) => c.rowHash)],
+    );
+    for (const h of hits) known.add(h.row_hash);
+  }
+
+  const inWindow = isInWindow(conn.callStartHour, conn.callEndHour);
   let newRows = 0, called = 0, queued = 0;
 
-  for (let i = 0; i < newDataRows.length; i++) {
-    const row = newDataRows[i];
-    const phone = (row[phoneCol] ?? "").trim();
-    if (!phone) continue;
+  for (const c of candidates) {
+    if (known.has(c.rowHash)) continue;
 
-    const name     = nameCol  >= 0 ? (row[nameCol]  ?? "").trim() || null : null;
-    const email    = emailCol >= 0 ? (row[emailCol] ?? "").trim() || null : null;
-    const rowIndex = conn.lastRow + i + 1; // 1-based data row index
-    const rowHash  = makeRowHash(conn, rowIndex);
-
+    // ON CONFLICT still guards the race with a concurrent manual poll.
     const { rows: inserted } = await query<{ id: string }>(
       `INSERT INTO gsheet_lead (client_id, conn_id, sheet_id, row_index, name, email, phone, row_hash, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')
        ON CONFLICT (client_id, row_hash) DO NOTHING
        RETURNING id`,
-      [conn.clientId, conn.id, conn.sheetId, rowIndex, name, email, phone, rowHash],
+      [conn.clientId, conn.id, conn.sheetId, c.rowIndex, c.name, c.email, c.phone, c.rowHash],
     );
-    if (!inserted.length) continue; // already processed
+    if (!inserted.length) continue; // another poll got there first
 
     newRows++;
     const leadId = Number(inserted[0].id);
-    if (isInWindow(conn.callStartHour, conn.callEndHour)) {
-      await fireLeadCall(conn.clientId, leadId, conn.campaignId, phone, name, email);
+    if (inWindow) {
+      await fireLeadCall(conn.clientId, leadId, conn.campaignId, c.phone, c.name, c.email);
       called++;
     } else {
       queued++;
     }
   }
 
-  // Advance the last-read pointer
-  const newLastRow = conn.lastRow + newDataRows.length;
+  // `lastRow` is no longer a dedupe pointer — keep it as "data rows seen" for the UI.
+  const newLastRow = dataRows.length;
   await query(
     `UPDATE gsheet_conn SET last_row = $2, last_synced_at = now(), last_error = NULL WHERE id = $1`,
     [conn.id, newLastRow],
@@ -556,7 +707,9 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
   let flushed = 0;
   if (isInWindow(conn.callStartHour, conn.callEndHour)) {
     const { rows: pending } = await query<LeadRow>(
-      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2 AND status = 'queued' ORDER BY queued_at`,
+      `SELECT * FROM gsheet_lead WHERE client_id = $1 AND conn_id = $2
+         AND status = 'queued' AND deleted_at IS NULL
+       ORDER BY queued_at`,
       [conn.clientId, conn.id],
     );
     for (const r of pending) {
@@ -565,7 +718,7 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
     }
   }
 
-  return { newRows, called, queued, flushed };
+  return { newRows, called, queued, flushed, skippedInvalid };
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +766,7 @@ export async function pollAllClients(): Promise<void> {
       console.info(
         `[gsheets] poll conn=${conn.id} client=${conn.clientId}: +${r.newRows} rows, ` +
         `${r.called} called, ${r.queued} queued, ${r.flushed} flushed` +
+        (r.skippedInvalid ? `, ${r.skippedInvalid} unusable phone(s)` : "") +
         (r.error ? `, error: ${r.error}` : ""),
       );
     } catch (e) {
@@ -665,6 +819,11 @@ const POLL_INTERVAL_MS = Number(process.env.GSHEETS_POLL_INTERVAL_MS) || 5 * 60 
 export async function startGsheetsPoller(): Promise<void> {
   if (G.__ivrGsheetsPollerStarted) return;
   G.__ivrGsheetsPollerStarted = true;
+  // Move existing leads onto the phone-based hash before any poll can run, so
+  // the first tick after a deploy cannot re-call people already in the queue.
+  await ensurePhoneHashMigration().catch((e) =>
+    console.error("[gsheets] row_hash migration failed — poller will retry on first poll:", e),
+  );
   console.info(`[gsheets] poller started — interval ${POLL_INTERVAL_MS / 1000}s`);
   const timer = setInterval(() => void pollAllClients(), POLL_INTERVAL_MS);
   if (timer && typeof (timer as any).unref === "function") (timer as any).unref();
