@@ -351,21 +351,25 @@ const CSV_BASE = process.env.GSHEETS_CSV_BASE || "https://docs.google.com";
 /**
  * Fetch all rows of ONE tab of a publicly-shared Google Sheet as a 2-D array.
  *
- * Targets the tab by `gid` when the connection has one — exact, and unaffected
- * by the tab being renamed. Falls back to `sheet=<name>` for connections made
- * before gid targeting existed, which is the old behaviour unchanged.
+ * Two endpoints, deliberately:
+ *
+ *   by gid  -> /export?format=csv&gid=...   Verified against a real sheet: an
+ *              unknown gid returns HTTP 400 here, but the gviz endpoint answers
+ *              200 with THE FIRST TAB. Silently dialling the first tab when a
+ *              tab is deleted is the exact bug gid targeting exists to remove,
+ *              so gid must use the endpoint that fails loudly.
+ *   by name -> /gviz/tq?tqx=out:csv&sheet=  The only one that accepts a tab
+ *              name, and what every pre-gid connection has always used.
  */
 async function fetchSheetRows(
   sheetId: string,
   tabName: string,
   gid: string | null,
 ): Promise<string[][]> {
-  const target = gid
-    ? `gid=${encodeURIComponent(gid)}`
-    : `sheet=${encodeURIComponent(tabName)}`;
-  const url =
-    `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}` +
-    `/gviz/tq?tqx=out:csv&${target}`;
+  const path = gid
+    ? `/export?format=csv&gid=${encodeURIComponent(gid)}`
+    : `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+  const url = `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {

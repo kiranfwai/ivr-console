@@ -141,13 +141,12 @@ const makeRowHash = (connId, phoneE164) => `${HASH_PREFIX}${connId}:${phoneE164}
 /** Copy of the poller's CSV export URL. */
 const CSV_BASE = process.env.GSHEETS_CSV_BASE || "https://docs.google.com";
 async function fetchSheetRows(sheetId, tabName, gid) {
-  // Same rule as the poller: gid when the connection has one, name otherwise.
-  const target = gid
-    ? `gid=${encodeURIComponent(gid)}`
-    : `sheet=${encodeURIComponent(tabName)}`;
-  const url =
-    `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}` +
-    `/gviz/tq?tqx=out:csv&${target}`;
+  // Same two endpoints as the poller: /export for a gid (an unknown gid 400s
+  // there, where gviz would answer 200 with the wrong tab), gviz for a name.
+  const path = gid
+    ? `/export?format=csv&gid=${encodeURIComponent(gid)}`
+    : `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+  const url = `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}${path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
   try {

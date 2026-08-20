@@ -53,7 +53,11 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const gid = url.searchParams.get("gid");
   const sheet = url.searchParams.get("sheet");
-  requests.push({ gid, sheet });
+  // Which endpoint was used matters as much as the parameter: verified against
+  // a real sheet, /export 400s on an unknown gid while gviz answers 200 with
+  // the FIRST tab, so a gid fetch must never go to gviz.
+  const endpoint = url.pathname.endsWith("/export") ? "export" : "gviz";
+  requests.push({ gid, sheet, endpoint });
 
   const csv = gid ? TABS.byGid[gid] : TABS.byName[sheet ?? ""];
   if (!csv) {
@@ -176,7 +180,7 @@ async function main() {
 
     requests.length = 0;
     await api("/api/gsheets/poll", { method: "POST", body: JSON.stringify({ connId: fromLink.id }) });
-    check("poll asked Google for that gid", requests, [{ gid: GID, sheet: null }]);
+    check("poll asked Google for that gid", requests, [{ gid: GID, sheet: null, endpoint: "export" }]);
     check("and queued that tab's lead", await phonesFor(fromLink.id), ["+919111000001"]);
 
     // 2. No gid in the URL: the tab name still decides, as it always did.
@@ -189,7 +193,7 @@ async function main() {
 
     requests.length = 0;
     await api("/api/gsheets/poll", { method: "POST", body: JSON.stringify({ connId: byName.id }) });
-    check("poll asked by tab name", requests, [{ gid: null, sheet: "Hot Leads" }]);
+    check("poll asked by tab name", requests, [{ gid: null, sheet: "Hot Leads", endpoint: "gviz" }]);
     check("and queued the named tab's lead", await phonesFor(byName.id), ["+919333000001"]);
 
     // 3. The old default, unchanged: no gid, no name -> Sheet1. This is the
@@ -243,7 +247,7 @@ async function main() {
 
     requests.length = 0;
     await api("/api/gsheets/poll", { method: "POST", body: JSON.stringify({ connId: fromLink.id }) });
-    check("and the poll now asks by name", requests, [{ gid: null, sheet: "Hot Leads" }]);
+    check("and the poll now asks by name", requests, [{ gid: null, sheet: "Hot Leads", endpoint: "gviz" }]);
 
     // 7. ...and back again.
     const { connection: reGid } = await api(`/api/gsheets/config/${fromLink.id}`, {
