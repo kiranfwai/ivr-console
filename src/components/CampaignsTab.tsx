@@ -81,7 +81,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
           <EmptyState
             icon={<Megaphone size={20} />}
             title="No campaigns yet"
-            description="A campaign bundles the audio, prompt, press-1 webhook, and from-number. Pick one when dialing."
+            description="A campaign bundles the audio, prompt, WhatsApp webhook, and from-number. Pick one when dialing."
             action={
               <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
                 Create campaign
@@ -318,6 +318,12 @@ function CampaignEditor({
   const [callEndSec, setCallEndSec] = useState(seed?.callEndSec ? String(seed.callEndSec) : "");
   // Once the user types their own value we stop auto-overwriting it from the audio.
   const [callEndTouched, setCallEndTouched] = useState(!!seed?.callEndSec);
+  // What sends the WhatsApp message. New campaigns send on answer; a campaign
+  // saved before this setting existed has no value and keeps the press-1
+  // behaviour until someone changes it here.
+  const [whatsappTrigger, setWhatsappTrigger] = useState<"answer" | "press1">(
+    seed ? (seed.whatsappTrigger === "answer" ? "answer" : "press1") : "answer",
+  );
   const [busy, setBusy] = useState(false);
 
   const selectedAudio = audios.find((a) => a.id === audioId) ?? null;
@@ -350,6 +356,7 @@ function CampaignEditor({
         webhookUrl,
         fromNumber,
         callEndSec: callEndSec.trim() ? Number(callEndSec) : null,
+        whatsappTrigger,
       };
       if (initial) {
         await api(`/api/campaigns/${initial.id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -428,7 +435,22 @@ function CampaignEditor({
           </div>
         </div>
         <div>
-          <Label hint="optional">Press-1 webhook URL</Label>
+          <Label>Send the WhatsApp message</Label>
+          <Select
+            value={whatsappTrigger}
+            onChange={(e) => setWhatsappTrigger(e.target.value === "answer" ? "answer" : "press1")}
+          >
+            <option value="answer">As soon as they pick up</option>
+            <option value="press1">Only if they press 1</option>
+          </Select>
+          <div className="text-xs text-muted mt-1">
+            {whatsappTrigger === "answer"
+              ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
+              : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
+          </div>
+        </div>
+        <div>
+          <Label hint="optional">WhatsApp webhook URL</Label>
           <Input
             value={webhookUrl}
             onChange={(e) => setWebhookUrl(e.target.value)}

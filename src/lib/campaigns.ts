@@ -1,5 +1,5 @@
 import { redis, newId } from "./redis";
-import type { Campaign } from "./models";
+import type { Campaign, WhatsappTrigger } from "./models";
 
 const KEY = (id: string) => `campaign:${id}`;
 const INDEX = "campaigns:index";
@@ -36,6 +36,15 @@ export interface CampaignInput {
   webhookUrl?: string;
   fromNumber?: string;
   callEndSec?: number | null;
+  whatsappTrigger?: WhatsappTrigger | string | null;
+}
+
+/**
+ * Which event sends the WhatsApp message. Anything unrecognised becomes
+ * "press1" — a typo must not silently start messaging everyone who answers.
+ */
+function normalizeTrigger(v: unknown): WhatsappTrigger {
+  return v === "answer" ? "answer" : "press1";
 }
 
 /** Coerce a Call Ending Duration input into a positive integer, or undefined. */
@@ -56,6 +65,9 @@ export async function createCampaign(input: CampaignInput): Promise<Campaign> {
     webhookUrl: input.webhookUrl ?? "",
     fromNumber: input.fromNumber ?? "",
     createdAt: new Date().toISOString(),
+    // New campaigns send on answer, which is how these are run now. Existing
+    // campaigns are left on press-1 until someone changes them deliberately.
+    whatsappTrigger: normalizeTrigger(input.whatsappTrigger ?? "answer"),
     ...(callEndSec ? { callEndSec } : {}),
   };
   const r = redis();
@@ -78,6 +90,9 @@ export async function updateCampaign(id: string, patch: Partial<CampaignInput>):
     // Call Ending Duration: a value sets the cap, an explicit null/0 clears it
     // (fall back to "audio plays once" behavior with no hard time_limit).
     ...(patch.callEndSec !== undefined ? { callEndSec: normalizeCallEndSec(patch.callEndSec) } : {}),
+    ...(patch.whatsappTrigger !== undefined
+      ? { whatsappTrigger: normalizeTrigger(patch.whatsappTrigger) }
+      : {}),
   };
   await r.set(KEY(id), next);
   return next;

@@ -24,7 +24,20 @@ export interface Campaign {
   // but editable per campaign. When unset, no hard cap is sent and the call still
   // ends after the audio plays once (answer XML uses retries=1 + a short grace).
   callEndSec?: number;
+  /**
+   * What makes the WhatsApp message go out.
+   *
+   *   "answer" — the moment the call is picked up. Pressing 1 still works and
+   *              is still counted, it just isn't what sends the message.
+   *   "press1" — only when the lead presses 1. The original behaviour.
+   *
+   * Absent means "press1": campaigns that already existed keep behaving exactly
+   * as they did, and are moved over deliberately rather than by an upgrade.
+   */
+  whatsappTrigger?: WhatsappTrigger;
 }
+
+export type WhatsappTrigger = "answer" | "press1";
 
 export type CallStatus =
   | "triggered"
@@ -52,6 +65,12 @@ export interface CallRecord {
   hangupCause?: string;
   pabblyStatus?: number;
   bulkJobId?: string;
+  /**
+   * When the WhatsApp webhook was fired for this call. Set once and checked
+   * before every send, so a lead who answers AND presses 1 gets one message,
+   * not two — and a Plivo callback delivered twice cannot double-send either.
+   */
+  whatsappSentAt?: string;
 }
 
 export type BulkRowStatus =

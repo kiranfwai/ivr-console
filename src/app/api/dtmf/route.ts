@@ -3,7 +3,7 @@ import { plivoGuard, parseFormBody } from "@/lib/plivo";
 import { sigTokenForClient } from "@/lib/plivo-config";
 import { getCall, patchCall } from "@/lib/calls";
 import { recordPress1 } from "@/lib/stats";
-import { digitsOnly } from "@/lib/phone";
+import { notifyWhatsapp } from "@/lib/whatsapp-notify";
 import { redis } from "@/lib/redis";
 import { runWithTenant } from "@/lib/tenant";
 
@@ -70,39 +70,29 @@ async function handleInner(req: NextRequest) {
   }
 
   if (digits === "1") {
-    // Abuse fix: only fire the webhook for a call we actually placed. Without this,
-    // an unauthenticated GET/POST to /api/dtmf?Digits=1&To=<any-number> (signature
-    // verification is off by default) would make us POST the Pabbly webhook to an
-    // arbitrary number. The webhook + recipient come ONLY from the stored record —
-    // never from the request query string.
-    const webhook = record ? (record.webhookUrl || process.env.PABBLY_WEBHOOK_URL || "") : "";
+    // Press-1 still works and is still counted, whatever the campaign's trigger
+    // is. What changed is that it is no longer the only way to earn the message:
+    // on an "answer" campaign notifyWhatsapp() finds the send already claimed
+    // from the pickup and does nothing, so the lead gets exactly one message.
+    //
+    // The webhook + recipient come ONLY from the stored record, never from the
+    // request — signature verification is off by default, so an unauthenticated
+    // POST to /api/dtmf?Digits=1&To=<any-number> must not be able to aim our
+    // webhook at an arbitrary number.
     let pabblyStatus = 0;
-    if (record && webhook) {
-      const leadPhone = digitsOnly(record.to || "");
-      try {
-        const payload: any = {
-          phone: leadPhone,
-          lead: leadPhone,
-          from: record.from,
-          to: record.to,
-          callUuid,
-          digit: "1",
-          campaign: record.campaignName,
-        };
-        if (record.email) payload.email = record.email;
-        const r = await fetch(webhook, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        pabblyStatus = r.status;
-      } catch {
-        pabblyStatus = -1;
-      }
+    if (internalId && record) {
+      const r = await notifyWhatsapp(internalId, { event: "press1", digit: "1", callUuid });
+      pabblyStatus = r.status;
     }
     // Count the press-1 once (Plivo won't normally re-POST, but guard anyway).
     if (record && record.status !== "press1") await recordPress1(record);
-    if (internalId) await patchCall(internalId, { status: "press1", pabblyStatus });
+    if (internalId) {
+      await patchCall(internalId, {
+        status: "press1",
+        // Don't overwrite the status of a send that already happened on answer.
+        ...(pabblyStatus ? { pabblyStatus } : {}),
+      });
+    }
     return xml(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Hangup/>

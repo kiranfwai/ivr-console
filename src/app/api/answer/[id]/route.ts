@@ -5,6 +5,7 @@ import { plivoGuard, publicBaseUrl, parseFormBody } from "@/lib/plivo";
 import { sigTokenForClient } from "@/lib/plivo-config";
 import { patchCall, getCall } from "@/lib/calls";
 import { recordAnswered } from "@/lib/stats";
+import { notifyWhatsappInBackground, triggerOf } from "@/lib/whatsapp-notify";
 import { redis } from "@/lib/redis";
 import { runWithTenant } from "@/lib/tenant";
 
@@ -79,13 +80,26 @@ async function handleInner(req: NextRequest, id: string) {
     const cur = await getCall(req_);
     if (cur) {
       // Count the answer once, on the first transition only (Plivo may re-POST).
-      if (!cur.answeredAt) await recordAnswered(cur);
+      const firstAnswer = !cur.answeredAt;
+      if (firstAnswer) await recordAnswered(cur);
       await patchCall(req_, {
         status: "answered",
         answeredAt: new Date().toISOString(),
         from: from || cur.from,
         to: to || cur.to,
       });
+
+      // Campaigns set to send on answer message the lead the moment they pick
+      // up — pressing 1 is no longer what earns the message, though it still
+      // works and is still counted.
+      //
+      // Deliberately NOT awaited: Plivo is waiting on the XML below, and a slow
+      // Pabbly would be heard by the lead as silence before the audio starts.
+      // notifyWhatsapp() claims the send before it fires, so this cannot double
+      // up with a press-1 arriving moments later.
+      if (firstAnswer && triggerOf(campaign) === "answer") {
+        notifyWhatsappInBackground(req_, { event: "answered", callUuid }, cur);
+      }
     }
   }
 

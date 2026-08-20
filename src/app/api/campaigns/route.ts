@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       webhookUrl: body.webhookUrl,
       fromNumber: body.fromNumber,
       callEndSec: body.callEndSec,
+      whatsappTrigger: body.whatsappTrigger,
     });
     return NextResponse.json({ campaign: c }, { status: 201 });
   } catch (e) {
