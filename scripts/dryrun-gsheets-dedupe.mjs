@@ -203,6 +203,15 @@ const money = (n, currency = "INR") =>
 
 const digits10 = (p) => (p || "").replace(/\D+/g, "").slice(-10);
 
+/**
+ * Escape a value being spliced into a LIKE pattern.
+ *
+ * Client ids look like `cli_mszxbcd4pvvkt2` — that underscore is a single-char
+ * wildcard in LIKE, so an unescaped prefix could match a different client's
+ * keys and over-report the risk.
+ */
+const likeEscape = (s) => s.replace(/([!%_])/g, "!$1");
+
 // stdout discipline: in --json mode the JSON is the only thing on stdout.
 function out(s) {
   if (!AS_JSON) console.log(s);
@@ -244,6 +253,42 @@ async function loadGlobalPricing() {
     perConnectedCall: Number.isFinite(rate) && rate >= 0 ? rate : 0.81,
     currency: typeof v.currency === "string" && v.currency.trim() ? v.currency.trim() : "INR",
   };
+}
+
+/**
+ * Every phone number this client has ever been recorded as calling, as last-10
+ * digits. Returns null if the scan could not be completed.
+ *
+ * Memoised per client: the scan walks `kv`, which has no index for this shape,
+ * so doing it once per client beats doing it once per connection.
+ *
+ * Wrapped in a savepoint on purpose. On a large live `kv` this is the one query
+ * that might hit statement_timeout, and a failed statement poisons the whole
+ * enclosing transaction — without the savepoint one slow client would take the
+ * entire report down with it. On failure the connection is reported as
+ * "call history unchecked" rather than silently as "no repeats".
+ */
+const calledCache = new Map();
+async function calledDigitsFor(clientId) {
+  if (calledCache.has(clientId)) return calledCache.get(clientId);
+  let result = null;
+  await db.query("SAVEPOINT call_history");
+  try {
+    const { rows } = await db.query(
+      `SELECT DISTINCT right(regexp_replace(v->>'to', '\\D', '', 'g'), 10) AS d
+         FROM kv
+        WHERE k LIKE $1 ESCAPE '!'
+          AND v->>'to' IS NOT NULL`,
+      [`t:${likeEscape(clientId)}:call:%`],
+    );
+    await db.query("RELEASE SAVEPOINT call_history");
+    result = new Set(rows.map((r) => r.d).filter((d) => d && d.length === 10));
+  } catch (e) {
+    await db.query("ROLLBACK TO SAVEPOINT call_history");
+    out(`  (call-history scan failed for ${clientId}: ${e.message || e})`);
+  }
+  calledCache.set(clientId, result);
+  return result;
 }
 
 async function loadConns() {
@@ -368,16 +413,11 @@ async function dryRunConn(conn, globalPricing) {
   // Queue / Delete Lead buttons on the current live code. Under `last_row` it
   // could never come back; after this change it looks brand new and is dialled.
   let previouslyCalled = [];
+  let callHistoryChecked = true;
   if (fresh.length) {
-    const { rows: hits } = await db.query(
-      `SELECT DISTINCT right(regexp_replace(v->>'to', '\\D', '', 'g'), 10) AS d
-         FROM kv
-        WHERE k LIKE $1
-          AND right(regexp_replace(v->>'to', '\\D', '', 'g'), 10) = ANY($2::text[])`,
-      [`t:${conn.client_id}:call:%`, fresh.map((c) => digits10(c.phone))],
-    );
-    const calledDigits = new Set(hits.map((h) => h.d));
-    previouslyCalled = fresh.filter((c) => calledDigits.has(digits10(c.phone)));
+    const calledDigits = await calledDigitsFor(conn.client_id);
+    if (calledDigits) previouslyCalled = fresh.filter((c) => calledDigits.has(digits10(c.phone)));
+    else callHistoryChecked = false;
   }
   const previouslyCalledSet = new Set(previouslyCalled);
   const neverCalled = fresh.filter((c) => !previouslyCalledSet.has(c));
@@ -402,6 +442,7 @@ async function dryRunConn(conn, globalPricing) {
     goneFromSheet,
     wouldCall: fresh.length,
     wouldCallPreviouslyCalled: previouslyCalled.length,
+    callHistoryChecked,
     rate,
     costCeiling,
     walletBalance: conn.balance == null ? null : Number(conn.balance),
@@ -447,6 +488,11 @@ async function dryRunConn(conn, globalPricing) {
   out(`                   up to ${money(costCeiling, res.currency)} at ${money(rate, res.currency)}/connected call` +
       (res.walletBalance != null ? `, wallet holds ${money(res.walletBalance, res.currency)}` : ""));
 
+  if (!callHistoryChecked) {
+    out("  ** UNCHECKED **  the call-history scan failed, so whether any of these have been called");
+    out("                   before is UNKNOWN. Treat the numbers below as unverified.");
+  }
+
   if (previouslyCalled.length) {
     out(`  ** WARNING **    ${previouslyCalled.length} of them have ALREADY BEEN CALLED by this client before.`);
     out("                   Their lead row is gone from the database (hard-deleted by Clear Queue on the");
@@ -460,7 +506,12 @@ async function dryRunConn(conn, globalPricing) {
   }
 
   if (neverCalled.length) {
-    out(`  genuinely new    ${neverCalled.length} number(s) with no call history — these SHOULD be called:`);
+    // "No call history" is not quite "should be called": a lead cleared from the
+    // queue BEFORE it ever dialled also lands here, and the clear used to be
+    // permanent. Those people now get their call. Usually right, worth an eye.
+    out(`  no call history  ${neverCalled.length} number(s) never dialled by this client — normally the`);
+    out("                   backlog the old code skipped, but a lead cleared before it dialled looks");
+    out("                   the same, and it would now be called:");
     for (const c of neverCalled.slice(0, SAMPLES)) {
       out(`                     ${show(c.phone)}  (sheet row ${c.rowIndex + 1})`);
     }
@@ -482,6 +533,7 @@ function summarise() {
     dialImmediately: ok
       .filter((c) => c.window && c.window.openNow)
       .reduce((n, c) => n + (c.wouldCall || 0), 0),
+    unchecked: ok.filter((c) => c.callHistoryChecked === false).length,
   };
   report.totals = totals;
 
@@ -493,16 +545,23 @@ function summarise() {
   out(`  of those, already called before  : ${totals.wouldCallPreviouslyCalled}`);
   out(`  worst-case wallet spend          : ${money(totals.costCeiling)} (if every call connects)`);
   out("");
-  if (totals.failed) {
-    out(`VERDICT: INCOMPLETE — ${totals.failed} connection(s) could not be read, so their numbers are unknown.`);
-  } else if (totals.wouldCall === 0) {
-    out("VERDICT: SAFE — the first poll after deploy would place no new calls at all.");
-  } else if (totals.wouldCallPreviouslyCalled === 0) {
-    out(`VERDICT: OK — ${totals.wouldCall} new call(s), none of them a repeat. This is the backlog the old`);
-    out("         code skipped. Deploy with the window closed if you want to eyeball the queue first.");
-  } else {
+  const gaps = [
+    totals.failed ? `${totals.failed} connection(s) could not be read` : null,
+    totals.unchecked ? `${totals.unchecked} connection(s) could not be checked against call history` : null,
+  ].filter(Boolean);
+
+  // A repeat call outranks everything: report it even if some connections failed.
+  if (totals.wouldCallPreviouslyCalled > 0) {
     out(`VERDICT: HOLD — ${totals.wouldCallPreviouslyCalled} person(s) would be called a SECOND time.`);
     out("         Seed tombstone rows for those numbers (or remove them from the sheet) before deploying.");
+    if (gaps.length) out(`         And there may be more: ${gaps.join(", ")}.`);
+  } else if (gaps.length) {
+    out(`VERDICT: INCOMPLETE — ${gaps.join(", ")}, so "no repeat calls" is NOT proven. Fix and re-run.`);
+  } else if (totals.wouldCall === 0) {
+    out("VERDICT: SAFE — the first poll after deploy would place no new calls at all.");
+  } else {
+    out(`VERDICT: OK — ${totals.wouldCall} new call(s), none of them a repeat. This is the backlog the old`);
+    out("         code skipped. Deploy with the window closed if you want to eyeball the queue first.");
   }
 }
 
