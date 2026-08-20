@@ -34,6 +34,11 @@ export interface GSheetConn {
   lastError: string | null;
   createdAt: string;
   connName: string | null; // user-supplied display name (e.g. "August Evening Leads")
+  /** What the last scan saw in the sheet. Null until a connection has synced once. */
+  sheetRows: number | null;
+  sheetUsable: number | null;
+  sheetInvalid: number | null;
+  sheetDuplicates: number | null;
 }
 
 /** Backward-compatibility alias — existing code that imports GSheetConfig still works. */
@@ -88,6 +93,10 @@ type ConnRow = {
   last_error: string | null;
   created_at: Date;
   conn_name: string | null;
+  sheet_rows: number | null;
+  sheet_usable: number | null;
+  sheet_invalid: number | null;
+  sheet_duplicates: number | null;
 };
 
 type LeadRow = {
@@ -125,6 +134,10 @@ function toConn(r: ConnRow): GSheetConn {
     lastError: r.last_error,
     createdAt: r.created_at.toISOString(),
     connName: r.conn_name ?? null,
+    sheetRows: r.sheet_rows ?? null,
+    sheetUsable: r.sheet_usable ?? null,
+    sheetInvalid: r.sheet_invalid ?? null,
+    sheetDuplicates: r.sheet_duplicates ?? null,
   };
 }
 
@@ -536,7 +549,7 @@ export interface PollResult {
  */
 const HASH_PREFIX = "p1:";
 
-function makeRowHash(conn: GSheetConn, phoneE164: string): string {
+function makeRowHash(conn: Pick<GSheetConn, "id">, phoneE164: string): string {
   return `${HASH_PREFIX}${conn.id}:${phoneE164}`;
 }
 
@@ -616,73 +629,90 @@ export async function ensurePhoneHashMigration(): Promise<void> {
   );
 }
 
-export async function pollClient(conn: GSheetConn): Promise<PollResult> {
-  // No-op after the first call; must run before any hash is read or written.
-  await ensurePhoneHashMigration();
+/** What one lead row in a sheet turned into. */
+interface Candidate {
+  phone: string;      // normalized E.164 — what we dial and what we store
+  rowHash: string;
+  name: string | null;
+  email: string | null;
+  rowIndex: number;   // 1-based, for display only
+}
+
+/**
+ * What a scan of one tab found. Everything here is derived from the CSV alone —
+ * no database, no dialling — so the same code can answer "what is in this sheet"
+ * for the connection form as for the poller.
+ */
+export interface SheetScan {
+  /** Data rows in the tab, header excluded. */
+  rows: number;
+  /** Distinct, dialable numbers — what the queue can ever contain. */
+  usable: number;
+  /** Rows whose phone cell holds something that is not a usable number. */
+  invalid: number;
+  /** Rows with an empty phone cell — usually just trailing rows in the sheet. */
+  blank: number;
+  /** Rows repeating a number already seen in this sheet. */
+  duplicates: number;
+  /** Header cells, so a sheet missing `phone` can say what it does have. */
+  header: string[];
+  candidates: Candidate[];
+  error?: string;
+}
+
+/**
+ * Read one tab and work out what is in it. Never writes and never dials.
+ *
+ * `conn` only needs to say which sheet, tab and connection — the connection id
+ * is used for the row hash, so a preview of an unsaved connection can pass any
+ * placeholder and still get accurate counts.
+ */
+export async function scanSheet(
+  conn: Pick<GSheetConn, "id" | "sheetId" | "tabName" | "gid">,
+): Promise<SheetScan> {
+  const empty: SheetScan = { rows: 0, usable: 0, invalid: 0, blank: 0, duplicates: 0, header: [], candidates: [] };
 
   let rows: string[][];
   try {
     rows = await fetchSheetRows(conn.sheetId, conn.tabName, conn.gid);
   } catch (e: any) {
-    const error = String(e?.message || "fetch failed");
-    await query(
-      `UPDATE gsheet_conn SET last_error = $2, last_synced_at = now() WHERE id = $1`,
-      [conn.id, error],
-    );
-    return { newRows: 0, called: 0, queued: 0, flushed: 0, error };
+    return { ...empty, error: String(e?.message || "fetch failed") };
   }
-
-  if (rows.length < 1) {
-    await query(
-      `UPDATE gsheet_conn SET last_synced_at = now(), last_error = NULL WHERE id = $1`,
-      [conn.id],
-    );
-    return { newRows: 0, called: 0, queued: 0, flushed: 0 };
-  }
+  if (rows.length < 1) return empty;
 
   const header = rows[0];
   const phoneCol = findCol(header, "phone");
   const nameCol  = findCol(header, "name");
   const emailCol = findCol(header, "email");
-
-  if (phoneCol < 0) {
-    const error = "No 'phone' column found in sheet header row";
-    await query(
-      `UPDATE gsheet_conn SET last_error = $2, last_synced_at = now() WHERE id = $1`,
-      [conn.id, error],
-    );
-    return { newRows: 0, called: 0, queued: 0, flushed: 0, error };
-  }
-
-  // Scan EVERY data row, not just the ones past `lastRow`. Identity is the phone
-  // number (see makeRowHash), so a re-scan is idempotent — and it is the only way
-  // to stay correct when rows are inserted or deleted mid-sheet, which shifts every
-  // row below them. The whole CSV is fetched on every poll regardless, so this
-  // costs one extra SELECT, not an extra download.
   const dataRows = rows.slice(1);
 
-  interface Candidate {
-    phone: string;      // normalized E.164 — what we dial and what we store
-    rowHash: string;
-    name: string | null;
-    email: string | null;
-    rowIndex: number;   // 1-based, for display only
+  if (phoneCol < 0) {
+    return {
+      ...empty,
+      rows: dataRows.length,
+      header,
+      error: "No 'phone' column found in sheet header row",
+    };
   }
 
   const candidates: Candidate[] = [];
   const seenInSheet = new Set<string>();
-  let skippedInvalid = 0;
+  let invalid = 0;
+  let blank = 0;
+  let duplicates = 0;
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
     const raw = (row[phoneCol] ?? "").trim();
-    if (!raw) continue;
+    // An empty cell is a row nobody filled in, not a broken number. Counted
+    // apart so "unusable" stays a real problem worth showing.
+    if (!raw) { blank++; continue; }
 
     const phone = normalizePhone(raw);
     // Guard against a stray "12" or a header repeated mid-sheet becoming a call.
-    if (phone.replace(/\D+/g, "").length < 8) { skippedInvalid++; continue; }
+    if (phone.replace(/\D+/g, "").length < 8) { invalid++; continue; }
     // The same number listed twice in one sheet is one person, so one call.
-    if (seenInSheet.has(phone)) continue;
+    if (seenInSheet.has(phone)) { duplicates++; continue; }
     seenInSheet.add(phone);
 
     candidates.push({
@@ -693,6 +723,44 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
       rowIndex: i + 1,
     });
   }
+
+  return { rows: dataRows.length, usable: candidates.length, invalid, blank, duplicates, header, candidates };
+}
+
+/** Record what the last scan saw, so the UI can show it without re-fetching. */
+async function saveScan(connId: string, scan: SheetScan, error: string | null): Promise<void> {
+  await query(
+    `UPDATE gsheet_conn
+        SET last_row = $2, sheet_rows = $2, sheet_usable = $3,
+            sheet_invalid = $4, sheet_duplicates = $5,
+            last_synced_at = now(), last_error = $6
+      WHERE id = $1`,
+    [connId, scan.rows, scan.usable, scan.invalid, scan.duplicates, error],
+  );
+}
+
+export async function pollClient(conn: GSheetConn): Promise<PollResult> {
+  // No-op after the first call; must run before any hash is read or written.
+  await ensurePhoneHashMigration();
+
+  // Scan EVERY data row, not just the ones past `lastRow`. Identity is the phone
+  // number (see makeRowHash), so a re-scan is idempotent — and it is the only way
+  // to stay correct when rows are inserted or deleted mid-sheet, which shifts every
+  // row below them.
+  const scan = await scanSheet(conn);
+  const empty = { newRows: 0, called: 0, queued: 0, flushed: 0 };
+
+  if (scan.error) {
+    await saveScan(conn.id, scan, scan.error);
+    return { ...empty, error: scan.error };
+  }
+  if (!scan.rows && !scan.header.length) {
+    await saveScan(conn.id, scan, null);
+    return empty;
+  }
+
+  const { candidates } = scan;
+  const skippedInvalid = scan.invalid;
 
   // One round-trip to find which of these we already hold, instead of an INSERT
   // per row: on a settled 5,000-row sheet a poll then writes nothing at all.
@@ -731,12 +799,9 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
     }
   }
 
-  // `lastRow` is no longer a dedupe pointer — keep it as "data rows seen" for the UI.
-  const newLastRow = dataRows.length;
-  await query(
-    `UPDATE gsheet_conn SET last_row = $2, last_synced_at = now(), last_error = NULL WHERE id = $1`,
-    [conn.id, newLastRow],
-  );
+  // `lastRow` is no longer a dedupe pointer — it and the scan counts are what the
+  // UI shows about the sheet itself.
+  await saveScan(conn.id, scan, null);
 
   // Flush previously-queued leads if we are now within the calling window.
   // Filter by conn_id so each connection only flushes its own leads.

@@ -30,6 +30,19 @@ import {
 } from "@/components/ui";
 import { api } from "@/components/useData";
 import type { GSheetConn, GSheetLead, LeadStatus, CallOutcome } from "@/lib/gsheets";
+
+/** Reply from /api/gsheets/preview — what one tab holds, before anything is saved. */
+interface SheetPreview {
+  ok: boolean;
+  tab: { name: string; gid: string | null };
+  rows: number;
+  usable: number;
+  invalid: number;
+  blank: number;
+  duplicates: number;
+  header: string[];
+  error: string | null;
+}
 import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
 
 type Campaign = { id: string; name: string };
@@ -555,6 +568,11 @@ function ConnectSheetForm({
   const [endHour, setEndHour]       = useState(String(existing?.callEndHour ?? 21));
   const [busy, setBusy]             = useState(false);
   const [err, setErr]               = useState<string | null>(null);
+  // "What is actually in this sheet?" — answered before saving, so a sheet with
+  // no phone column, or the wrong tab, is caught here instead of by nobody being
+  // called and no one noticing for a week.
+  const [checking, setChecking]     = useState(false);
+  const [preview, setPreview]       = useState<SheetPreview | null>(null);
 
   const HOURS = Array.from({ length: 25 }, (_, i) => i);
 
@@ -572,6 +590,23 @@ function ConnectSheetForm({
   function chooseMode(mode: "gid" | "name") {
     setTouchedMode(true);
     setTabMode(mode);
+    setPreview(null);
+  }
+
+  async function checkSheet() {
+    setChecking(true);
+    setErr(null);
+    try {
+      const r = await api<SheetPreview>("/api/gsheets/preview", {
+        method: "POST",
+        body: JSON.stringify({ sheetUrl, tabName: tabName.trim() || "Sheet1", tabMode }),
+      });
+      setPreview(r);
+    } catch (e: any) {
+      setPreview(null);
+      setErr(e.message || "Could not read that sheet");
+    }
+    setChecking(false);
   }
 
   async function save() {
@@ -647,10 +682,58 @@ function ConnectSheetForm({
           <Label required>Google Sheet URL</Label>
           <Input
             value={sheetUrl}
-            onChange={(e) => setSheetUrl(e.target.value)}
+            onChange={(e) => { setSheetUrl(e.target.value); setPreview(null); }}
             placeholder="https://docs.google.com/spreadsheets/d/…"
           />
           <p className="mt-1 text-xs text-muted">Paste the full URL — the Sheet ID is extracted automatically.</p>
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={checkSheet}
+              loading={checking}
+              disabled={!sheetUrl.trim()}
+              type="button"
+            >
+              Check this sheet
+            </Button>
+            <span className="text-xs text-muted">Counts what is in the tab. Calls nobody.</span>
+          </div>
+          {preview && (
+            <div className="mt-2 rounded-lg border border-line bg-elev/40 px-3 py-2 text-sm">
+              {preview.error ? (
+                <>
+                  <div className="text-danger">{preview.error}</div>
+                  {preview.header.length > 0 && (
+                    <div className="mt-1 text-xs text-muted">
+                      Columns found: {preview.header.filter((h) => h.trim()).join(", ") || "none"}. One of them
+                      must be named exactly <span className="font-mono">phone</span>, in the first row.
+                    </div>
+                  )}
+                  {preview.rows > 0 && (
+                    <div className="mt-1 text-xs text-muted">The tab has {preview.rows} row(s), so the tab itself is being read.</div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="text-ink">
+                    {preview.rows} row(s), <span className="text-brand">{preview.usable} number(s) to call</span>
+                  </div>
+                  {(preview.invalid > 0 || preview.blank > 0 || preview.duplicates > 0) && (
+                    <div className="mt-1 text-xs text-muted">
+                      {preview.invalid > 0 && <>{preview.invalid} with an unreadable phone. </>}
+                      {preview.blank > 0 && <>{preview.blank} with no phone at all. </>}
+                      {preview.duplicates > 0 && <>{preview.duplicates} duplicate number(s) — each person is called once.</>}
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-muted">
+                    Reading {preview.tab.gid ? `the tab from your link (gid ${preview.tab.gid})` : `the tab named “${preview.tab.name}”`}
+                    {preview.header.length > 0 && <> · columns: {preview.header.filter((h) => h.trim()).join(", ")}</>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -680,7 +763,7 @@ function ConnectSheetForm({
                 <Input
                   className="mt-2"
                   value={tabName}
-                  onChange={(e) => setTabName(e.target.value)}
+                  onChange={(e) => { setTabName(e.target.value); setPreview(null); }}
                   placeholder="Sheet1"
                 />
                 <p className="mt-1 text-xs text-muted">

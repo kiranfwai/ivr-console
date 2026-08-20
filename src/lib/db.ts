@@ -338,6 +338,14 @@ async function bootstrap(): Promise<void> {
     -- Clearing or deleting a lead therefore stamps deleted_at (hidden in the UI,
     -- still remembered by the poller) rather than deleting the row.
     ALTER TABLE gsheet_lead ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+
+    -- What the last scan saw in the sheet itself, so the dashboard can show how
+    -- many rows a connection is actually looking at — and how many of them are
+    -- usable numbers — without re-fetching the CSV to find out.
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_rows       int;
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_usable     int;
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_invalid    int;
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_duplicates int;
   `;
   await pool().query(alterSql);
 }
