@@ -30,6 +30,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/components/useData";
 import type { GSheetConn, GSheetLead, LeadStatus, CallOutcome } from "@/lib/gsheets";
+import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
 
 type Campaign = { id: string; name: string };
 
@@ -507,7 +508,7 @@ function SheetConnectionCard({
     >
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
         <StatBox label="Sheet ID" value={conn.sheetId} />
-        <StatBox label="Tab / Campaign" value={`${conn.tabName} → ${campaignName}`} />
+        <StatBox label="Tab / Campaign" value={`${describeTab(conn)} → ${campaignName}`} />
         <StatBox label="Last synced" value={fmtTime(conn.lastSyncedAt)} />
         <StatBox label="Rows processed" value={String(conn.lastRow)} />
       </div>
@@ -537,8 +538,18 @@ function ConnectSheetForm({
   onCancel: () => void;
 }) {
   const [connName, setConnName]     = useState(existing?.connName ?? "");
-  const [sheetUrl, setSheetUrl]     = useState(existing ? `https://docs.google.com/spreadsheets/d/${existing.sheetId}` : "");
+  const [sheetUrl, setSheetUrl]     = useState(
+    existing
+      ? `https://docs.google.com/spreadsheets/d/${existing.sheetId}` +
+        (existing.gid ? `/edit#gid=${existing.gid}` : "")
+      : "",
+  );
   const [tabName, setTabName]       = useState(existing?.tabName ?? "Sheet1");
+  // How this connection picks its tab. "gid" means the tab the pasted link was
+  // open on — exact, and unaffected by the tab being renamed later. Existing
+  // connections keep whatever they were saved with.
+  const [tabMode, setTabMode]       = useState<"gid" | "name">(existing?.gid ? "gid" : "name");
+  const [touchedMode, setTouchedMode] = useState(false);
   const [campaignId, setCampaignId] = useState(existing?.campaignId ?? "");
   const [startHour, setStartHour]   = useState(String(existing?.callStartHour ?? 9));
   const [endHour, setEndHour]       = useState(String(existing?.callEndHour ?? 21));
@@ -546,6 +557,22 @@ function ConnectSheetForm({
   const [err, setErr]               = useState<string | null>(null);
 
   const HOURS = Array.from({ length: 25 }, (_, i) => i);
+
+  // The very function the server parses the URL with, so the form can name the
+  // tab it is about to dial before anything is saved.
+  const urlGid = extractSheetTarget(sheetUrl).gid;
+
+  // A pasted link that names a tab is almost always the tab they want, so pick
+  // that up automatically — until they say otherwise, then leave their choice be.
+  useEffect(() => {
+    if (touchedMode) return;
+    setTabMode(urlGid ? "gid" : "name");
+  }, [urlGid, touchedMode]);
+
+  function chooseMode(mode: "gid" | "name") {
+    setTouchedMode(true);
+    setTabMode(mode);
+  }
 
   async function save() {
     setErr(null);
@@ -559,6 +586,7 @@ function ConnectSheetForm({
             connName:      connName.trim() || null,
             sheetUrl,
             tabName:       tabName.trim() || "Sheet1",
+            tabMode,
             campaignId,
             callStartHour: Number(startHour),
             callEndHour:   Number(endHour),
@@ -573,6 +601,7 @@ function ConnectSheetForm({
             connName:      connName.trim() || null,
             sheetUrl,
             tabName:       tabName.trim() || "Sheet1",
+            tabMode,
             campaignId,
             callStartHour: Number(startHour),
             callEndHour:   Number(endHour),
@@ -626,12 +655,55 @@ function ConnectSheetForm({
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label hint="optional">Tab name</Label>
-            <Input
-              value={tabName}
-              onChange={(e) => setTabName(e.target.value)}
-              placeholder="Sheet1"
-            />
+            <Label>Which tab to dial</Label>
+            <div className="flex items-center gap-1.5 mt-1">
+              <Button
+                size="sm"
+                variant={tabMode === "gid" ? "primary" : "outline"}
+                onClick={() => chooseMode("gid")}
+                disabled={!urlGid}
+                type="button"
+              >
+                From the link
+              </Button>
+              <Button
+                size="sm"
+                variant={tabMode === "name" ? "primary" : "outline"}
+                onClick={() => chooseMode("name")}
+                type="button"
+              >
+                By name
+              </Button>
+            </div>
+            {tabMode === "name" ? (
+              <>
+                <Input
+                  className="mt-2"
+                  value={tabName}
+                  onChange={(e) => setTabName(e.target.value)}
+                  placeholder="Sheet1"
+                />
+                <p className="mt-1 text-xs text-muted">
+                  Must match the tab name in Google exactly. Renaming the tab there breaks this connection.
+                </p>
+                {urlGid && (
+                  <p className="mt-1 text-xs text-warn">
+                    Your link points at a specific tab (gid {urlGid}), but this will read the tab named
+                    “{tabName.trim() || "Sheet1"}” instead.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-muted">
+                Reads the tab your link was open on (gid {urlGid}). Survives the tab being renamed.
+              </p>
+            )}
+            {!urlGid && (
+              <p className="mt-1 text-xs text-muted">
+                To pick the tab from the link instead, open that tab in Google Sheets and copy the URL from
+                the address bar — it ends in <span className="font-mono">#gid=…</span>
+              </p>
+            )}
           </div>
           <div>
             <Label required>Campaign (IVR audio)</Label>
@@ -717,7 +789,7 @@ function LeadRow({
   }
 
   const connLabel = conn
-    ? (conn.connName || conn.tabName)
+    ? (conn.connName || describeTab(conn))
     : lead.connId
       ? lead.connId.replace(/^legacy-/, "")
       : "—";

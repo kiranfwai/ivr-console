@@ -325,6 +325,14 @@ async function bootstrap(): Promise<void> {
     UPDATE gsheet_lead SET conn_id = 'legacy-' || client_id WHERE conn_id IS NULL;
     ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS conn_name text;
 
+    -- Which TAB of the sheet a connection reads. Historically this was only
+    -- tab_name, matched against Google's sheet name — which silently reads the
+    -- wrong tab when the name is left at its 'Sheet1' default, and breaks the
+    -- moment anyone renames a tab. A gid identifies the tab exactly and never
+    -- changes, so when set it wins; tab_name stays as the label and as the
+    -- targeting method for every connection made before this existed.
+    ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS gid text;
+
     -- Leads are de-duplicated by phone number against the rows in this table, so
     -- removing a row would make the sheet look new again and re-dial the person.
     -- Clearing or deleting a lead therefore stamps deleted_at (hidden in the UI,

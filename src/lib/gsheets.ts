@@ -18,6 +18,13 @@ export interface GSheetConn {
   clientId: string;
   sheetId: string;
   tabName: string;
+  /**
+   * Google's own id for the tab, taken from the `#gid=` in the pasted URL.
+   * When set it is what the poll reads, and `tabName` is only a label.
+   * Null on every connection made before gid targeting existed — those keep
+   * being matched by name.
+   */
+  gid: string | null;
   campaignId: string;
   callStartHour: number;
   callEndHour: number;
@@ -71,6 +78,7 @@ type ConnRow = {
   client_id: string;
   sheet_id: string;
   tab_name: string;
+  gid: string | null;
   campaign_id: string;
   call_start_hour: number;
   call_end_hour: number;
@@ -107,6 +115,7 @@ function toConn(r: ConnRow): GSheetConn {
     clientId: r.client_id,
     sheetId: r.sheet_id,
     tabName: r.tab_name,
+    gid: r.gid ?? null,
     campaignId: r.campaign_id,
     callStartHour: r.call_start_hour,
     callEndHour: r.call_end_hour,
@@ -169,6 +178,8 @@ export async function getGSheetConfig(clientId: string): Promise<GSheetConn | nu
 export interface SaveGSheetConnInput {
   sheetId: string;
   tabName?: string;
+  /** Tab id from the URL. Null/undefined means "target by tab name instead". */
+  gid?: string | null;
   campaignId: string;
   callStartHour?: number;
   callEndHour?: number;
@@ -181,14 +192,15 @@ export async function createGSheetConn(
 ): Promise<GSheetConn> {
   const id = randomUUID();
   const tabName = input.tabName?.trim() || "Sheet1";
+  const gid = input.gid?.trim() || null;
   const callStartHour = input.callStartHour ?? 9;
   const callEndHour = input.callEndHour ?? 21;
   const connName = input.connName?.trim() || null;
   const { rows } = await query<ConnRow>(
-    `INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, campaign_id, call_start_hour, call_end_hour, conn_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO gsheet_conn (id, client_id, sheet_id, tab_name, gid, campaign_id, call_start_hour, call_end_hour, conn_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [id, clientId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour, connName],
+    [id, clientId, input.sheetId, tabName, gid, input.campaignId, callStartHour, callEndHour, connName],
   );
   return toConn(rows[0]);
 }
@@ -199,17 +211,20 @@ export async function updateGSheetConn(
   input: SaveGSheetConnInput,
 ): Promise<GSheetConn> {
   const tabName = input.tabName?.trim() || "Sheet1";
+  // Explicitly nulled when the user switches this connection back to targeting
+  // by name, so an old gid can never linger and silently win.
+  const gid = input.gid?.trim() || null;
   const callStartHour = input.callStartHour ?? 9;
   const callEndHour = input.callEndHour ?? 21;
   const connName = input.connName?.trim() || null;
   const { rows } = await query<ConnRow>(
     `UPDATE gsheet_conn
-     SET sheet_id = $3, tab_name = $4, campaign_id = $5,
-         call_start_hour = $6, call_end_hour = $7,
-         conn_name = $8, enabled = true, last_error = NULL
+     SET sheet_id = $3, tab_name = $4, gid = $5, campaign_id = $6,
+         call_start_hour = $7, call_end_hour = $8,
+         conn_name = $9, enabled = true, last_error = NULL
      WHERE client_id = $1 AND id = $2
      RETURNING *`,
-    [clientId, connId, input.sheetId, tabName, input.campaignId, callStartHour, callEndHour, connName],
+    [clientId, connId, input.sheetId, tabName, gid, input.campaignId, callStartHour, callEndHour, connName],
   );
   if (!rows.length) throw new Error("Connection not found");
   return toConn(rows[0]);
@@ -316,11 +331,15 @@ export async function clearLeads(clientId: string, connId?: string): Promise<voi
 // Sheet fetch (no API key — uses public CSV export)
 // ---------------------------------------------------------------------------
 
-/** Extract sheet ID from a Google Sheets URL, or return the value as-is if already an ID. */
-export function extractSheetId(urlOrId: string): string {
-  const m = urlOrId.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-  return m ? m[1] : urlOrId.trim();
-}
+// Tab targeting lives in ./gsheet-tab so the client-side connection form can
+// share it without pulling this module (and the pg driver) into the browser.
+export {
+  extractSheetTarget,
+  extractSheetId,
+  describeTab,
+  resolveTabSelection,
+} from "./gsheet-tab";
+export type { SheetTarget } from "./gsheet-tab";
 
 /**
  * Where the CSV export is fetched from. Always Google in production; overridable
@@ -329,11 +348,24 @@ export function extractSheetId(urlOrId: string): string {
  */
 const CSV_BASE = process.env.GSHEETS_CSV_BASE || "https://docs.google.com";
 
-/** Fetch all rows from a publicly-shared Google Sheet as a 2-D string array. */
-async function fetchSheetRows(sheetId: string, tabName: string): Promise<string[][]> {
+/**
+ * Fetch all rows of ONE tab of a publicly-shared Google Sheet as a 2-D array.
+ *
+ * Targets the tab by `gid` when the connection has one — exact, and unaffected
+ * by the tab being renamed. Falls back to `sheet=<name>` for connections made
+ * before gid targeting existed, which is the old behaviour unchanged.
+ */
+async function fetchSheetRows(
+  sheetId: string,
+  tabName: string,
+  gid: string | null,
+): Promise<string[][]> {
+  const target = gid
+    ? `gid=${encodeURIComponent(gid)}`
+    : `sheet=${encodeURIComponent(tabName)}`;
   const url =
     `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}` +
-    `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+    `/gviz/tq?tqx=out:csv&${target}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
@@ -586,7 +618,7 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
 
   let rows: string[][];
   try {
-    rows = await fetchSheetRows(conn.sheetId, conn.tabName);
+    rows = await fetchSheetRows(conn.sheetId, conn.tabName, conn.gid);
   } catch (e: any) {
     const error = String(e?.message || "fetch failed");
     await query(

@@ -140,10 +140,14 @@ const makeRowHash = (connId, phoneE164) => `${HASH_PREFIX}${connId}:${phoneE164}
 
 /** Copy of the poller's CSV export URL. */
 const CSV_BASE = process.env.GSHEETS_CSV_BASE || "https://docs.google.com";
-async function fetchSheetRows(sheetId, tabName) {
+async function fetchSheetRows(sheetId, tabName, gid) {
+  // Same rule as the poller: gid when the connection has one, name otherwise.
+  const target = gid
+    ? `gid=${encodeURIComponent(gid)}`
+    : `sheet=${encodeURIComponent(tabName)}`;
   const url =
     `${CSV_BASE}/spreadsheets/d/${encodeURIComponent(sheetId)}` +
-    `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+    `/gviz/tq?tqx=out:csv&${target}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
   try {
@@ -310,7 +314,8 @@ async function loadConns() {
 }
 
 async function dryRunConn(conn, globalPricing) {
-  const label = `${conn.client_name || conn.client_id} / ${conn.conn_name || conn.tab_name} (${conn.id})`;
+  const tabLabel = conn.gid ? `gid ${conn.gid}` : conn.tab_name;
+  const label = `${conn.client_name || conn.client_id} / ${conn.conn_name || tabLabel} (${conn.id})`;
   const res = {
     connId: conn.id,
     clientId: conn.client_id,
@@ -319,6 +324,7 @@ async function dryRunConn(conn, globalPricing) {
     enabled: conn.enabled,
     sheetId: conn.sheet_id,
     tabName: conn.tab_name,
+    gid: conn.gid ?? null,
     window: {
       start: conn.call_start_hour,
       end: conn.call_end_hour,
@@ -332,7 +338,7 @@ async function dryRunConn(conn, globalPricing) {
 
   let rows;
   try {
-    rows = await fetchSheetRows(conn.sheet_id, conn.tab_name);
+    rows = await fetchSheetRows(conn.sheet_id, conn.tab_name, conn.gid ?? null);
   } catch (e) {
     res.error = `sheet fetch failed: ${e.message || e}`;
     out(`  ERROR  ${res.error}`);
@@ -454,6 +460,7 @@ async function dryRunConn(conn, globalPricing) {
   });
 
   // --- print ----------------------------------------------------------------
+  out(`  tab              ${conn.gid ? `gid ${conn.gid} (from the link)` : `by name: "${conn.tab_name}"`}`);
   out(`  sheet            ${dataRows.length} data rows, ${candidates.length} usable numbers` +
       (blankPhone ? `, ${blankPhone} blank` : "") +
       (skippedInvalid ? `, ${skippedInvalid} unusable` : "") +
