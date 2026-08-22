@@ -353,6 +353,40 @@ async function bootstrap(): Promise<void> {
     CREATE INDEX IF NOT EXISTS gsheet_lead_conn_called
       ON gsheet_lead (client_id, conn_id, called_at)
       WHERE called_at IS NOT NULL;
+
+    -- Billing identity of the customer, printed on their tax invoices. Optional:
+    -- a customer without a GSTIN still gets a valid invoice, they just cannot
+    -- claim input credit against it, so none of these block a payment.
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS legal_name text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS gstin      text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS address    text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS state      text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS state_code text;
+
+    -- One tax invoice per paid top-up. UNIQUE on order_id is what makes issuing
+    -- idempotent: the webhook and the return-path verify both credit the same
+    -- payment, and neither may produce a second invoice for it.
+    -- seller/buyer are snapshots — a tax document must keep saying what it said
+    -- on the day it was issued, even after an address or GSTIN changes.
+    CREATE TABLE IF NOT EXISTS invoice (
+      id         bigserial PRIMARY KEY,
+      invoice_no text NOT NULL UNIQUE,
+      order_id   text NOT NULL UNIQUE,
+      client_id  text NOT NULL,
+      issued_at  timestamptz NOT NULL DEFAULT now(),
+      totals     jsonb NOT NULL,
+      seller     jsonb NOT NULL,
+      buyer      jsonb NOT NULL,
+      credit_p   bigint NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS invoice_client ON invoice (client_id, id DESC);
+
+    -- Invoice numbers must run without gaps or duplicates within a series, so
+    -- they come from a counter incremented atomically, never from a row count.
+    CREATE TABLE IF NOT EXISTS invoice_counter (
+      series  text PRIMARY KEY,
+      next_no integer NOT NULL DEFAULT 0
+    );
   `;
   await pool().query(alterSql);
 }

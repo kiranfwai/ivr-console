@@ -18,6 +18,7 @@ import {
 import { api } from "../useData";
 import { fmtMoney, currencySymbol, istToday, istDaysAgo } from "./money";
 import { useAnalytics, RangeControl, viewAsClient, type AnalyticsRow, type Pricing } from "./shared";
+import InvoicingCard from "./InvoicingCard";
 
 export default function FinancialsView() {
   const [from, setFrom] = useState(istDaysAgo(29));
@@ -168,6 +169,8 @@ export default function FinancialsView() {
           reload();
         }}
       />
+
+      <InvoicingCard />
 
       <AddFundsModal
         row={funding}

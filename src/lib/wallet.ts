@@ -1,5 +1,6 @@
 import { query, withTx } from "./db";
 import { getConnectedCallRate } from "./pricing";
+import { issueInvoiceForOrder } from "./invoice";
 
 /**
  * Per-client prepaid wallet (real ₹).
@@ -256,6 +257,12 @@ export async function creditOrderPaid(orderId: string): Promise<{ credited: bool
     `UPDATE wallet_order SET status='paid', paid_at=now() WHERE order_id=$1 AND status <> 'paid'`,
     [orderId],
   );
+  // Issue the tax invoice for this payment. Deliberately last and deliberately
+  // best-effort: it swallows its own errors, because money that has been taken
+  // must stay credited even if a tax field is blank or the number series is
+  // unreachable. A payment left uninvoiced can be back-filled; a payment left
+  // uncredited is a support ticket and a refund.
+  await issueInvoiceForOrder(orderId).catch(() => null);
   return { credited: res.applied, balance: res.balance };
 }
 

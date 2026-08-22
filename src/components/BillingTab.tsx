@@ -6,6 +6,7 @@ import { Card, Section, Button, Input, Label, Badge, EmptyState, Spinner, Modal,
 import { api } from "./useData";
 import { formatINR, formatDate } from "./billing/config";
 import { startCheckout } from "./billing/cashfreeCheckout";
+import InvoicesCard from "./billing/InvoicesCard";
 
 interface WalletTxnApi {
   id: number;
@@ -318,6 +319,8 @@ export default function BillingTab() {
           </>
         )}
       </Card>
+
+      <InvoicesCard />
 
       <TopUpModal open={topupOpen} onClose={() => setTopupOpen(false)} currency={currency} />
 
