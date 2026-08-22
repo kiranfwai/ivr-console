@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   Edit2,
+  BarChart3,
 } from "lucide-react";
 import {
   Button,
@@ -44,6 +45,7 @@ interface SheetPreview {
   error: string | null;
 }
 import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
+import SheetReportPanel from "./SheetReportPanel";
 
 type Campaign = { id: string; name: string };
 
@@ -403,6 +405,7 @@ function SheetConnectionCard({
   const [toggling, setToggling] = useState(false);
   const [polling, setPolling]   = useState(false);
   const [busy, setBusy]         = useState(false);
+  const [reporting, setReporting] = useState(false);
 
   const campaignName = campaigns.find((c) => c.id === conn.campaignId)?.name ?? conn.campaignId;
 
@@ -465,6 +468,7 @@ function SheetConnectionCard({
   }
 
   return (
+    <>
     <Card
       title={
         <span className="flex items-center gap-2">
@@ -480,6 +484,14 @@ function SheetConnectionCard({
       description={`Polls every 5 min · Window: ${fmtHour(conn.callStartHour)} – ${fmtHour(conn.callEndHour)}`}
       action={
         <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            size="sm"
+            variant="ghost"
+            leftIcon={<BarChart3 size={13} />}
+            onClick={() => setReporting((r) => !r)}
+          >
+            {reporting ? "Hide report" : "Report"}
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -532,6 +544,14 @@ function SheetConnectionCard({
         </div>
       )}
     </Card>
+    {reporting && (
+      <SheetReportPanel
+        conn={conn}
+        campaignName={campaignName}
+        onClose={() => setReporting(false)}
+      />
+    )}
+    </>
   );
 }
 

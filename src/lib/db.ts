@@ -346,6 +346,13 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_usable     int;
     ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_invalid    int;
     ALTER TABLE gsheet_conn ADD COLUMN IF NOT EXISTS sheet_duplicates int;
+
+    -- Sheet call reports group a connection's placed calls by IST day and by
+    -- outcome. Without this the report scans every lead the client ever had;
+    -- partial because a queued lead (called_at IS NULL) is never reported on.
+    CREATE INDEX IF NOT EXISTS gsheet_lead_conn_called
+      ON gsheet_lead (client_id, conn_id, called_at)
+      WHERE called_at IS NOT NULL;
   `;
   await pool().query(alterSql);
 }
