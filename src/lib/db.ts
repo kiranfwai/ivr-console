@@ -387,6 +387,34 @@ async function bootstrap(): Promise<void> {
       series  text PRIMARY KEY,
       next_no integer NOT NULL DEFAULT 0
     );
+
+    -- Campaigns and WhatsApp sends that start by themselves. A schedule holds
+    -- what to run and when; when due it creates an ordinary bulk_job, so the
+    -- worker path is identical to a run started by hand.
+    -- next_run_at is the claim: whoever moves it forward owns that run, which is
+    -- what stops the same schedule firing twice.
+    CREATE TABLE IF NOT EXISTS schedule (
+      id           text PRIMARY KEY,
+      client_id    text NOT NULL,
+      name         text NOT NULL,
+      kind         text NOT NULL,                  -- 'call' | 'whatsapp'
+      repeat_rule  text NOT NULL DEFAULT 'once',   -- 'once' | 'daily' | 'weekly'
+      days         int[],                          -- weekly: 0=Sun .. 6=Sat, IST
+      at_time      text,                           -- 'HH:MM' IST for repeating
+      next_run_at  timestamptz,
+      enabled      boolean NOT NULL DEFAULT true,
+      last_run_at  timestamptz,
+      last_job_id  text,
+      last_error   text,
+      runs         int NOT NULL DEFAULT 0,
+      created_at   timestamptz NOT NULL DEFAULT now(),
+      spec         jsonb NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS schedule_client ON schedule (client_id, created_at DESC);
+    -- The poller asks exactly one question every 30s: what is due? Partial, so
+    -- disabled and finished schedules cost nothing to skip.
+    CREATE INDEX IF NOT EXISTS schedule_due ON schedule (next_run_at)
+      WHERE enabled = true AND next_run_at IS NOT NULL;
   `;
   await pool().query(alterSql);
 }

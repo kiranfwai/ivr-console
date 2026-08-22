@@ -14,5 +14,7 @@ export async function register() {
     await startWorker();
     const { startGsheetsPoller } = await import("./lib/gsheets");
     await startGsheetsPoller();
+    const { startScheduler } = await import("./lib/schedule");
+    await startScheduler();
   }
 }

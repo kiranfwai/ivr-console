@@ -5,6 +5,7 @@ import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCi
 import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts } from "@/lib/contacts";
+import ScheduleCard from "./ScheduleCard";
 import type { BulkJobWithCounts } from "@/lib/models";
 
 type Mode = "single" | "bulk";
@@ -146,35 +147,9 @@ function BulkSend() {
   const [jitterPct, setJitterPct] = usePersistentState("ivr.wa.jitterPct", 20);
   const [activeJobId, setActiveJobId] = usePersistentState<string | null>("ivr.wa.activeJobId", null);
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
-  const [running, setRunning] = useState(false);
-  const stopRef = useRef(false);
-  // Guards a SECOND drive() loop from starting while one is already trickling —
-  // without this, leaving the tab and coming back + Resume would run two loops
-  // that both pull the same pending rows and double-send (the "pushing" bug).
-  const drivingRef = useRef(false);
-
-  // Bulk WhatsApp is browser-paced, so closing the tab actually halts the trickle.
-  // Warn before leaving while a send is in progress (BUG 1).
-  useEffect(() => {
-    if (!running) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "You have an active campaign running. Are you sure you want to leave?";
-      return e.returnValue;
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [running]);
-
-  // Stop the browser-paced trickle when this tab unmounts (switching app tabs /
-  // navigating away). Otherwise the drive() loop keeps sending invisibly in the
-  // background, and coming back + Resume spins up a SECOND loop → duplicate
-  // sends. On unmount we halt cleanly; the job stays paused and can be resumed.
-  useEffect(() => {
-    return () => {
-      stopRef.current = true;
-    };
-  }, []);
+  // Reflects the job on the server, not a loop in this tab.
+  const running = activeJob?.status === "running";
+  // Reflects the job on the server, not a loop in this tab.
 
   // Keep the "Recent WA jobs" list fresh without a manual refresh: poll the jobs
   // list (fast while a send is running, slow when idle).
@@ -215,69 +190,37 @@ function BulkSend() {
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
       reloadJobs();
-      toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends`, "ok");
-      drive(r.job.id, webhookUrl);
+      toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends — you can close this tab`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
     }
   }
 
-  // Browser-paced BATCH sender. Each iteration asks the server to claim + send a
-  // batch concurrently (with retry); we then wait out the remainder of the batch's
-  // time budget so the running average tracks the configured messages/minute.
-  // The tab must stay open (same as before) — closing it halts the loop cleanly.
-  async function drive(jobId: string, hookOverride: string) {
-    // Never run two loops at once (would over-send). If one is already driving,
-    // ignore this call.
-    if (drivingRef.current) return;
-    drivingRef.current = true;
-    stopRef.current = false;
-    setRunning(true);
+  /**
+   * Sending is done by the server worker, so these only flip the job's status.
+   * It used to be paced by a loop in this component, which meant closing the tab
+   * abandoned the rest of the send — and made scheduling one impossible.
+   */
+  async function stop() {
+    if (!activeJobId) return;
     try {
-      while (!stopRef.current) {
-        const t0 = Date.now();
-        let res: { done: boolean; claimed: number; sent: number; failed: number };
-        try {
-          res = await api(`/api/bulk/${jobId}/send-batch`, {
-            method: "POST",
-            body: JSON.stringify({
-              n: BATCH_SIZE,
-              concurrency: BATCH_SIZE,
-              webhookUrl: hookOverride || undefined,
-            }),
-          });
-        } catch {
-          // Transient network/server error — pause briefly and retry the batch.
-          await sleep(2000);
-          continue;
-        }
-        if (res.done) break;
-        // Nothing claimable right now (rows mid-flight in another batch) — poll again.
-        if (!res.claimed) {
-          await sleep(1000);
-          continue;
-        }
-        // Pace: sleep only the remainder of the budget, so slow sends don't get
-        // extra delay and we never exceed the target rate.
-        const budget = batchBudgetMs(ratePerMin, res.claimed, jitterPct);
-        const elapsed = Date.now() - t0;
-        if (!stopRef.current && elapsed < budget) await sleep(budget - elapsed);
-      }
-    } finally {
-      drivingRef.current = false;
-      setRunning(false);
+      await api(`/api/bulk/${activeJobId}/pause`, { method: "POST" });
+      toast("Paused.", "info");
       reloadJobs();
+    } catch (e: any) {
+      toast(e.message || "Could not pause", "danger");
     }
-  }
-
-  function stop() {
-    stopRef.current = true;
-    setRunning(false);
   }
 
   async function resume(jobId: string) {
     setActiveJobId(jobId);
-    drive(jobId, webhookUrl);
+    try {
+      await api(`/api/bulk/${jobId}/resume`, { method: "POST" });
+      toast("Resumed — sending continues on the server.", "ok");
+      reloadJobs();
+    } catch (e: any) {
+      toast(e.message || "Could not resume", "danger");
+    }
   }
 
   const counts = activeJob ? tally(activeJob) : null;
@@ -287,7 +230,7 @@ function BulkSend() {
 
   return (
     <>
-      <Card title="Bulk WhatsApp via Pabbly" description="Batched concurrent send with retries. Keep this tab open while it runs.">
+      <Card title="Bulk WhatsApp via Pabbly" description="Sent by the server, at the rate you choose. Safe to close this tab.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
             <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
@@ -408,6 +351,26 @@ function BulkSend() {
           </div>
         </Card>
       )}
+
+       <ScheduleCard
+        kind="whatsapp"
+        recipientCount={parsed.rows.length}
+        title="Scheduled sends"
+        description="Goes out on its own at the time you pick. The tab does not need to be open."
+        buildSpec={() => {
+          if (!parsed.rows.length) {
+            toast("Add recipients first.", "danger");
+            return null;
+          }
+          return {
+            webhookUrl: webhookUrl || undefined,
+            recipients: parsed.rows,
+            delayMs: Math.round(60000 / Math.max(1, ratePerMin)),
+            jitterPct,
+            concurrency: BATCH_SIZE,
+          };
+        }}
+       />
 
       {!!jobs.length && (
         <Card title="Recent WA jobs">

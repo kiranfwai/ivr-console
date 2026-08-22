@@ -5,6 +5,7 @@ import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2
 import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, CsvFilePicker, Modal, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts, type Contact } from "@/lib/contacts";
+import ScheduleCard from "./ScheduleCard";
 import type { BulkJobWithCounts, BulkRow, Campaign } from "@/lib/models";
 
 // Large-upload guardrails (FEATURE 4).
@@ -436,6 +437,29 @@ export default function BulkTab() {
           )}
         </div>
       </Card>
+
+      <ScheduleCard
+        kind="call"
+        recipientCount={previewCount}
+        title="Scheduled campaigns"
+        description="Dials by itself at the time you pick — once, or on a repeat"
+        buildSpec={() => {
+          if (!campaignId) {
+            toast("Choose a campaign first.", "danger");
+            return null;
+          }
+          if (!parsed.rows.length) {
+            toast("Add numbers first.", "danger");
+            return null;
+          }
+          return {
+            campaignId,
+            recipients: parsed.rows,
+            concurrency,
+            delayMs: batchDelay,
+          };
+        }}
+      />
 
       {job && counts && (
         <Card

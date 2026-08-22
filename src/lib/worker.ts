@@ -16,6 +16,7 @@ import { fireOne } from "./bulk-runner";
 import { runWithTenant } from "./tenant";
 import { canDial } from "./wallet";
 import { getClientPlivoCreds } from "./plivo-config";
+import { sendWhatsAppBatch } from "./whatsapp-batch";
 
 /**
  * In-process bulk-call worker — CPS-paced, live-capped dial pump.
@@ -98,7 +99,18 @@ async function tick(): Promise<void> {
   }
   const now = Date.now();
   for (const job of jobs) {
-    if (job.kind !== "call") continue; // WhatsApp jobs are browser-paced, not pumped here
+    // WhatsApp jobs are pumped here too, on their own pacing. They used to be
+    // driven entirely by the browser, which meant closing the tab silently
+    // abandoned the rest of the send — and made scheduling one impossible.
+    if (job.kind === "whatsapp") {
+      if (pumping.has(job.id)) continue;
+      if ((nextClaimAt.get(job.id) ?? 0) > now) continue;
+      pumping.add(job.id);
+      void runWithTenant(job.clientId ?? "", () => pumpWhatsAppJob(job))
+        .finally(() => pumping.delete(job.id));
+      continue;
+    }
+    if (job.kind !== "call") continue;
     // Guard: only one pumpJob may be claiming for a given job at a time. Without
     // this, ticks every 200ms launch overlapping pumps that each read a stale
     // in-flight count and over-claim — draining the whole queue into 'dialing'
@@ -152,6 +164,44 @@ async function tryUngate(job: { id: string; clientId?: string }): Promise<void> 
   await setJobStatus(job.id, "running");
   nextGateCheckAt.delete(job.id);
   console.info(`[worker] job ${job.id} auto-resumed — wallet balance recovered (₹${gate.balance})`);
+}
+
+/**
+ * Drive one WhatsApp bulk job forward by a batch.
+ *
+ * Pacing is the job's own `delayMs` between batches — the same figure the UI
+ * derives from its messages-per-minute setting — so an unattended send goes out
+ * at the rate that was chosen for it, not as fast as Pabbly will accept.
+ *
+ * Safe to run while a browser is also driving the same job: rows are claimed
+ * with SKIP LOCKED, so the two never pick up the same recipient.
+ */
+async function pumpWhatsAppJob(
+  job: { id: string; clientId?: string; concurrency: number; delayMs: number; webhookUrl?: string | null },
+): Promise<void> {
+  // Hold the next batch off before doing the work, so a slow or failed batch
+  // cannot turn into a tight loop against Pabbly.
+  nextClaimAt.set(job.id, Date.now() + Math.max(1000, job.delayMs || 1000));
+  try {
+    const r = await sendWhatsAppBatch(job.id, {
+      webhookUrl: job.webhookUrl,
+      n: Math.max(1, Math.min(job.concurrency || 20, 50)),
+      concurrency: job.concurrency || 20,
+    });
+    if (r.error) {
+      console.error(`[worker] whatsapp job ${job.id}: ${r.error}`);
+      return;
+    }
+    if (r.claimed) {
+      console.info(`[worker] whatsapp job ${job.id}: ${r.sent} sent, ${r.failed} failed`);
+    }
+    if (r.done) {
+      nextClaimAt.delete(job.id);
+      console.info(`[worker] whatsapp job ${job.id} complete`);
+    }
+  } catch (e) {
+    console.error(`[worker] whatsapp job ${job.id} pump failed:`, e);
+  }
 }
 
 async function pumpJob(
