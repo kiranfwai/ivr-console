@@ -117,6 +117,13 @@ function LoginForm() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+
+        <p className="mt-5 text-center text-[13px] text-muted">
+          Don&rsquo;t have an account yet?{" "}
+          <a href="/request-access" className="font-semibold text-brand hover:text-brand/80">
+            Request access
+          </a>
+        </p>
       </div>
     </div>
   );

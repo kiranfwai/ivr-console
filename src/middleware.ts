@@ -3,11 +3,12 @@ import { verifySessionCookie, SESSION_COOKIE, type Session } from "@/lib/auth";
 
 // Exact paths that need no session. Kept separate from PUBLIC_PREFIXES because
 // these are matched whole — "/" as a prefix would make the entire app public.
-const PUBLIC_EXACT = ["/"];
+const PUBLIC_EXACT = ["/", "/request-access"];
 
 const PUBLIC_PREFIXES = [
   "/login",
   "/api/auth",
+  "/api/access-request", // public: the landing page's "request access" form
   "/api/answer",
   "/api/dtmf",
   "/api/hangup",

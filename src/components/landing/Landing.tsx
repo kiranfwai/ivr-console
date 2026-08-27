@@ -928,10 +928,10 @@ export default function Landing() {
                 <ArrowRight size={16} strokeWidth={2.3} className="transition-transform group-hover:translate-x-[3px]" />
               </a>
               <a
-                href="/login"
+                href="/request-access"
                 className="inline-flex items-center justify-center rounded-[11px] border border-line2 px-[26px] py-[13.5px] text-[15.5px] font-semibold text-ink transition-colors hover:border-white/30 hover:bg-white/5"
               >
-                Book a walkthrough
+                Request access
               </a>
             </div>
             <p className="mt-5 text-[12.8px] text-muted">
