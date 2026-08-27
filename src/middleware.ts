@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionCookie, SESSION_COOKIE, type Session } from "@/lib/auth";
 
+// Exact paths that need no session. Kept separate from PUBLIC_PREFIXES because
+// these are matched whole — "/" as a prefix would make the entire app public.
+const PUBLIC_EXACT = ["/"];
+
 const PUBLIC_PREFIXES = [
   "/login",
   "/api/auth",
@@ -51,6 +55,22 @@ function unauthorized(isApi: boolean, req: NextRequest, status = 401) {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  // "/" serves the public landing page when signed out and the console when signed
+  // in; the page itself reads the session and decides which to render.
+  if (PUBLIC_EXACT.includes(pathname)) {
+    return NextResponse.next();
+  }
+  // Someone already signed in has no use for the login screen — send them to the console.
+  if (pathname === "/login") {
+    const token = req.cookies.get(SESSION_COOKIE)?.value;
+    if (token && (await verifySessionCookie(token))) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
   if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }

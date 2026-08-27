@@ -1,294 +1,34 @@
-"use client";
+import type { Metadata } from "next";
+import { cookies } from "next/headers";
+import { verifySessionCookie, SESSION_COOKIE } from "@/lib/auth";
+import Console from "@/components/Console";
+import Landing from "@/components/landing/Landing";
 
-import { useEffect, useMemo, useState } from "react";
-import { Users2, Eye, X } from "lucide-react";
-import DialTab from "@/components/DialTab";
-import BulkTab from "@/components/BulkTab";
-import CampaignsTab from "@/components/CampaignsTab";
-import AudiosTab from "@/components/AudiosTab";
-import ReportsTab from "@/components/ReportsTab";
-import WhatsAppTab from "@/components/WhatsAppTab";
-import BillingTab from "@/components/BillingTab";
-import DndTab from "@/components/DndTab";
-import NumbersTab from "@/components/NumbersTab";
-import GSheetsTab from "@/components/GSheetsTab";
-import AdminTab, { type AdminView } from "@/components/AdminTab";
-import { Spinner, Toaster } from "@/components/ui";
-import { Shell, TabId } from "@/components/Shell";
+// The session is read per request, so this route can never be statically cached.
+export const dynamic = "force-dynamic";
 
-const META: Record<TabId, { title: string; desc: string }> = {
-  dial:      { title: "Single call",       desc: "Place an outbound IVR call from a campaign" },
-  bulk:      { title: "Bulk calls",        desc: "Run a paced batch through a campaign" },
-  gsheets:   { title: "Sheet Auto-Dial",  desc: "Auto-call new Google Sheet rows within a calling window" },
-  campaigns: { title: "Campaigns",       desc: "Audio, prompt, webhook, and from-number per campaign" },
-  audios:    { title: "Audio library",   desc: "Upload or link MP3s used by campaigns" },
-  reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
-  whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
-  billing:   { title: "Billing",         desc: "Wallet balance, top-ups, transactions and phone numbers" },
-  numbers:   { title: "Phone Numbers",   desc: "Your Plivo caller-ID numbers — take from the pool, release, export" },
-  dnd:       { title: "Do Not Disturb",  desc: "Numbers that must never be called — skipped across single, trigger and bulk" },
-  admin:          { title: "Clients",       desc: "Create client logins and set feature permissions" },
-  adminReports:   { title: "Reports",       desc: "Client-wise volumes, outcomes and lift" },
-  adminCalls:     { title: "Callers",       desc: "Every number dialed — per client, date range and charge" },
-  adminFinancials:{ title: "Financials",    desc: "Cost and wallet balance by client" },
-  adminPricing:   { title: "Per-call cost",  desc: "Connected-call rate and payment settings" },
+// The root is the only public page, so it is also the only one crawlers may index.
+// Everything else stays behind `robots: { index: false }` from the root layout.
+export const metadata: Metadata = {
+  title: "IVR Console — turn a Google Sheet into thousands of calls",
+  description:
+    "Connect a Google Sheet and IVR Console dials the list, captures press-1 interest, " +
+    "sends WhatsApp the moment someone answers, and hands you a per-sheet report.",
+  robots: { index: true, follow: true },
 };
 
-// Feature tabs that operate on a specific client's data.
-const DATA_TABS: TabId[] = ["dial", "bulk", "campaigns", "audios", "reports", "whatsapp", "billing"];
+/**
+ * One route, two faces.
+ *
+ *  - Signed out → the public landing page.
+ *  - Signed in  → the console, exactly as before.
+ *
+ * `/` is allowed through the middleware unauthenticated (see PUBLIC_EXACT there),
+ * so the session check has to happen here rather than being taken for granted.
+ */
+export default async function Root() {
+  const token = cookies().get(SESSION_COOKIE)?.value;
+  const session = await verifySessionCookie(token);
 
-// Admin-only surfaces (shown when the admin isn't viewing a specific client).
-const ADMIN_TABS: TabId[] = ["admin", "adminReports", "adminCalls", "adminFinancials", "adminPricing"];
-
-// Which AdminTab sub-view each admin tab renders.
-const ADMIN_VIEW: Partial<Record<TabId, AdminView>> = {
-  admin: "clients",
-  adminReports: "reports",
-  adminCalls: "calls",
-  adminFinancials: "financials",
-  adminPricing: "pricing",
-};
-
-interface Me {
-  role: "admin" | "client";
-  email?: string | null;
-  name?: string | null;
-  perms: string[];
-}
-interface ClientOpt {
-  id: string;
-  name: string;
-  email: string;
-  active: boolean;
-  perms: string[];
-}
-
-function isTabId(v: string | null): v is TabId {
-  return v !== null && (Object.keys(META) as string[]).includes(v);
-}
-
-export default function Page() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [meErr, setMeErr] = useState(false);
-  const [tab, setTab] = useState<TabId>("dial");
-
-  // Admin-only: which client's data the admin is currently viewing.
-  const [clients, setClients] = useState<ClientOpt[]>([]);
-  const [viewClient, setViewClient] = useState<string>("");
-
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((m: Me) => setMe(m))
-      .catch(() => setMeErr(true));
-    // Read any previously-selected admin client from the cookie.
-    const m = document.cookie.match(/(?:^|;\s*)ivr_admin_client=([^;]+)/);
-    if (m) {
-      const val = decodeURIComponent(m[1]);
-      // "__main__" is the retired pre-tenancy sentinel (that data is now the real
-      // client "Pryank"). Clear a stale cookie so the admin never lands in an
-      // empty phantom scope — just return to the normal admin console.
-      if (val === "__main__") {
-        document.cookie = "ivr_admin_client=; path=/; max-age=0; samesite=lax";
-      } else {
-        setViewClient(val);
-      }
-    }
-  }, []);
-
-  const isAdmin = me?.role === "admin";
-
-  // The switcher list = the real client accounts (Pryank is now one of them).
-  const switcherClients = clients;
-  const selectedClient = useMemo(
-    () => switcherClients.find((c) => c.id === viewClient) ?? null,
-    [switcherClients, viewClient],
-  );
-
-  // The tabs this user may see.
-  //  - A client sees only its granted feature tabs.
-  //  - An admin viewing a specific client sees exactly that client's feature
-  //    tabs (a faithful "view as client") — the "Viewing as… Exit" banner is how
-  //    they return, so the admin surfaces are intentionally hidden here.
-  //  - An admin with no client selected sees ONLY the admin surfaces
-  //    (Clients / Reports / Financials / Per-call cost) — no data tabs.
-  const allowedTabs = useMemo<TabId[]>(() => {
-    if (!me) return [];
-    if (isAdmin) {
-      if (viewClient) {
-        // In client view. Until the client list loads (perms unknown), show the
-        // full data-tab set optimistically; narrow to the client's grants once known.
-        // Phone Numbers + DND are always available to every client (not gated).
-        const perms = selectedClient?.perms;
-        const base = perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
-        return [...base, "numbers", "dnd", "gsheets"];
-      }
-      return [...ADMIN_TABS];
-    }
-    // Every client always gets Phone Numbers, DND, and Sheet Auto-Dial regardless of grants.
-    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "numbers", "dnd", "gsheets"];
-  }, [me, isAdmin, viewClient, selectedClient]);
-
-  // Load the client list for the admin's "viewing as" switcher.
-  useEffect(() => {
-    if (!isAdmin) return;
-    fetch("/api/admin/clients")
-      .then((r) => (r.ok ? r.json() : { clients: [] }))
-      .then((d: { clients: ClientOpt[] }) => setClients(d.clients || []))
-      .catch(() => {});
-  }, [isAdmin]);
-
-  // Pick a sensible starting tab once we know who this is (and honor ?tab=).
-  useEffect(() => {
-    if (!me) return;
-    const fromUrl = new URLSearchParams(window.location.search).get("tab");
-    const initial = isTabId(fromUrl) && allowedTabs.includes(fromUrl)
-      ? fromUrl
-      : allowedTabs[0] ?? "admin";
-    setTab(initial);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me]);
-
-  function changeTab(t: TabId) {
-    setTab(t);
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", t);
-    window.history.replaceState(null, "", url);
-  }
-
-  // If the current tab is no longer permitted (e.g. admin switched to a client
-  // that lacks this feature), fall back to the first allowed tab.
-  useEffect(() => {
-    if (!me || !allowedTabs.length) return;
-    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allowedTabs]);
-
-  function chooseClient(id: string) {
-    // Persist as a cookie so every subsequent API request is scoped to this
-    // client (middleware reads it). Remount data tabs to refetch (see key below).
-    document.cookie = `ivr_admin_client=${encodeURIComponent(id)}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
-    setViewClient(id);
-  }
-
-  // Leave "view as client" mode and return to the admin console.
-  function exitViewAs() {
-    document.cookie = `ivr_admin_client=; path=/; max-age=0; samesite=lax`;
-    setViewClient("");
-    changeTab("admin");
-  }
-
-  async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    location.href = "/login";
-  }
-
-  function onCampaignCreated(id: string) {
-    try {
-      window.localStorage.setItem("ivr.bulk.campaignId", JSON.stringify(id));
-    } catch {
-      /* storage blocked — non-fatal, user can pick it manually */
-    }
-    changeTab("bulk");
-  }
-
-  // --- loading / error gates ---
-  if (meErr) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 text-center">
-        <div>
-          <div className="text-sm text-danger mb-2">Couldn’t load your account.</div>
-          <button onClick={() => location.reload()} className="text-xs text-brand underline">
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-  if (!me) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-muted">
-        <Spinner size={20} />
-      </div>
-    );
-  }
-
-  const clientSwitcher = isAdmin ? (
-    <div className="flex items-center gap-2">
-      <Users2 size={14} className="text-muted" />
-      <select
-        value={viewClient}
-        onChange={(e) => chooseClient(e.target.value)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none cursor-pointer max-w-[220px]"
-        title="View a client's data"
-      >
-        <option value="">Select client…</option>
-        {switcherClients.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name || c.email}
-            {c.active ? "" : " (disabled)"}
-          </option>
-        ))}
-      </select>
-    </div>
-  ) : undefined;
-
-  const isAdminTab = ADMIN_TABS.includes(tab);
-  const userLabel = isAdmin ? `${me.email} · Admin` : me.email;
-
-  return (
-    <>
-      <Shell
-        tab={tab}
-        setTab={changeTab}
-        title={META[tab].title}
-        description={META[tab].desc}
-        onLogout={logout}
-        allowedTabs={allowedTabs}
-        userLabel={userLabel}
-        action={isAdmin ? clientSwitcher : undefined}
-      >
-        {isAdmin && viewClient && !isAdminTab && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-brand/25 bg-brand/10 px-3 py-2 text-sm">
-            <Eye size={15} className="text-brand shrink-0" />
-            <span className="text-ink2 min-w-0 truncate">
-              Viewing as{" "}
-              <span className="font-medium text-ink">
-                {selectedClient?.name || selectedClient?.email || viewClient}
-              </span>
-              {selectedClient && !selectedClient.active && (
-                <span className="text-muted"> (disabled)</span>
-              )}
-            </span>
-            <button
-              onClick={exitViewAs}
-              className="ml-auto inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs text-ink2 hover:text-ink hover:bg-elev/60 transition-colors"
-            >
-              <X size={12} /> Exit
-            </button>
-          </div>
-        )}
-
-        {isAdminTab ? (
-          <AdminTab view={ADMIN_VIEW[tab] ?? "clients"} />
-        ) : (
-          // Remount data tabs when the admin switches client so they refetch
-          // under the new tenant scope.
-          <div key={viewClient}>
-            {tab === "dial" && <DialTab />}
-            {tab === "bulk" && <BulkTab />}
-            {tab === "gsheets" && <GSheetsTab />}
-            {tab === "campaigns" && <CampaignsTab onCreated={onCampaignCreated} />}
-            {tab === "audios" && <AudiosTab />}
-            {tab === "reports" && <ReportsTab />}
-            {tab === "whatsapp" && <WhatsAppTab />}
-            {tab === "billing" && <BillingTab />}
-            {tab === "numbers" && <NumbersTab />}
-            {tab === "dnd" && <DndTab />}
-          </div>
-        )}
-      </Shell>
-      <Toaster />
-    </>
-  );
+  return session ? <Console /> : <Landing />;
 }
