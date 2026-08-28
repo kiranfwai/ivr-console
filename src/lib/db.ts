@@ -442,6 +442,27 @@ async function bootstrap(): Promise<void> {
     -- disabled and finished schedules cost nothing to skip.
     CREATE INDEX IF NOT EXISTS schedule_due ON schedule (next_run_at)
       WHERE enabled = true AND next_run_at IS NOT NULL;
+
+    -- "Request access" submissions from the public landing page. The row is
+    -- written before the notification email is attempted, so a mail outage can
+    -- never lose a lead — notified_at stays NULL and the request is still here.
+    CREATE TABLE IF NOT EXISTS access_request (
+      id           text PRIMARY KEY,
+      name         text NOT NULL,
+      company      text NOT NULL,
+      email        text NOT NULL,
+      phone        text NOT NULL,          -- 10-digit local part; +91 is implied
+      consent      boolean NOT NULL DEFAULT false,
+      status       text NOT NULL DEFAULT 'new',   -- 'new' | 'contacted' | 'closed'
+      notified_at  timestamptz,            -- when the alert email actually went out
+      notify_error text,                   -- why it did not, if it did not
+      ip           text,
+      user_agent   text,
+      created_at   timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS access_request_new ON access_request (created_at DESC);
+    -- Cheap lookup for the per-IP flood guard on the public endpoint.
+    CREATE INDEX IF NOT EXISTS access_request_ip ON access_request (ip, created_at DESC);
   `;
   await pool().query(alterSql);
 }
