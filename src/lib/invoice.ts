@@ -1,4 +1,8 @@
 import { query } from "./db";
+import {
+  composeAddress, hasAnyAddress, isValidGstin, isValidPan, isValidPincode,
+  stateByCode, stateByName, stateFromGstin,
+} from "./gst-states";
 
 /**
  * GST invoices for wallet top-ups.
@@ -23,7 +27,20 @@ export interface SellerSettings {
   enabled: boolean;
   legalName: string;
   gstin: string;
+  /** Optional on an invoice, but every accountant asks for it. */
+  pan: string;
+  /**
+   * The printed address, composed from the parts below.
+   *
+   * Kept as its own field because the PDF, and every invoice already issued,
+   * read one string. The structured parts are what gets edited; this is what
+   * gets printed.
+   */
   address: string;
+  line1: string;
+  line2: string;
+  city: string;
+  pincode: string;
   /** Place of supply for the seller, e.g. "Karnataka". */
   state: string;
   /** Two-digit GST state code, e.g. "29". Decides CGST+SGST vs IGST. */
@@ -45,7 +62,12 @@ export const DEFAULT_SELLER: SellerSettings = {
   enabled: false,
   legalName: "",
   gstin: "",
+  pan: "",
   address: "",
+  line1: "",
+  line2: "",
+  city: "",
+  pincode: "",
   state: "",
   stateCode: "",
   email: "",
@@ -57,14 +79,40 @@ export const DEFAULT_SELLER: SellerSettings = {
   description: "Prepaid credit for outbound voice and messaging services",
 };
 
+/** Where the service is delivered, when that differs from the billing address. */
+export interface ShippingAddress {
+  same: boolean;
+  line1: string;
+  line2: string;
+  city: string;
+  state: string;
+  pincode: string;
+}
+
+/**
+ * The customer's billing identity.
+ *
+ * Also the shape SNAPSHOT onto every invoice — which is why everything added
+ * after the first invoice was issued is optional. An invoice raised in August
+ * genuinely has no PAN on it, and pretending otherwise would make old rows lie.
+ */
 export interface BuyerDetails {
   name: string;
+  /** The login email. `billingEmail` is where the accounts team wants it sent. */
   email: string;
   legalName: string;
   gstin: string;
   address: string;
   state: string;
   stateCode: string;
+  pan?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+  pincode?: string;
+  billingEmail?: string;
+  phone?: string;
+  shipping?: ShippingAddress;
 }
 
 export interface InvoiceTotals {
@@ -102,16 +150,58 @@ function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v.trim() : fallback;
 }
 
+/**
+ * One address block, normalised.
+ *
+ * Two things happen here that are worth stating plainly:
+ *
+ * 1. **The GSTIN decides the state.** Its first two digits ARE the state code,
+ *    so a hand-picked state that disagrees with the number is simply wrong and
+ *    is overridden. Without a GSTIN we fall back to what was chosen.
+ * 2. **A pre-existing one-line address becomes line 1.** These fields were once
+ *    a single free-text box; anything saved back then is kept verbatim rather
+ *    than guessed apart into city and PIN, which is the kind of parsing that
+ *    puts "Bengaluru 560103" in the wrong half of a tax document.
+ */
+function normalizeAddress(o: Record<string, unknown>): {
+  line1: string; line2: string; city: string; pincode: string;
+  state: string; stateCode: string; address: string;
+} {
+  const legacy = str(o.address);
+  const parts = {
+    line1: str(o.line1),
+    line2: str(o.line2),
+    city: str(o.city),
+    pincode: str(o.pincode),
+  };
+  if (!parts.line1 && legacy) parts.line1 = legacy;
+
+  const fromGstin = stateFromGstin(str(o.gstin));
+  const byCode = stateByCode(str(o.stateCode));
+  const byName = stateByName(str(o.state));
+  const resolved = fromGstin || byCode || byName;
+
+  const state = resolved ? resolved.name : str(o.state);
+  const stateCode = resolved ? resolved.code : str(o.stateCode).slice(0, 2);
+
+  // A state on its own is not an address. Composing one anyway is how someone
+  // who has given us nothing but a GSTIN ends up with "Karnataka" printed where
+  // their address should be.
+  const address = hasAnyAddress(parts) ? composeAddress({ ...parts, state }) : "";
+
+  return { ...parts, state, stateCode, address };
+}
+
 function sanitizeSeller(input: unknown): SellerSettings {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const rate = Number(o.gstRate);
+  const addr = normalizeAddress(o);
   return {
     enabled: o.enabled === true,
     legalName: str(o.legalName),
     gstin: str(o.gstin).toUpperCase(),
-    address: str(o.address),
-    state: str(o.state),
-    stateCode: str(o.stateCode).slice(0, 2),
+    pan: str(o.pan).toUpperCase(),
+    ...addr,
     email: str(o.email),
     phone: str(o.phone),
     seriesPrefix: str(o.seriesPrefix, DEFAULT_SELLER.seriesPrefix) || DEFAULT_SELLER.seriesPrefix,
@@ -137,16 +227,24 @@ export async function setSellerSettings(input: unknown): Promise<SellerSettings>
   return s;
 }
 
-/** Which required fields are still blank. Empty array = ready to issue. */
+/** Which required fields are still blank or malformed. Empty array = ready to issue. */
 export function missingSellerFields(s: SellerSettings): string[] {
   const need: [keyof SellerSettings, string][] = [
-    ["legalName", "Registered business name"],
+    ["legalName", "Legal name"],
     ["gstin", "GSTIN"],
-    ["address", "Registered address"],
+    ["line1", "Address line 1"],
+    ["city", "City"],
     ["state", "State"],
     ["stateCode", "State code"],
+    ["pincode", "PIN code"],
   ];
-  return need.filter(([k]) => !String(s[k] || "").trim()).map(([, label]) => label);
+  const missing = need.filter(([k]) => !String(s[k] || "").trim()).map(([, label]) => label);
+  // A wrong number is not better than a blank one — an invoice carrying a
+  // malformed GSTIN is a defective tax document, so it counts as not ready.
+  if (s.gstin && !isValidGstin(s.gstin)) missing.push("a valid GSTIN");
+  if (s.pan && !isValidPan(s.pan)) missing.push("a valid PAN");
+  if (s.pincode && !isValidPincode(s.pincode)) missing.push("a valid PIN code");
+  return missing;
 }
 
 export function canIssue(s: SellerSettings): boolean {
@@ -270,8 +368,15 @@ async function loadBuyer(clientId: string): Promise<BuyerDetails> {
   const { rows } = await query<{
     name: string; email: string; legal_name: string | null; gstin: string | null;
     address: string | null; state: string | null; state_code: string | null;
+    pan: string | null; billing_email: string | null; billing_phone: string | null;
+    addr_line1: string | null; addr_line2: string | null; city: string | null; pincode: string | null;
+    ship_same: boolean | null; ship_line1: string | null; ship_line2: string | null;
+    ship_city: string | null; ship_state: string | null; ship_pincode: string | null;
   }>(
-    `SELECT name, email, legal_name, gstin, address, state, state_code
+    `SELECT name, email, legal_name, gstin, address, state, state_code,
+            pan, billing_email, billing_phone,
+            addr_line1, addr_line2, city, pincode,
+            ship_same, ship_line1, ship_line2, ship_city, ship_state, ship_pincode
      FROM app_client WHERE id = $1`,
     [clientId],
   );
@@ -284,6 +389,21 @@ async function loadBuyer(clientId: string): Promise<BuyerDetails> {
     address: r?.address || "",
     state: r?.state || "",
     stateCode: r?.state_code || "",
+    pan: (r?.pan || "").toUpperCase(),
+    line1: r?.addr_line1 || "",
+    line2: r?.addr_line2 || "",
+    city: r?.city || "",
+    pincode: r?.pincode || "",
+    billingEmail: r?.billing_email || "",
+    phone: r?.billing_phone || "",
+    shipping: {
+      same: r?.ship_same !== false,
+      line1: r?.ship_line1 || "",
+      line2: r?.ship_line2 || "",
+      city: r?.ship_city || "",
+      state: r?.ship_state || "",
+      pincode: r?.ship_pincode || "",
+    },
   };
 }
 
@@ -393,21 +513,141 @@ export async function backfillInvoices(limit = 200): Promise<{ issued: number; s
 export interface BillingDetailsInput {
   legalName?: string;
   gstin?: string;
+  pan?: string;
+  /** Legacy single-line address. Still accepted; becomes line 1. */
   address?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+  pincode?: string;
   state?: string;
   stateCode?: string;
+  billingEmail?: string;
+  phone?: string;
+  shipSame?: boolean;
+  shipLine1?: string;
+  shipLine2?: string;
+  shipCity?: string;
+  shipState?: string;
+  shipPincode?: string;
 }
 
+/** A rejected save the customer can fix themselves — answered 400, not 503. */
+export class BillingDetailsError extends Error {
+  readonly field: string;
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = "BillingDetailsError";
+    this.field = field;
+  }
+}
+
+/**
+ * Save the customer's billing identity.
+ *
+ * The whole block stays OPTIONAL — clearing every field is a valid save, and
+ * blank details never block a payment; they only mean the invoice is issued to
+ * an unregistered buyer. What is rejected is a HALF-filled one: an address
+ * missing its city or PIN cannot be printed on a tax document, and a malformed
+ * GSTIN on an invoice makes the invoice defective rather than merely incomplete.
+ */
 export async function setClientBillingDetails(clientId: string, input: BillingDetailsInput) {
+  const gstin = str(input.gstin).toUpperCase();
+  const pan = str(input.pan).toUpperCase();
+  if (gstin && !isValidGstin(gstin)) {
+    throw new BillingDetailsError("gstin", "That does not look like a GSTIN — 15 characters, e.g. 29AABCF1234M1Z7.");
+  }
+  if (pan && !isValidPan(pan)) {
+    throw new BillingDetailsError("pan", "That does not look like a PAN — 10 characters, e.g. AABCF1234M.");
+  }
+  const billingEmail = str(input.billingEmail);
+  if (billingEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(billingEmail)) {
+    throw new BillingDetailsError("billingEmail", "That billing email address is not valid.");
+  }
+
+  const addr = normalizeAddress({
+    gstin,
+    address: str(input.address),
+    line1: str(input.line1),
+    line2: str(input.line2),
+    city: str(input.city),
+    pincode: str(input.pincode),
+    state: str(input.state),
+    stateCode: str(input.stateCode),
+  });
+  // Deliberately NOT `hasAnyAddress(addr)`: `addr.state` is derived from the
+  // GSTIN, so a customer who gave us only their GST number would otherwise be
+  // told their address is half-filled when they never started one.
+  const startedAddress = hasAnyAddress({
+    line1: addr.line1, line2: addr.line2, city: addr.city, pincode: addr.pincode,
+  });
+  if (startedAddress) {
+    for (const [v, field, label] of [
+      [addr.line1, "line1", "Address line 1"],
+      [addr.city, "city", "City"],
+      [addr.state, "state", "State"],
+      [addr.pincode, "pincode", "PIN code"],
+    ] as [string, string, string][]) {
+      if (!v) throw new BillingDetailsError(field, `${label} is needed before an address can go on an invoice.`);
+    }
+    if (!isValidPincode(addr.pincode)) {
+      throw new BillingDetailsError("pincode", "A PIN code is six digits.");
+    }
+  }
+
+  const ship = {
+    line1: str(input.shipLine1),
+    line2: str(input.shipLine2),
+    city: str(input.shipCity),
+    state: str(input.shipState),
+    pincode: str(input.shipPincode),
+  };
+  // "Not the same as billing" with nothing entered is just "the same as
+  // billing" — store it that way instead of keeping an empty second address.
+  let shipSame = input.shipSame !== false;
+  if (!shipSame && !hasAnyAddress(ship)) shipSame = true;
+  if (!shipSame) {
+    for (const [v, field, label] of [
+      [ship.line1, "shipLine1", "Shipping address line 1"],
+      [ship.city, "shipCity", "Shipping city"],
+      [ship.state, "shipState", "Shipping state"],
+      [ship.pincode, "shipPincode", "Shipping PIN code"],
+    ] as [string, string, string][]) {
+      if (!v) throw new BillingDetailsError(field, `${label} is needed, or turn "same as billing" back on.`);
+    }
+    if (!isValidPincode(ship.pincode)) {
+      throw new BillingDetailsError("shipPincode", "A PIN code is six digits.");
+    }
+  }
+
   await query(
-    `UPDATE app_client SET legal_name=$2, gstin=$3, address=$4, state=$5, state_code=$6 WHERE id=$1`,
+    `UPDATE app_client SET
+       legal_name=$2, gstin=$3, pan=$4,
+       address=$5, addr_line1=$6, addr_line2=$7, city=$8, pincode=$9,
+       state=$10, state_code=$11,
+       billing_email=$12, billing_phone=$13,
+       ship_same=$14, ship_line1=$15, ship_line2=$16, ship_city=$17, ship_state=$18, ship_pincode=$19
+     WHERE id=$1`,
     [
       clientId,
       str(input.legalName) || null,
-      str(input.gstin).toUpperCase() || null,
-      str(input.address) || null,
-      str(input.state) || null,
-      str(input.stateCode).slice(0, 2) || null,
+      gstin || null,
+      pan || null,
+      addr.address || null,
+      addr.line1 || null,
+      addr.line2 || null,
+      addr.city || null,
+      addr.pincode || null,
+      addr.state || null,
+      addr.stateCode || null,
+      billingEmail || null,
+      str(input.phone) || null,
+      shipSame,
+      shipSame ? null : ship.line1,
+      shipSame ? null : ship.line2 || null,
+      shipSame ? null : ship.city,
+      shipSame ? null : ship.state,
+      shipSame ? null : ship.pincode,
     ],
   );
   return loadBuyer(clientId);

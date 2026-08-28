@@ -116,16 +116,19 @@ export function IconButton({
 export function Input({
   className = "",
   error,
+  invalid,
   hint,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { error?: string; hint?: string }) {
-  const borderCls = error
+}: InputHTMLAttributes<HTMLInputElement> & { error?: string; invalid?: boolean; hint?: string }) {
+  // `invalid` marks a field that is merely still empty — red border, no message,
+  // because "Required" under every blank box is noise next to a red asterisk.
+  const borderCls = error || invalid
     ? "border-danger/60 focus:border-danger"
     : "border-line hover:border-line2 focus:border-brand/60";
   return (
     <div>
       <input
-        aria-invalid={error ? true : undefined}
+        aria-invalid={error || invalid ? true : undefined}
         className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
           placeholder:text-muted focus:bg-bg ${borderCls} ${className}`}
         {...rest}
@@ -161,16 +164,17 @@ export function Select({
   className = "",
   children,
   error,
+  invalid,
   hint,
   ...rest
-}: SelectHTMLAttributes<HTMLSelectElement> & { error?: string; hint?: string }) {
-  const borderCls = error
+}: SelectHTMLAttributes<HTMLSelectElement> & { error?: string; invalid?: boolean; hint?: string }) {
+  const borderCls = error || invalid
     ? "border-danger/60 focus:border-danger"
     : "border-line hover:border-line2 focus:border-brand/60";
   return (
     <div>
       <select
-        aria-invalid={error ? true : undefined}
+        aria-invalid={error || invalid ? true : undefined}
         className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
           focus:bg-bg cursor-pointer ${borderCls} ${className}`}
         {...rest}

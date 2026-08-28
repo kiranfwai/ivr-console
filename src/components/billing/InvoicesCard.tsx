@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Download, Building2, RefreshCw } from "lucide-react";
-import { Card, Button, Input, Label, Badge, EmptyState, Spinner, Modal, toast } from "../ui";
+import { FileText, Download, Building2, RefreshCw, Save } from "lucide-react";
+import { Card, Button, Badge, EmptyState, Spinner, Modal, toast } from "../ui";
 import { api } from "../useData";
 import { formatDate } from "./config";
+import BillingIdentityFields, { BillingIdentity, EMPTY_IDENTITY } from "../BillingIdentityFields";
 
 interface InvoiceApi {
   id: number;
@@ -21,6 +22,33 @@ interface InvoiceApi {
 
 interface BillingDetails {
   legalName: string; gstin: string; address: string; state: string; stateCode: string;
+  pan?: string; line1?: string; line2?: string; city?: string; pincode?: string;
+  billingEmail?: string; phone?: string;
+  shipping?: { same: boolean; line1: string; line2: string; city: string; state: string; pincode: string };
+}
+
+/** API shape -> form shape. Everything the API may omit becomes "". */
+function toIdentity(d: BillingDetails | null): BillingIdentity {
+  if (!d) return { ...EMPTY_IDENTITY };
+  return {
+    legalName: d.legalName || "",
+    gstin: d.gstin || "",
+    pan: d.pan || "",
+    billingEmail: d.billingEmail || "",
+    phone: d.phone || "",
+    line1: d.line1 || "",
+    line2: d.line2 || "",
+    city: d.city || "",
+    state: d.state || "",
+    stateCode: d.stateCode || "",
+    pincode: d.pincode || "",
+    shipSame: d.shipping ? d.shipping.same : true,
+    shipLine1: d.shipping?.line1 || "",
+    shipLine2: d.shipping?.line2 || "",
+    shipCity: d.shipping?.city || "",
+    shipState: d.shipping?.state || "",
+    shipPincode: d.shipping?.pincode || "",
+  };
 }
 
 /** Paise -> "1,23,456.78" (Indian grouping). */
@@ -166,11 +194,11 @@ function BillingDetailsModal({
   onClose: () => void;
   onSaved: (d: BillingDetails) => void;
 }) {
-  const [f, setF] = useState<BillingDetails>({ legalName: "", gstin: "", address: "", state: "", stateCode: "" });
+  const [f, setF] = useState<BillingIdentity>(EMPTY_IDENTITY);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open && details) setF({ ...details });
+    if (open) setF(toIdentity(details));
   }, [open, details]);
 
   async function save() {
@@ -190,44 +218,22 @@ function BillingDetailsModal({
 
   if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title="Billing details">
+    <Modal open={open} onClose={onClose} title="Billing details" size="lg">
       <div className="grid gap-3">
         <p className="text-xs text-muted">
           These appear on your tax invoices. Changing them affects future invoices only — the ones already
-          issued keep what they were raised with.
+          issued keep what they were raised with. All of it is optional; leaving it blank simply means your
+          invoices are issued to an unregistered buyer.
         </p>
-        <div>
-          <Label>Registered business name</Label>
-          <Input value={f.legalName} onChange={(e) => setF({ ...f, legalName: e.target.value })}
-                 placeholder="Acme Private Limited" />
-        </div>
-        <div>
-          <Label hint="Leave blank if you are not registered">GSTIN</Label>
-          <Input value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })}
-                 placeholder="27AAECE9876P1Z3" />
-        </div>
-        <div>
-          <Label>Billing address</Label>
-          <Input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })}
-                 placeholder="402, Lakeview Chambers, Andheri East, Mumbai 400069" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>State</Label>
-            <Input value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} placeholder="Maharashtra" />
-          </div>
-          <div>
-            <Label hint="Two digits">State code</Label>
-            <Input value={f.stateCode} onChange={(e) => setF({ ...f, stateCode: e.target.value.slice(0, 2) })}
-                   placeholder="27" />
-          </div>
-        </div>
+
+        <BillingIdentityFields value={f} onChange={setF} showShipping />
+
         <p className="text-xs text-muted">
-          The state decides whether you are charged CGST + SGST or IGST.
+          The state on your billing address decides whether you are charged CGST + SGST or IGST.
         </p>
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} loading={saving}>Save</Button>
+          <Button onClick={save} loading={saving} leftIcon={<Save size={14} />}>Save billing details</Button>
         </div>
       </div>
     </Modal>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { currentClientId } from "@/lib/tenant";
-import { getClientBillingDetails, setClientBillingDetails } from "@/lib/invoice";
+import { BillingDetailsError, getClientBillingDetails, setClientBillingDetails } from "@/lib/invoice";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,12 +27,30 @@ export async function PUT(req: NextRequest) {
     const details = await setClientBillingDetails(clientId, {
       legalName: body.legalName,
       gstin: body.gstin,
+      pan: body.pan,
       address: body.address,
+      line1: body.line1,
+      line2: body.line2,
+      city: body.city,
+      pincode: body.pincode,
       state: body.state,
       stateCode: body.stateCode,
+      billingEmail: body.billingEmail,
+      phone: body.phone,
+      shipSame: body.shipSame,
+      shipLine1: body.shipLine1,
+      shipLine2: body.shipLine2,
+      shipCity: body.shipCity,
+      shipState: body.shipState,
+      shipPincode: body.shipPincode,
     });
     return NextResponse.json({ ok: true, details });
   } catch (e) {
+    // Something the customer typed, and can retype — say which field, and do
+    // not log it as a server fault.
+    if (e instanceof BillingDetailsError) {
+      return NextResponse.json({ error: e.message, field: e.field }, { status: 400 });
+    }
     console.error("[wallet/billing-details] failed:", e);
     return NextResponse.json({ error: "Could not save billing details." }, { status: 503 });
   }

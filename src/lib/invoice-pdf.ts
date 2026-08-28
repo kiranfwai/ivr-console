@@ -125,6 +125,9 @@ export async function renderInvoicePdf(inv: Invoice): Promise<Uint8Array> {
   y -= 13;
   for (const l of wrap(c.font, seller.address, 9, 250)) { text(c, l, M, y, { color: MUTED }); y -= 11; }
   text(c, `GSTIN  ${seller.gstin}`, M, y); y -= 11;
+  // Guarded because invoices issued before PAN was captured do not carry one,
+  // and an old invoice must still render exactly as it did.
+  if (seller.pan) { text(c, `PAN  ${seller.pan}`, M, y, { color: MUTED }); y -= 11; }
   text(c, `State  ${seller.state} (${seller.stateCode})`, M, y, { color: MUTED }); y -= 11;
   if (seller.email) { text(c, seller.email, M, y, { color: MUTED }); y -= 11; }
   if (seller.phone) { text(c, seller.phone, M, y, { color: MUTED }); y -= 11; }
@@ -141,6 +144,7 @@ export async function renderInvoicePdf(inv: Invoice): Promise<Uint8Array> {
   }
   if (buyer.email) { text(c, buyer.email, bx, by, { color: MUTED }); by -= 11; }
   text(c, buyer.gstin ? `GSTIN  ${buyer.gstin}` : "GSTIN  Unregistered", bx, by); by -= 11;
+  if (buyer.pan) { text(c, `PAN  ${buyer.pan}`, bx, by, { color: MUTED }); by -= 11; }
   if (buyer.state) { text(c, `State  ${buyer.state}${buyer.stateCode ? ` (${buyer.stateCode})` : ""}`, bx, by, { color: MUTED }); by -= 11; }
 
   y = Math.min(y, by) - 14;

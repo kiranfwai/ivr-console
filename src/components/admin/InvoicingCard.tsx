@@ -3,14 +3,32 @@
 import { useCallback, useEffect, useState } from "react";
 import { FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
 import { Card, Button, Input, Label, Select, Badge, Spinner, toast } from "../ui";
+import BillingIdentityFields, { BillingIdentity, EMPTY_IDENTITY } from "../BillingIdentityFields";
 import { api } from "../useData";
 
 interface Seller {
   enabled: boolean;
-  legalName: string; gstin: string; address: string; state: string; stateCode: string;
+  legalName: string; gstin: string; pan: string;
+  address: string; line1: string; line2: string; city: string; pincode: string;
+  state: string; stateCode: string;
   email: string; phone: string;
   seriesPrefix: string; gstRate: number; taxMode: "inclusive" | "exclusive";
   sacCode: string; description: string;
+}
+
+/**
+ * Our own details use the same block the customer fills in — with no shipping
+ * address, because we are the one sending, and always enforced, because an
+ * invoice cannot be issued until every required field is there.
+ */
+function sellerToIdentity(f: Seller): BillingIdentity {
+  return {
+    ...EMPTY_IDENTITY,
+    legalName: f.legalName, gstin: f.gstin, pan: f.pan || "",
+    billingEmail: f.email, phone: f.phone,
+    line1: f.line1 || "", line2: f.line2 || "", city: f.city || "",
+    state: f.state, stateCode: f.stateCode, pincode: f.pincode || "",
+  };
 }
 
 interface Cfg { settings: Seller; missing: string[]; issuing: boolean }
@@ -112,35 +130,21 @@ export default function InvoicingCard() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="sm:col-span-2">
-          <Label required>Registered business name</Label>
-          <Input value={f.legalName} onChange={set("legalName")} placeholder="Freedom With AI Technologies Private Limited" />
-        </div>
-        <div>
-          <Label required>GSTIN</Label>
-          <Input value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} placeholder="29AABCF1234M1Z7" />
-        </div>
-        <div>
-          <Label required hint="Two digits">State code</Label>
-          <Input value={f.stateCode} onChange={(e) => setF({ ...f, stateCode: e.target.value.slice(0, 2) })} placeholder="29" />
-        </div>
-        <div className="sm:col-span-2">
-          <Label required>Registered address</Label>
-          <Input value={f.address} onChange={set("address")} placeholder="3rd Floor, …, Bengaluru, Karnataka 560103" />
-        </div>
-        <div>
-          <Label required>State</Label>
-          <Input value={f.state} onChange={set("state")} placeholder="Karnataka" />
-        </div>
-        <div>
-          <Label>Billing email</Label>
-          <Input value={f.email} onChange={set("email")} placeholder="billing@freedomwithai.com" />
-        </div>
-        <div>
-          <Label>Phone</Label>
-          <Input value={f.phone} onChange={set("phone")} placeholder="+91 80 4718 2200" />
-        </div>
+      <BillingIdentityFields
+        value={sellerToIdentity(f)}
+        onChange={(n) => setF({
+          ...f,
+          legalName: n.legalName, gstin: n.gstin, pan: n.pan,
+          email: n.billingEmail, phone: n.phone,
+          line1: n.line1, line2: n.line2, city: n.city, pincode: n.pincode,
+          state: n.state, stateCode: n.stateCode,
+        })}
+        enforce
+        legalNamePlaceholder="Freedom With AI Technologies Private Limited"
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 mt-3 pt-3 border-t border-line">
+        <div className="sm:col-span-2 text-sm font-medium text-ink">How invoices are raised</div>
         <div>
           <Label hint="e.g. FWAI/26-27/0001">Invoice number prefix</Label>
           <Input value={f.seriesPrefix} onChange={set("seriesPrefix")} placeholder="FWAI" />

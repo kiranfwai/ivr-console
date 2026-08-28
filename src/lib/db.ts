@@ -363,6 +363,33 @@ async function bootstrap(): Promise<void> {
     ALTER TABLE app_client ADD COLUMN IF NOT EXISTS state      text;
     ALTER TABLE app_client ADD COLUMN IF NOT EXISTS state_code text;
 
+    -- The same identity, structured. The address column above stays as the one
+    -- line that gets printed; these are the parts it is composed from, plus the
+    -- details a finance team asks for that a single text box had nowhere to put.
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS pan           text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS billing_email text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS billing_phone text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS addr_line1    text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS addr_line2    text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS city          text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS pincode       text;
+
+    -- Where the service is delivered, when that is not where the bill goes.
+    -- Captured only: no invoice prints it today, and the place of supply is
+    -- still taken from the BILLING state, so turning this on changes no tax.
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_same    boolean NOT NULL DEFAULT true;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_line1   text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_line2   text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_city    text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_state   text;
+    ALTER TABLE app_client ADD COLUMN IF NOT EXISTS ship_pincode text;
+
+    -- Anything saved when the address was one free-text box becomes line 1
+    -- rather than being split apart by guesswork. Runs once: after this every
+    -- row with an address has a line1, so the WHERE clause stops matching.
+    UPDATE app_client SET addr_line1 = address
+     WHERE addr_line1 IS NULL AND COALESCE(address, '') <> '';
+
     -- One tax invoice per paid top-up. UNIQUE on order_id is what makes issuing
     -- idempotent: the webhook and the return-path verify both credit the same
     -- payment, and neither may produce a second invoice for it.
