@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw } from "lucide-react";
-import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, IconButton, toast } from "./ui";
+import { useCallback, useEffect, useState } from "react";
+import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw, RefreshCw } from "lucide-react";
+import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, IconButton, DataTable, TH, TD, Spinner, toast } from "./ui";
 import { useFetch, api, usePersistentState } from "./useData";
 import type { Campaign } from "@/lib/models";
 
@@ -13,15 +13,17 @@ interface CallResult {
   callUuid?: string;
 }
 
-interface HistoryEntry {
-  id: number;
-  phone: string;       // what the user typed
-  campaignId: string;
+/** A call as the server has it — this is what survives a refresh. */
+interface RecentCall {
+  callUuid: string;
+  to: string;
+  campaignId: string | null;
   campaignName: string;
-  at: number;          // epoch ms
-  ok: boolean;
-  to?: string;         // normalized number Plivo dialed
-  callUuid?: string;
+  outcome: string;
+  status: string;
+  digit: string;
+  durationSec: number | null;
+  triggeredAt: string;
 }
 
 // E.164-ish: a leading +<country><number> (8–15 digits), OR a bare 10-digit
@@ -34,11 +36,45 @@ function isValidPhone(raw: string) {
   return false;
 }
 
-function timeAgo(at: number) {
-  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+/** "2 min ago" for anything today, a date beyond that. */
+function whenLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return "—";
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-let historyCounter = 1;
+/** Outcome as a pill, with talk time when the call actually connected. */
+function OutcomeBadge({ outcome, durationSec }: { outcome: string; durationSec: number | null }) {
+  const label: Record<string, string> = {
+    press1: "Pressed 1",
+    connected: "Answered",
+    busy: "Busy",
+    "no-answer": "No answer",
+    rejected: "Rejected",
+    error: "Failed",
+    "in-progress": "In progress",
+  };
+  const tone =
+    outcome === "press1" || outcome === "connected"
+      ? "ok"
+      : outcome === "busy" || outcome === "in-progress"
+        ? "warn"
+        : outcome === "no-answer"
+          ? "muted"
+          : "danger";
+  const showDur = durationSec != null && durationSec > 0 && (outcome === "press1" || outcome === "connected");
+  return (
+    <Badge tone={tone as "ok" | "warn" | "muted" | "danger"}>
+      {label[outcome] ?? outcome}
+      {showDur && ` · ${Math.floor(durationSec! / 60)}:${String(durationSec! % 60).padStart(2, "0")}`}
+    </Badge>
+  );
+}
 
 export default function DialTab() {
   const { data: c } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
@@ -49,8 +85,27 @@ export default function DialTab() {
   const [callerName, setCallerName] = usePersistentState("ivr.dial.callerName", "");
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<CallResult | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [copied, setCopied] = useState(false);
+
+  // The calls the SERVER has. These were always being recorded — the page just
+  // never asked for them, which is why the list used to empty on refresh.
+  const [recent, setRecent] = useState<RecentCall[] | null>(null);
+  const [recentBusy, setRecentBusy] = useState(false);
+
+  const loadRecent = useCallback(async () => {
+    setRecentBusy(true);
+    try {
+      const r = await api<{ rows: RecentCall[] }>("/api/calls/recent?limit=20");
+      setRecent(r.rows);
+    } catch {
+      // Non-fatal: the dialer still works without the history panel.
+      setRecent((cur) => cur ?? []);
+    } finally {
+      setRecentBusy(false);
+    }
+  }, []);
+
+  useEffect(() => { loadRecent(); }, [loadRecent]);
 
   const selectedCampaign = campaigns.find((c) => c.id === campaignId);
   const phoneValid = isValidPhone(phone);
@@ -70,33 +125,13 @@ export default function DialTab() {
       });
       setLast(r);
       setCopied(false);
-      setHistory((prev) => [
-        {
-          id: historyCounter++,
-          phone: dialPhone,
-          campaignId: dialCampaignId,
-          campaignName: campaign?.name ?? "—",
-          at: Date.now(),
-          ok: r.ok,
-          to: r.to,
-          callUuid: r.callUuid,
-        },
-        ...prev,
-      ].slice(0, 10));
       toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
       if (!overridePhone) setPhone("");
+      // Pull it straight away so the row appears, then again once the call has
+      // had time to settle so the outcome stops saying "in progress".
+      loadRecent();
+      setTimeout(loadRecent, 8000);
     } catch (e: any) {
-      setHistory((prev) => [
-        {
-          id: historyCounter++,
-          phone: dialPhone,
-          campaignId: dialCampaignId,
-          campaignName: campaign?.name ?? "—",
-          at: Date.now(),
-          ok: false,
-        },
-        ...prev,
-      ].slice(0, 10));
       toast(e.message || "Failed", "danger");
     } finally {
       setBusy(false);
@@ -112,12 +147,6 @@ export default function DialTab() {
     } catch {
       toast("Copy failed", "danger");
     }
-  }
-
-  function redial(h: HistoryEntry) {
-    setPhone(h.phone);
-    setCampaignId(h.campaignId);
-    dial(h.phone, h.campaignId);
   }
 
   if (!campaigns.length) {
@@ -244,38 +273,64 @@ export default function DialTab() {
         </Card>
       )}
 
-      {history.length > 0 && (
-        <Card title={<span className="flex items-center gap-1.5"><History size={14} /> Recent calls</span>} description="This session only — not persisted.">
-          <div className="divide-y divide-line">
-            {history.map((h) => (
-              <div key={h.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                    h.ok ? "bg-ok/10 text-ok" : "bg-danger/10 text-danger"
-                  }`}>
-                    {h.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-mono truncate">{h.to ?? h.phone}</div>
-                    <div className="text-xs text-muted truncate">
-                      {h.campaignName} · {timeAgo(h.at)}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge tone={h.ok ? "ok" : "danger"}>{h.ok ? "queued" : "failed"}</Badge>
-                  <IconButton
-                    icon={<RotateCcw size={13} />}
-                    onClick={() => redial(h)}
-                    disabled={busy}
-                    title="Redial"
-                  />
-                </div>
-              </div>
-            ))}
+      {/* The real, recorded history — survives a refresh, because it is read
+          back from the calls the server was already storing. */}
+      <Card
+        title={<span className="flex items-center gap-1.5"><History size={14} /> Recent calls</span>}
+        description="Your last 20 calls, across every campaign."
+        action={
+          <IconButton
+            icon={<RefreshCw size={14} className={recentBusy ? "animate-spin" : ""} />}
+            onClick={loadRecent}
+            disabled={recentBusy}
+            title="Refresh"
+          />
+        }
+        noPadding
+      >
+        {recent === null ? (
+          <div className="flex justify-center py-10 text-muted"><Spinner size={16} /></div>
+        ) : recent.length === 0 ? (
+          <div className="px-5 pb-5 text-sm text-muted">
+            No calls yet. Ones you place here — and ones placed by bulk or by a sheet — will show up.
           </div>
-        </Card>
-      )}
+        ) : (
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Number</th>
+                <th className={TH}>Campaign</th>
+                <th className={TH}>Outcome</th>
+                <th className={`${TH} text-right`}>When</th>
+                <th className={`${TH} w-[52px]`} />
+              </tr>
+            </thead>
+            <tbody>
+              {recent.map((r) => (
+                <tr key={r.callUuid} className="transition-colors hover:bg-white/[0.022]">
+                  <td className={`${TD} font-mono tabular-nums`}>{r.to}</td>
+                  <td className={`${TD} text-ink2`}>{r.campaignName || "—"}</td>
+                  <td className={TD}><OutcomeBadge outcome={r.outcome} durationSec={r.durationSec} /></td>
+                  <td className={`${TD} text-right text-muted whitespace-nowrap`}>{whenLabel(r.triggeredAt)}</td>
+                  <td className={TD}>
+                    <IconButton
+                      icon={<RotateCcw size={13} />}
+                      onClick={() => {
+                        setPhone(r.to);
+                        if (r.campaignId) setCampaignId(r.campaignId);
+                        dial(r.to, r.campaignId ?? undefined);
+                      }}
+                      disabled={busy}
+                      title="Dial this number again"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+      </Card>
+
     </Section>
   );
 }
