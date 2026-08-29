@@ -1,5 +1,6 @@
 import { hmacBase64, constantTimeEqual } from "./hmac";
 import { takeCpsToken } from "./cps";
+import { normalizePhone } from "./phone";
 
 const AUTH_ID = () => process.env.PLIVO_AUTH_ID || "";
 const AUTH_TOKEN = () => process.env.PLIVO_AUTH_TOKEN || "";
@@ -65,8 +66,27 @@ export async function placeCall(opts: PlaceCallOptions) {
       ? Math.min(3600, Math.max(5, Math.round(opts.timeLimitSec as number)))
       : undefined;
 
+  // Caller ID, normalized at the one place every dial path passes through.
+  //
+  // Plivo 400s a `from` that isn't E.164, and because the caller ID is per
+  // campaign that failure hits EVERY call on the campaign at once — it reads as
+  // "the whole system is down" rather than "one field is wrong". A campaign
+  // saved as a bare "8031805258" did exactly that on 2026-08-29.
+  //
+  // This lives here rather than in the callers because there are three dial
+  // paths (single call + trigger API via place-campaign-call.ts, and the bulk
+  // worker via bulk-runner.ts) and bulk — the path that actually broke — was
+  // the one not covered. Normalizing is idempotent, so the caller-side guard in
+  // place-campaign-call.ts stays harmless.
+  //
+  // Falls back to the raw value if normalization yields nothing, so a caller ID
+  // this function doesn't understand is passed through unchanged rather than
+  // dropped.
+  const rawFrom = opts.fromNumber || DEFAULT_FROM();
+  const from = rawFrom ? normalizePhone(String(rawFrom)) || rawFrom : rawFrom;
+
   const body: Record<string, unknown> = {
-    from: opts.fromNumber || DEFAULT_FROM(),
+    from,
     to: opts.to,
     answer_url: opts.answerUrl,
     answer_method: opts.answerMethod || "POST",
