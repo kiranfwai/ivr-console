@@ -12,30 +12,53 @@ import BillingTab from "@/components/BillingTab";
 import DndTab from "@/components/DndTab";
 import NumbersTab from "@/components/NumbersTab";
 import GSheetsTab from "@/components/GSheetsTab";
+import DashboardTab from "@/components/DashboardTab";
+import ScheduledTab from "@/components/ScheduledTab";
+import SheetReportsTab from "@/components/SheetReportsTab";
+import SidebarWallet from "@/components/SidebarWallet";
 import AdminTab, { type AdminView } from "@/components/AdminTab";
 import { Spinner, Toaster } from "@/components/ui";
-import { Shell, TabId } from "@/components/Shell";
+import { Shell, NAV, TabId } from "@/components/Shell";
 
 const META: Record<TabId, { title: string; desc: string }> = {
-  dial:      { title: "Single call",       desc: "Place an outbound IVR call from a campaign" },
-  bulk:      { title: "Bulk calls",        desc: "Run a paced batch through a campaign" },
-  gsheets:   { title: "Sheet Auto-Dial",  desc: "Auto-call new Google Sheet rows within a calling window" },
-  campaigns: { title: "Campaigns",       desc: "Audio, prompt, webhook, and from-number per campaign" },
-  audios:    { title: "Audio library",   desc: "Upload or link MP3s used by campaigns" },
-  reports:   { title: "Reports",         desc: "Volumes, lift rate, outcomes, CSV export" },
-  whatsapp:  { title: "WhatsApp",        desc: "Direct Pabbly fire — single or bulk" },
-  billing:   { title: "Billing",         desc: "Wallet balance, top-ups, transactions and phone numbers" },
-  numbers:   { title: "Phone Numbers",   desc: "Your Plivo caller-ID numbers — take from the pool, release, export" },
-  dnd:       { title: "Do Not Disturb",  desc: "Numbers that must never be called — skipped across single, trigger and bulk" },
-  admin:          { title: "Clients",       desc: "Create client logins and set feature permissions" },
-  adminReports:   { title: "Reports",       desc: "Client-wise volumes, outcomes and lift" },
-  adminCalls:     { title: "Callers",       desc: "Every number dialed — per client, date range and charge" },
-  adminFinancials:{ title: "Financials",    desc: "Cost and wallet balance by client" },
+  dashboard: { title: "Dashboard",       desc: "What ran, how it went, and what needs you" },
+  dial:      { title: "Dial",            desc: "Place an outbound IVR call from a campaign" },
+  bulk:      { title: "Bulk calls",      desc: "Run a paced batch through a campaign" },
+  gsheets:   { title: "Sheet Auto-Dial", desc: "Auto-call new Google Sheet rows within a calling window" },
+  whatsapp:  { title: "WhatsApp",        desc: "Send on answer, in bulk, or on a schedule" },
+  scheduled: { title: "Scheduled",       desc: "Everything queued to fire — calls and WhatsApp" },
+  campaigns: { title: "Campaigns",       desc: "The audio, the message trigger and the caller ID for each campaign" },
+  audios:    { title: "Audios",          desc: "The recordings your campaigns play when someone picks up" },
+  numbers:   { title: "Phone Numbers",   desc: "The numbers you call from, on your own Plivo account" },
+  dnd:       { title: "Do Not Disturb",  desc: "Numbers that are never called — by single, trigger or bulk" },
+  reports:   { title: "Call reports",    desc: "Volumes, answer rate, outcomes, export" },
+  sheetReports: { title: "Sheet reports", desc: "Every row a sheet produced, and what happened to it" },
+  billing:   { title: "Billing & invoices", desc: "Wallet balance, top-ups, transactions and GST invoices" },
+  admin:          { title: "Clients",        desc: "Create client logins and set feature permissions" },
+  adminReports:   { title: "Client reports", desc: "Client-wise volumes, outcomes and lift" },
+  adminCalls:     { title: "Callers",        desc: "Every number dialed — per client, date range and charge" },
+  adminFinancials:{ title: "Financials",     desc: "Cost and wallet balance by client" },
   adminPricing:   { title: "Per-call cost",  desc: "Connected-call rate and payment settings" },
 };
 
-// Feature tabs that operate on a specific client's data.
+// Feature tabs that operate on a specific client's data and ARE permission-gated.
+// (The grant names are the historic tab ids, so this list must keep using them.)
 const DATA_TABS: TabId[] = ["dial", "bulk", "campaigns", "audios", "reports", "whatsapp", "billing"];
+
+/**
+ * Tabs every client gets regardless of grants.
+ *
+ * `gsheets`, `numbers` and `dnd` already behaved this way before the
+ * restructure. The three new screens join them rather than inventing new
+ * permission names that no existing client would have:
+ *   - `dashboard`    — an overview of data the client can already see
+ *   - `scheduled`    — a view over the bulk/WhatsApp schedules they already own
+ *   - `sheetReports` — the per-sheet report, previously reachable from gsheets
+ *
+ * NOTE: this widens the existing permission hole rather than fixing it. Closing
+ * it properly is a separate job (it needs real grants + a migration).
+ */
+const ALWAYS_TABS: TabId[] = ["dashboard", "gsheets", "numbers", "dnd", "scheduled", "sheetReports"];
 
 // Admin-only surfaces (shown when the admin isn't viewing a specific client).
 const ADMIN_TABS: TabId[] = ["admin", "adminReports", "adminCalls", "adminFinancials", "adminPricing"];
@@ -65,6 +88,15 @@ interface ClientOpt {
 
 function isTabId(v: string | null): v is TabId {
   return v !== null && (Object.keys(META) as string[]).includes(v);
+}
+
+// Keep the permitted set in menu order, de-duplicated. This also decides which
+// tab someone lands on, since that's `allowedTabs[0]` — so a client with the
+// Dashboard lands there, and one without it lands on their first Outreach tab.
+const NAV_ORDER: TabId[] = NAV.map((n) => n.id);
+function orderTabs(tabs: TabId[]): TabId[] {
+  const set = new Set(tabs);
+  return NAV_ORDER.filter((t) => set.has(t));
 }
 
 export default function Console() {
@@ -118,15 +150,13 @@ export default function Console() {
       if (viewClient) {
         // In client view. Until the client list loads (perms unknown), show the
         // full data-tab set optimistically; narrow to the client's grants once known.
-        // Phone Numbers + DND are always available to every client (not gated).
         const perms = selectedClient?.perms;
         const base = perms ? DATA_TABS.filter((t) => perms.includes(t)) : [...DATA_TABS];
-        return [...base, "numbers", "dnd", "gsheets"];
+        return orderTabs([...base, ...ALWAYS_TABS]);
       }
       return [...ADMIN_TABS];
     }
-    // Every client always gets Phone Numbers, DND, and Sheet Auto-Dial regardless of grants.
-    return [...DATA_TABS.filter((t) => me.perms.includes(t)), "numbers", "dnd", "gsheets"];
+    return orderTabs([...DATA_TABS.filter((t) => me.perms.includes(t)), ...ALWAYS_TABS]);
   }, [me, isAdmin, viewClient, selectedClient]);
 
   // Load the client list for the admin's "viewing as" switcher.
@@ -213,13 +243,18 @@ export default function Console() {
     );
   }
 
+  // The admin's "viewing as" control. It lives in the SIDEBAR now rather than as
+  // a bare <select> in the top-right corner, so it reads as an account picker
+  // and doesn't compete with the page's primary action.
   const clientSwitcher = isAdmin ? (
-    <div className="flex items-center gap-2">
-      <Users2 size={14} className="text-muted" />
+    <div className="rounded-xl border border-line2 bg-white/[0.03] px-2.5 py-2">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-muted">
+        <Users2 size={11} className="text-brand" /> Viewing
+      </div>
       <select
         value={viewClient}
         onChange={(e) => chooseClient(e.target.value)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none cursor-pointer max-w-[220px]"
+        className="w-full cursor-pointer rounded-lg bg-transparent text-xs text-ink outline-none"
         title="View a client's data"
       >
         <option value="">Select client…</option>
@@ -234,6 +269,9 @@ export default function Console() {
   ) : undefined;
 
   const isAdminTab = ADMIN_TABS.includes(tab);
+  // Only meaningful in a client scope — an admin with no client selected has no
+  // single wallet to show.
+  const showWallet = !isAdmin || !!viewClient;
   const userLabel = isAdmin ? `${me.email} · Admin` : me.email;
 
   return (
@@ -246,7 +284,8 @@ export default function Console() {
         onLogout={logout}
         allowedTabs={allowedTabs}
         userLabel={userLabel}
-        action={isAdmin ? clientSwitcher : undefined}
+        accountPicker={clientSwitcher}
+        wallet={showWallet ? <SidebarWallet key={viewClient} /> : undefined}
       >
         {isAdmin && viewClient && !isAdminTab && (
           <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-brand/25 bg-brand/10 px-3 py-2 text-sm">
@@ -275,6 +314,7 @@ export default function Console() {
           // Remount data tabs when the admin switches client so they refetch
           // under the new tenant scope.
           <div key={viewClient}>
+            {tab === "dashboard" && <DashboardTab onGo={changeTab} />}
             {tab === "dial" && <DialTab />}
             {tab === "bulk" && <BulkTab />}
             {tab === "gsheets" && <GSheetsTab />}
@@ -285,6 +325,8 @@ export default function Console() {
             {tab === "billing" && <BillingTab />}
             {tab === "numbers" && <NumbersTab />}
             {tab === "dnd" && <DndTab />}
+            {tab === "scheduled" && <ScheduledTab />}
+            {tab === "sheetReports" && <SheetReportsTab />}
           </div>
         )}
       </Shell>

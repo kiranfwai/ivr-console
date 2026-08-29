@@ -85,7 +85,9 @@ export default function SheetReportPanel({
 }: {
   conn: GSheetConn;
   campaignName: string;
-  onClose: () => void;
+  /** Omitted when the report IS the page (the Sheet reports screen) rather than
+   *  an expandable panel inside Sheet Auto-Dial — then there is nothing to close. */
+  onClose?: () => void;
 }) {
   const [preset, setPreset] = useState<Preset>("7d");
   const [outcome, setOutcome] = useState<string>("");
@@ -146,9 +148,11 @@ export default function SheetReportPanel({
           <Button size="sm" variant="ghost" leftIcon={<Download size={13} />} onClick={() => download("xlsx")} disabled={!s?.dialled}>
             Excel
           </Button>
-          <Button size="sm" variant="ghost" leftIcon={<X size={13} />} onClick={onClose}>
-            Close
-          </Button>
+          {onClose && (
+            <Button size="sm" variant="ghost" leftIcon={<X size={13} />} onClick={onClose}>
+              Close
+            </Button>
+          )}
         </div>
       }
     >

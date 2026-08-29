@@ -14,7 +14,7 @@ export interface ScheduleSpec {
   recipients: { phone: string; name?: string; email?: string }[];
 }
 
-interface ScheduleApi {
+export interface ScheduleApi {
   id: string;
   name: string;
   kind: "call" | "whatsapp";
@@ -32,7 +32,7 @@ interface ScheduleApi {
 const DAY_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** An instant as IST wall-clock, e.g. "Wed 27 Aug, 7:00 pm". */
-function istWhen(iso: string): string {
+export function istWhen(iso: string): string {
   const d = new Date(new Date(iso).getTime() + 330 * 60000);
   const h = d.getUTCHours();
   const m = String(d.getUTCMinutes()).padStart(2, "0");
@@ -51,7 +51,7 @@ function pretty(t: string | null): string {
   return `${H % 12 || 12}:${String(M).padStart(2, "0")} ${ampm}`;
 }
 
-function describe(s: ScheduleApi): string {
+export function describe(s: ScheduleApi): string {
   if (s.repeat === "once") return "Once";
   if (s.repeat === "daily") return `Every day at ${pretty(s.atTime)}`;
   const days = s.days.length === 7 ? "every day" : s.days.map((d) => DAY_LABEL[d]).join(", ");
