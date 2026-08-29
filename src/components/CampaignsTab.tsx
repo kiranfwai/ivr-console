@@ -6,16 +6,15 @@ import {
   Edit2,
   Trash2,
   Megaphone,
-  Music,
-  Globe,
-  Phone,
   Copy,
   PhoneCall,
-  Calendar,
   CheckCircle2,
   XCircle,
 } from "lucide-react";
-import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, Modal, IconButton, toast } from "./ui";
+import {
+  Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, Modal,
+  Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
+} from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
@@ -27,6 +26,28 @@ function isValidHttpsUrl(v: string) {
   } catch {
     return false;
   }
+}
+
+/**
+ * A caller ID must reach Plivo in E.164. A bare "8031805258" is accepted by
+ * Plivo's API only as a 400, and because this field is per-campaign that breaks
+ * EVERY call on the campaign — which reads as "the whole system is down".
+ * Blank is fine: it falls back to the account default.
+ */
+function fromNumberError(v: string): string | null {
+  const raw = v.trim();
+  if (!raw) return null;
+  if (!/^\+/.test(raw)) {
+    const digits = raw.replace(/\D+/g, "");
+    if (digits.length === 10) {
+      return `Missing the country code. Write it as +91${digits}.`;
+    }
+    return "Must start with + and the country code, e.g. +918031340818.";
+  }
+  if (!/^\+[1-9]\d{7,14}$/.test(raw.replace(/[\s-]/g, ""))) {
+    return "That doesn't look like a valid number. Use the full E.164 form, e.g. +918031340818.";
+  }
+  return null;
 }
 
 function formatDate(iso?: string) {
@@ -67,6 +88,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   }
 
   const editorOpen = creating || !!editing || !!clone;
+  const onAnswerCount = campaigns.filter((c) => c.whatsappTrigger === "answer").length;
+  const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
 
   return (
     <Section>
@@ -81,7 +104,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
           <EmptyState
             icon={<Megaphone size={20} />}
             title="No campaigns yet"
-            description="A campaign bundles the audio, prompt, WhatsApp webhook, and from-number. Pick one when dialing."
+            description="A campaign bundles the audio, prompt, WhatsApp trigger and from-number. Pick one when dialing."
             action={
               <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
                 Create campaign
@@ -90,72 +113,112 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
           />
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {campaigns.map((c) => {
-            const a = audios.find((a) => a.id === c.audioId);
-            const hasWebhook = !!c.webhookUrl;
-            const created = formatDate(c.createdAt);
-            return (
-              <Card key={c.id} className="group hover:border-line2 transition-colors">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <div className="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
-                        <Megaphone size={14} />
-                      </div>
-                      <div className="font-medium truncate">{c.name}</div>
-                    </div>
-                    <div className="space-y-1 text-xs text-muted ml-10">
-                      <div className="flex items-center gap-1.5">
-                        <Music size={11} />
-                        <span className="truncate">{a?.label || "Fallback day1.mp3"}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Globe size={11} />
-                        <span className="truncate">
-                          {hasWebhook ? "Custom Pabbly webhook" : "Default (env)"}
-                        </span>
-                        {hasWebhook && <Badge tone="accent" className="ml-0.5">override</Badge>}
-                      </div>
-                      {c.fromNumber && (
-                        <div className="flex items-center gap-1.5">
-                          <Phone size={11} />
-                          <span className="font-mono">{c.fromNumber}</span>
-                        </div>
-                      )}
-                      {created && (
-                        <div className="flex items-center gap-1.5">
-                          <Calendar size={11} />
-                          <span>Created {created}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="ml-10 mt-2.5">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        leftIcon={<PhoneCall size={12} />}
-                        onClick={() => setTestFor(c)}
-                      >
-                        Test call
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="opacity-60 group-hover:opacity-100 transition-opacity flex flex-col gap-1">
-                    <IconButton icon={<Edit2 size={14} />} onClick={() => setEditing(c)} title="Edit" />
-                    <IconButton icon={<Copy size={14} />} onClick={() => startClone(c)} title="Clone" />
-                    <IconButton
-                      icon={<Trash2 size={14} />}
-                      variant="danger"
-                      onClick={() => setConfirmDelete(c)}
-                      title="Delete"
-                    />
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+        <>
+          <Tiles>
+            <Tile label="Campaigns" value={campaigns.length} sub={`${audios.length} audio${audios.length === 1 ? "" : "s"} available`} />
+            <Tile
+              label="Message on answer"
+              value={onAnswerCount}
+              sub="everyone who picks up gets it"
+            />
+            <Tile
+              label="Only on press 1"
+              value={campaigns.length - onAnswerCount}
+              sub={campaigns.length - onAnswerCount ? "nothing sent unless they press" : "none"}
+              tone={campaigns.length - onAnswerCount ? "warn" : "muted"}
+            />
+            <Tile
+              label="No caller ID set"
+              value={noFromCount}
+              sub={noFromCount ? "using the account default" : "all have their own"}
+              tone={noFromCount ? "warn" : "muted"}
+            />
+          </Tiles>
+
+          <DataPanel
+            title="Your campaigns"
+            meta={`${campaigns.length} total`}
+            action={
+              <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setCreating(true)}>
+                New campaign
+              </Button>
+            }
+          >
+            <DataTable>
+              <thead>
+                <tr>
+                  <th className={TH}>Campaign</th>
+                  <th className={TH}>Audio</th>
+                  <th className={TH}>WhatsApp message</th>
+                  <th className={TH}>Caller ID</th>
+                  <th className={TH}>Created</th>
+                  <th className={`${TH} w-[52px]`} />
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.map((c) => {
+                  const a = audios.find((a) => a.id === c.audioId);
+                  const created = formatDate(c.createdAt);
+                  // Anything saved before this setting existed has no value and
+                  // keeps the old press-1 behaviour until someone changes it.
+                  const onAnswer = c.whatsappTrigger === "answer";
+                  return (
+                    <tr key={c.id} className="transition-colors hover:bg-white/[0.022]">
+                      <td className={TD}>
+                        <div className="font-semibold">{c.name}</div>
+                        {c.webhookUrl && (
+                          <div className="mt-0.5 text-[11.5px] text-muted">own Pabbly webhook</div>
+                        )}
+                      </td>
+                      <td className={TD}>
+                        {a ? (
+                          <>
+                            <span className="text-ink2">{a.label}</span>
+                            {a.durationSec ? (
+                              <div className="text-[11.5px] text-muted tabular-nums">
+                                {Math.floor(a.durationSec / 60)}:{String(Math.round(a.durationSec % 60)).padStart(2, "0")}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <Badge tone="warn">No audio</Badge>
+                        )}
+                      </td>
+                      <td className={TD}>
+                        {/* The setting that decides whether a lead gets a message
+                            at all. It was previously only visible by opening the
+                            campaign one at a time. */}
+                        {onAnswer ? (
+                          <Badge tone="ok">As soon as they pick up</Badge>
+                        ) : (
+                          <Badge tone="warn">Only if they press 1</Badge>
+                        )}
+                      </td>
+                      <td className={TD}>
+                        {c.fromNumber ? (
+                          <span className="font-mono text-[12.5px] tabular-nums">{c.fromNumber}</span>
+                        ) : (
+                          <Badge tone="muted">Account default</Badge>
+                        )}
+                      </td>
+                      <td className={`${TD} whitespace-nowrap text-muted`}>{created ?? "—"}</td>
+                      <td className={TD}>
+                        <Kebab
+                          items={[
+                            { label: "Test call", icon: <PhoneCall size={13} />, onClick: () => setTestFor(c) },
+                            { label: "Edit", icon: <Edit2 size={13} />, onClick: () => setEditing(c) },
+                            { label: "Clone", icon: <Copy size={13} />, onClick: () => startClone(c) },
+                            { label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: () => setConfirmDelete(c) },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DataTable>
+          </DataPanel>
+        </>
       )}
 
       {editorOpen && (
@@ -178,28 +241,20 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
         />
       )}
 
-      {confirmDelete && (
-        <Modal
-          open
-          onClose={() => setConfirmDelete(null)}
-          title="Delete campaign"
-          maxWidth="max-w-md"
-          footer={
-            <>
-              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-              <Button variant="danger" leftIcon={<Trash2 size={14} />} onClick={() => remove(confirmDelete)}>
-                Delete campaign
-              </Button>
-            </>
-          }
-        >
-          <div className="text-sm text-ink2">
-            Delete <span className="font-medium text-ink">{confirmDelete.name}</span>? This removes the
-            campaign config (audio, prompt, webhook, from-number). Existing call records are kept. This
-            cannot be undone.
-          </div>
-        </Modal>
-      )}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete campaign"
+        confirmLabel="Delete campaign"
+        body={
+          <>
+            Delete <span className="font-medium text-ink">{confirmDelete?.name}</span>? This removes the
+            campaign config — audio, prompt, webhook, from-number. Calls already placed are kept and still
+            appear in reports. This cannot be undone.
+          </>
+        }
+        onConfirm={() => confirmDelete && remove(confirmDelete)}
+        onClose={() => setConfirmDelete(null)}
+      />
 
       {testFor && (
         <TestCallModal campaign={testFor} onClose={() => setTestFor(null)} />
@@ -340,10 +395,11 @@ function CampaignEditor({
 
   const webhookValid = isValidHttpsUrl(webhookUrl);
   const fromEmpty = !fromNumber.trim();
+  const fromErr = fromNumberError(fromNumber);
   // FEATURE 5: require a name AND a selected audio (plus a valid webhook).
   const nameValid = !!name.trim();
   const audioValid = !!audioId;
-  const canSave = nameValid && audioValid && webhookValid;
+  const canSave = nameValid && audioValid && webhookValid && !fromErr;
 
   async function save() {
     if (!canSave) return;
@@ -413,6 +469,42 @@ function CampaignEditor({
           )}
         </div>
         <div>
+          <Label>Send the WhatsApp message</Label>
+          <Select
+            value={whatsappTrigger}
+            onChange={(e) => setWhatsappTrigger(e.target.value === "answer" ? "answer" : "press1")}
+          >
+            <option value="answer">As soon as they pick up</option>
+            <option value="press1">Only if they press 1</option>
+          </Select>
+          <div className="text-xs text-muted mt-1">
+            {whatsappTrigger === "answer"
+              ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
+              : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
+          </div>
+        </div>
+        <div>
+          <Label>Prompt spoken after audio</Label>
+          <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        </div>
+
+        {/* The three fields below are wiring, not settings: leave every one of
+            them blank and the campaign uses the account defaults. They used to
+            sit in the middle of this form looking as important as the name,
+            which had clients believing they'd skipped a step. Collapsed, not
+            removed — every client still has them, one click down. */}
+        <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
+            <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+            <b className="font-semibold text-ink">Advanced</b>
+            <span className="ml-auto text-right text-[11px] leading-tight text-muted">
+              call ending duration &middot; webhook URL &middot; from number
+              <br />
+              leave blank and your account defaults are used
+            </span>
+          </summary>
+          <div className="mt-4 space-y-4">
+        <div>
           <Label hint={audioDuration ? `audio is ${audioDuration}s` : "auto-filled from audio"}>
             Call ending duration (seconds)
           </Label>
@@ -432,21 +524,6 @@ function CampaignEditor({
             {!audioDuration && selectedAudio && (
               <span className="text-warn"> This audio has no detected length — re-add it in the Audios tab to auto-fill, or set a value here.</span>
             )}
-          </div>
-        </div>
-        <div>
-          <Label>Send the WhatsApp message</Label>
-          <Select
-            value={whatsappTrigger}
-            onChange={(e) => setWhatsappTrigger(e.target.value === "answer" ? "answer" : "press1")}
-          >
-            <option value="answer">As soon as they pick up</option>
-            <option value="press1">Only if they press 1</option>
-          </Select>
-          <div className="text-xs text-muted mt-1">
-            {whatsappTrigger === "answer"
-              ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
-              : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
           </div>
         </div>
         <div>
@@ -471,17 +548,18 @@ function CampaignEditor({
             value={fromNumber}
             onChange={(e) => setFromNumber(e.target.value)}
             placeholder="+918031340818"
+            className={fromErr ? "border-danger/60 focus:border-danger/60" : ""}
           />
-          {fromEmpty && (
+          {fromErr ? (
+            <div className="text-xs text-danger mt-1">{fromErr}</div>
+          ) : fromEmpty ? (
             <div className="text-xs text-warn mt-1">
-              No from-number set — calls will use the PLIVO_FROM_NUMBER env default.
+              No from-number set — calls will use the account default.
             </div>
-          )}
+          ) : null}
         </div>
-        <div>
-          <Label>Prompt spoken after audio</Label>
-          <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-        </div>
+          </div>
+        </details>
       </div>
     </Modal>
   );

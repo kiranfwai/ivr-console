@@ -339,6 +339,138 @@ export default function BulkTab() {
           </span>
         </div>
       )}
+      {/* The running job goes FIRST.
+          Before this, the page rendered banner -> start form -> scheduled
+          campaigns -> progress -> recent, so the progress bar for the batch
+          you had just launched sat below two other sections and you had to
+          scroll down to watch the thing you just started. */}
+      {job && counts && (
+        <Card
+          title={
+            <div className="flex items-center gap-2">
+              <span>Campaign progress</span>
+              <StatusPill status={job.status} remaining={counts.pending + counts.dialing} />
+            </div>
+          }
+          description={
+            <span className="flex items-center gap-2 font-mono text-xs">
+              {job.id}
+              <ConnDot stale={stale} updatedAt={updatedAt} />
+            </span>
+          }
+          action={
+            <div className="flex gap-2">
+              {running
+                ? <Button variant="danger" leftIcon={<Square size={12} />} onClick={pause}>Stop</Button>
+                : counts.pending + counts.dialing > 0
+                  ? <Button leftIcon={<Play size={12} />} onClick={() => resume(job.id)}>Resume</Button>
+                  : null}
+            </div>
+          }
+        >
+          <LiveDashboard counts={counts} cpm={cpm} running={running} />
+
+          <RatePanel
+            acct={acct}
+            campaignCps={running ? cpm / 60 : 0}
+            campaignLive={counts.dialing + counts.ok}
+            cap={job.concurrency}
+            campaignSec={
+              job.startedAt
+                ? Math.max(0, Math.floor(
+                    ((job.completedAt ? Date.parse(job.completedAt) : Date.now()) - Date.parse(job.startedAt)) / 1000,
+                  ))
+                : 0
+            }
+            running={running}
+          />
+
+          {/* Granular breakdown — complements the live rollup above (Connected /
+              Failed / No Answer) without repeating those labels. "Connected" and
+              "No answer" are intentionally omitted here so each label shows once. */}
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <Stat label="Press 1" value={counts.press1} tone="ok" />
+            <Stat label="Busy" value={counts.busy} tone="warn" />
+            <Stat label="Rejected" value={counts.rejected} tone="danger" />
+            <Stat label="Error" value={counts.error + counts.failed} tone="danger" />
+            <Stat label="Pending" value={counts.pending} tone="muted" />
+            {counts.skipped > 0 && <Stat label="Skipped (DND)" value={counts.skipped} tone="muted" />}
+            <Stat label="Total" value={counts.total} tone="muted" />
+          </div>
+
+          {running && log.length > 0 && (
+            <div className="mt-4">
+              <Label>Live dispatch</Label>
+              <div className="mt-1.5 max-h-56 overflow-auto rounded-lg border border-line bg-bg/50 divide-y divide-line/60">
+                {log.map((r, i) => (
+                  <div key={`${r.idx}-${i}`} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs font-mono">
+                    <span className="truncate">
+                      <span className="text-muted">[{r.idx}]</span> {r.phone}
+                      {r.name && <span className="text-muted ml-1">— {r.name}</span>}
+                    </span>
+                    <RowStatus row={r} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {counts.retryable > 0 && job.status !== "running" && (
+            <div className="mt-4 flex items-center justify-between gap-3 bg-warn/5 border border-warn/20 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle size={16} className="text-warn shrink-0" />
+                <div className="text-sm">
+                  <span className="text-ink">{counts.retryable.toLocaleString()} numbers didn&apos;t connect.</span>
+                  <span className="text-muted ml-1">Retry no-answer / busy / errors in a new campaign.</span>
+                </div>
+              </div>
+              <Button leftIcon={<RotateCw size={12} />} onClick={() => retry(job.id)}>Retry failed</Button>
+            </div>
+          )}
+
+          {failed.length > 0 && (
+            <details className="mt-3">
+              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
+                See failed numbers ({failed.length}{failed.length >= 100 ? "+" : ""})
+              </summary>
+              <div className="mt-2 max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
+                {failed.map((r, i) => (
+                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
+                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
+                    {/* Show the recorded error, not just the status. "failed"
+                        alone tells you nothing; "Plivo 400" tells you the
+                        caller ID is wrong. */}
+                    <span className="text-muted">
+                      {r.error || r.status}
+                      {r.hangupCause ? ` · ${r.hangupCause}` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {skipped.length > 0 && (
+            <details className="mt-3">
+              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
+                See skipped (DND) numbers ({skipped.length}{skipped.length >= 100 ? "+" : ""})
+              </summary>
+              <div className="mt-1.5 mb-2 text-[11px] text-muted">
+                These numbers are on the Do-Not-Disturb list, so they were never called.
+              </div>
+              <div className="max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
+                {skipped.map((r, i) => (
+                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
+                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
+                    <span className="text-muted">skipped · DND</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </Card>
+      )}
+
       <Card title="Start a campaign" description="Submitted to the backend — it dials on the server, not your browser.">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="col-span-2 md:col-span-2">
@@ -461,126 +593,6 @@ export default function BulkTab() {
         }}
       />
 
-      {job && counts && (
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <span>Campaign progress</span>
-              <StatusPill status={job.status} remaining={counts.pending + counts.dialing} />
-            </div>
-          }
-          description={
-            <span className="flex items-center gap-2 font-mono text-xs">
-              {job.id}
-              <ConnDot stale={stale} updatedAt={updatedAt} />
-            </span>
-          }
-          action={
-            <div className="flex gap-2">
-              {running
-                ? <Button variant="danger" leftIcon={<Square size={12} />} onClick={pause}>Stop</Button>
-                : counts.pending + counts.dialing > 0
-                  ? <Button leftIcon={<Play size={12} />} onClick={() => resume(job.id)}>Resume</Button>
-                  : null}
-            </div>
-          }
-        >
-          <LiveDashboard counts={counts} cpm={cpm} running={running} />
-
-          <RatePanel
-            acct={acct}
-            campaignCps={running ? cpm / 60 : 0}
-            campaignLive={counts.dialing + counts.ok}
-            cap={job.concurrency}
-            campaignSec={
-              job.startedAt
-                ? Math.max(0, Math.floor(
-                    ((job.completedAt ? Date.parse(job.completedAt) : Date.now()) - Date.parse(job.startedAt)) / 1000,
-                  ))
-                : 0
-            }
-            running={running}
-          />
-
-          {/* Granular breakdown — complements the live rollup above (Connected /
-              Failed / No Answer) without repeating those labels. "Connected" and
-              "No answer" are intentionally omitted here so each label shows once. */}
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Stat label="Press 1" value={counts.press1} tone="ok" />
-            <Stat label="Busy" value={counts.busy} tone="warn" />
-            <Stat label="Rejected" value={counts.rejected} tone="danger" />
-            <Stat label="Error" value={counts.error + counts.failed} tone="danger" />
-            <Stat label="Pending" value={counts.pending} tone="muted" />
-            {counts.skipped > 0 && <Stat label="Skipped (DND)" value={counts.skipped} tone="muted" />}
-            <Stat label="Total" value={counts.total} tone="muted" />
-          </div>
-
-          {running && log.length > 0 && (
-            <div className="mt-4">
-              <Label>Live dispatch</Label>
-              <div className="mt-1.5 max-h-56 overflow-auto rounded-lg border border-line bg-bg/50 divide-y divide-line/60">
-                {log.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs font-mono">
-                    <span className="truncate">
-                      <span className="text-muted">[{r.idx}]</span> {r.phone}
-                      {r.name && <span className="text-muted ml-1">— {r.name}</span>}
-                    </span>
-                    <RowStatus row={r} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {counts.retryable > 0 && job.status !== "running" && (
-            <div className="mt-4 flex items-center justify-between gap-3 bg-warn/5 border border-warn/20 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <AlertCircle size={16} className="text-warn shrink-0" />
-                <div className="text-sm">
-                  <span className="text-ink">{counts.retryable.toLocaleString()} numbers didn&apos;t connect.</span>
-                  <span className="text-muted ml-1">Retry no-answer / busy / errors in a new campaign.</span>
-                </div>
-              </div>
-              <Button leftIcon={<RotateCw size={12} />} onClick={() => retry(job.id)}>Retry failed</Button>
-            </div>
-          )}
-
-          {failed.length > 0 && (
-            <details className="mt-3">
-              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
-                See failed numbers ({failed.length}{failed.length >= 100 ? "+" : ""})
-              </summary>
-              <div className="mt-2 max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
-                {failed.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
-                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
-                    <span className="text-muted">{r.status}{r.hangupCause ? ` · ${r.hangupCause}` : ""}</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-
-          {skipped.length > 0 && (
-            <details className="mt-3">
-              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
-                See skipped (DND) numbers ({skipped.length}{skipped.length >= 100 ? "+" : ""})
-              </summary>
-              <div className="mt-1.5 mb-2 text-[11px] text-muted">
-                These numbers are on the Do-Not-Disturb list, so they were never called.
-              </div>
-              <div className="max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
-                {skipped.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
-                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
-                    <span className="text-muted">skipped · DND</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-        </Card>
-      )}
 
       {!!jobs.length && (
         <Card title="Recent campaigns">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addDnd, removeDnd, listDnd } from "@/lib/dnd";
+import { addDnd, removeDnd, listDnd, pageDnd } from "@/lib/dnd";
+import { parsePhoneList } from "@/lib/phone-list";
 
 export const dynamic = "force-dynamic";
 
@@ -16,25 +17,25 @@ export const dynamic = "force-dynamic";
  *   DELETE { phones: string[] } | { all: true }                  → remove
  */
 
-// Split a pasted blob into candidate numbers: newline / comma / semicolon / space.
-function parseText(text: string): string[] {
-  return String(text || "")
-    .split(/[\s,;]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
 
 function collectPhones(body: any): string[] {
   const out: string[] = [];
   if (Array.isArray(body?.phones)) out.push(...body.phones.map((p: unknown) => String(p)));
-  if (typeof body?.text === "string") out.push(...parseText(body.text));
+  if (typeof body?.text === "string") out.push(...parsePhoneList(body.text));
   if (typeof body?.phone === "string") out.push(body.phone);
   return out;
 }
 
-export async function GET() {
-  const numbers = await listDnd();
-  return NextResponse.json({ numbers, count: numbers.length });
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  // Paged by default. The whole list is only ever sent when something explicitly
+  // asks for it, because it can be tens of thousands of numbers long.
+  const limit = Math.min(Math.max(1, Number(url.searchParams.get("limit") || "50")), 500);
+  const offset = Math.max(0, Number(url.searchParams.get("offset") || "0"));
+  const q = url.searchParams.get("q") || "";
+
+  const { numbers, total, matched } = await pageDnd({ limit, offset, q });
+  return NextResponse.json({ numbers, count: total, total, matched, limit, offset, q });
 }
 
 export async function POST(req: NextRequest) {

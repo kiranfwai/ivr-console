@@ -13,6 +13,8 @@ import {
   Badge,
   Spinner,
   EmptyState,
+  Kebab,
+  ConfirmDialog,
   toast,
 } from "@/components/ui";
 import { api } from "@/components/useData";
@@ -238,6 +240,9 @@ function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: (
   const [results, setResults] = useState<AvailableNumber[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [buying, setBuying] = useState("");
+  // Renting a number charges the client's own Plivo balance, so it gets a real
+  // dialog rather than the browser's grey popup.
+  const [confirmBuy, setConfirmBuy] = useState<AvailableNumber | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   async function search() {
@@ -261,7 +266,6 @@ function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: (
   }
 
   async function buy(n: AvailableNumber) {
-    if (!window.confirm(`Rent ${n.e164} for ${n.monthlyRentalRate || "?"} / month on your Plivo account? This charges your Plivo balance.`)) return;
     setBuying(n.number);
     try {
       await api("/api/numbers/buy", { method: "POST", body: JSON.stringify({ number: n.number }) });
@@ -272,6 +276,7 @@ function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: (
       toast(e.message || "Purchase failed", "danger");
     }
     setBuying("");
+    setConfirmBuy(null);
   }
 
   return (
@@ -326,7 +331,7 @@ function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: (
                       {n.setupRate && n.setupRate !== "0" && n.setupRate !== "0.00000" ? ` · setup ${n.setupRate}` : ""}
                     </div>
                   </div>
-                  <Button size="sm" leftIcon={<ShoppingCart size={13} />} loading={buying === n.number} onClick={() => buy(n)}>
+                  <Button size="sm" leftIcon={<ShoppingCart size={13} />} loading={buying === n.number} onClick={() => setConfirmBuy(n)}>
                     Buy
                   </Button>
                 </div>
@@ -335,6 +340,24 @@ function BuyNumberModal({ open, onClose, onBought }: { open: boolean; onClose: (
           )
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmBuy}
+        title="Rent this number"
+        confirmLabel="Rent it"
+        tone="primary"
+        busy={!!buying}
+        body={
+          <>
+            Rent <span className="font-mono text-ink">{confirmBuy?.e164}</span> for{" "}
+            <span className="font-medium text-ink">{confirmBuy?.monthlyRentalRate || "?"}</span> per month?
+            This charges <span className="font-medium text-ink">your own Plivo balance</span>, not your wallet
+            here, and it recurs monthly until you release the number in the Plivo console.
+          </>
+        }
+        onConfirm={() => confirmBuy && buy(confirmBuy)}
+        onClose={() => setConfirmBuy(null)}
+      />
     </Modal>
   );
 }
@@ -353,6 +376,7 @@ function PlivoConnectCard({
   const [authToken, setAuthToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
   async function connect() {
     setErr(null);
@@ -377,11 +401,11 @@ function PlivoConnectCard({
   }
 
   async function disconnect() {
-    if (!window.confirm("Disconnect your Plivo account? Your calls will fall back to the shared account.")) return;
     setBusy(true);
     try {
       await api("/api/plivo-config", { method: "DELETE" });
       toast("Plivo account disconnected.", "info");
+      setConfirmDisconnect(false);
       onChanged();
     } catch (e: any) {
       toast(e.message || "Could not disconnect", "danger");
@@ -398,26 +422,44 @@ function PlivoConnectCard({
   }
 
   if (config?.connected) {
+    // Once connected these three values never change and are never touched, but
+    // the old card kept a full panel of them above the numbers table forever.
+    // One line carries the same information.
     return (
-      <Card
-        title={
-          <span className="flex items-center gap-2">
-            <CheckCircle2 size={16} className="text-ok" /> Plivo account connected
-          </span>
-        }
-        description="Your numbers and outbound calls run through this Plivo account."
-        action={
-          <Button variant="danger" size="sm" leftIcon={<Link2Off size={13} />} onClick={disconnect} disabled={busy}>
-            Disconnect
-          </Button>
-        }
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-          <Field label="Auth ID" value={config.authId} mono />
-          <Field label="Auth Token" value={config.tokenMasked} mono />
-          <Field label="Default caller ID" value={config.fromNumber || "— none set —"} mono />
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.94)] px-4 py-3 text-sm">
+        <CheckCircle2 size={15} className="shrink-0 text-ok" />
+        <b className="font-semibold">Plivo connected</b>
+        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Auth ID</span>
+        <span className="font-mono text-xs">{config.authId}</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Default caller ID</span>
+        <span className="font-mono text-xs">{config.fromNumber || "— none set —"}</span>
+        <div className="ml-auto">
+          <Kebab
+            items={[
+              {
+                label: "Disconnect",
+                icon: <Link2Off size={13} />,
+                danger: true,
+                onClick: () => setConfirmDisconnect(true),
+              },
+            ]}
+          />
         </div>
-      </Card>
+        <ConfirmDialog
+          open={confirmDisconnect}
+          title="Disconnect your Plivo account"
+          confirmLabel="Disconnect"
+          busy={busy}
+          body={
+            <>
+              Your numbers and outbound calls will fall back to the shared account. Nothing already dialled is
+              affected, and you can reconnect at any time with the same credentials.
+            </>
+          }
+          onConfirm={disconnect}
+          onClose={() => setConfirmDisconnect(false)}
+        />
+      </div>
     );
   }
 

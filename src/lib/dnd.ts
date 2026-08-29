@@ -1,4 +1,6 @@
 import { redis } from "./redis";
+import { query } from "./db";
+import { scopeKey } from "./tenant";
 import { normalizePhone } from "./phone";
 
 /**
@@ -70,4 +72,54 @@ export function dndCount(): Promise<number> {
 export async function listDnd(): Promise<string[]> {
   const nums = await redis().smembers(DND_KEY);
   return nums.sort();
+}
+
+/**
+ * One page of the DND list, plus the totals needed to draw a pager.
+ *
+ * `listDnd()` above returns the WHOLE set, which is fine for the dial-time
+ * check but not for drawing the screen: a client who uploads a 50,000-number
+ * scrub list would ship all 50,000 to the browser and get one DOM node each.
+ * This reads only what is shown.
+ *
+ * Search runs over the whole list, not the visible page, and compares digits
+ * only — so "88255 74083" finds "+918825574083" however either was typed.
+ */
+export async function pageDnd(opts: {
+  offset?: number;
+  limit?: number;
+  q?: string;
+} = {}): Promise<{ numbers: string[]; total: number; matched: number }> {
+  const k = scopeKey(DND_KEY);
+  const limit = Math.min(Math.max(1, opts.limit ?? 50), 500);
+  const offset = Math.max(0, opts.offset ?? 0);
+  const needle = String(opts.q || "").replace(/\D+/g, "");
+
+  const totalRes = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM sset WHERE k=$1`,
+    [k],
+  );
+  const total = totalRes.rows[0]?.n ?? 0;
+
+  if (!needle) {
+    const { rows } = await query<{ member: string }>(
+      `SELECT member FROM sset WHERE k=$1 ORDER BY member LIMIT $2 OFFSET $3`,
+      [k, limit, offset],
+    );
+    return { numbers: rows.map((r) => r.member), total, matched: total };
+  }
+
+  const like = `%${needle}%`;
+  const matchedRes = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM sset
+      WHERE k=$1 AND regexp_replace(member, '[^0-9]', '', 'g') LIKE $2`,
+    [k, like],
+  );
+  const { rows } = await query<{ member: string }>(
+    `SELECT member FROM sset
+      WHERE k=$1 AND regexp_replace(member, '[^0-9]', '', 'g') LIKE $2
+      ORDER BY member LIMIT $3 OFFSET $4`,
+    [k, like, limit, offset],
+  );
+  return { numbers: rows.map((r) => r.member), total, matched: matchedRes.rows[0]?.n ?? 0 };
 }

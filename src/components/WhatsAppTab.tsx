@@ -86,16 +86,34 @@ function SingleSend() {
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Animesh" />
           </div>
           <div className="md:col-span-2">
-            <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
-            <Input
-              value={webhookUrl}
-              onChange={(e) => setWebhookUrl(e.target.value)}
-              placeholder="https://connect.pabbly.com/webhook-listener/..."
-            />
-          </div>
-          <div className="md:col-span-2">
-            <Label hint="optional · merged into payload">Extra JSON</Label>
-            <Textarea rows={3} value={extra} onChange={(e) => setExtra(e.target.value)} placeholder='{"campaign": "day1"}' />
+            {/* Both fields below are optional and fall back to the account
+                default. They were sitting in the middle of the form looking as
+                important as the phone number. Collapsed, not removed. */}
+            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
+                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+                <b className="font-semibold text-ink">Advanced</b>
+                <span className="ml-auto text-right text-[11px] leading-tight text-muted">
+                  webhook URL &middot; extra JSON
+                  <br />
+                  leave blank and your account default is used
+                </span>
+              </summary>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <Label hint="optional">Pabbly webhook URL</Label>
+                  <Input
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://connect.pabbly.com/webhook-listener/..."
+                  />
+                </div>
+                <div>
+                  <Label hint="optional · merged into payload">Extra JSON</Label>
+                  <Textarea rows={3} value={extra} onChange={(e) => setExtra(e.target.value)} placeholder='{"campaign": "day1"}' />
+                </div>
+              </div>
+            </details>
           </div>
           <div className="md:col-span-2 flex justify-end">
             <Button onClick={send} disabled={!phone} loading={busy} leftIcon={<Send size={14} />}>
@@ -233,12 +251,30 @@ function BulkSend() {
       <Card title="Bulk WhatsApp via Pabbly" description="Sent by the server, at the rate you choose. Safe to close this tab.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
-            <Label hint="optional · falls back to PABBLY_WEBHOOK_URL">Pabbly webhook URL</Label>
-            <Input
-              value={webhookUrl}
-              onChange={(e) => setWebhookUrl(e.target.value)}
-              placeholder="https://connect.pabbly.com/webhook-listener/..."
-            />
+            {/* Both fields below are optional and fall back to the account
+                default. They were sitting in the middle of the form looking as
+                important as the phone number. Collapsed, not removed. */}
+            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
+                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+                <b className="font-semibold text-ink">Advanced</b>
+                <span className="ml-auto text-right text-[11px] leading-tight text-muted">
+                  webhook URL
+                  <br />
+                  leave blank and your account default is used
+                </span>
+              </summary>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <Label hint="optional">Pabbly webhook URL</Label>
+                  <Input
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://connect.pabbly.com/webhook-listener/..."
+                  />
+                </div>
+              </div>
+            </details>
           </div>
 
           <div>

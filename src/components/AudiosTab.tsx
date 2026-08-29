@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link as LinkIcon, Upload, Trash2, Music, X, Clock } from "lucide-react";
-import { Button, Card, Input, Label, Badge, EmptyState, Section, IconButton, toast } from "./ui";
+import {
+  Button, Card, Input, Label, Badge, EmptyState, Section, Modal,
+  Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
+} from "./ui";
 import { useFetch, api } from "./useData";
-import type { Audio } from "@/lib/models";
+import type { Audio, Campaign } from "@/lib/models";
 
 /* -------------------- helpers -------------------- */
 function fmtDuration(sec: number | null | undefined): string {
@@ -159,50 +162,68 @@ function useAudioMeta(src: string | null) {
 /* -------------------- library row -------------------- */
 function AudioRow({
   a,
+  usedBy,
   selected,
   onToggle,
   onRemove,
 }: {
   a: Audio;
+  /** Campaigns currently pointing at this audio — the blast radius of deleting it. */
+  usedBy: string[];
   selected: boolean;
   onToggle: () => void;
   onRemove: () => void;
 }) {
-  const { duration } = useAudioMeta(a.url);
+  // The length was measured and STORED when the audio was added, and the API
+  // returns it. The old row ignored that and mounted a hidden <audio
+  // preload="metadata"> per row instead, so opening this screen re-fetched a
+  // slice of every file, every time. Only probe when the stored value is
+  // missing (audios added before the field existed).
+  const needsProbe = !(a.durationSec && a.durationSec > 0);
+  const probed = useAudioMeta(needsProbe ? a.url : null);
+  const duration = needsProbe ? probed.duration : a.durationSec!;
+
   return (
-    <Card className="group hover:border-line2 transition-colors">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 flex-1 flex items-center gap-3">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={onToggle}
-            aria-label={`Select ${a.label}`}
-            className="shrink-0 w-4 h-4 accent-brand cursor-pointer"
-          />
-          <div className="w-9 h-9 rounded-lg bg-brand/10 text-brand flex items-center justify-center shrink-0">
-            <Music size={15} />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="font-medium truncate">{a.label}</div>
-              <Badge tone={a.source === "blob" ? "accent" : "muted"}>{a.source}</Badge>
-              {duration != null && (
-                <span className="inline-flex items-center gap-1 text-xs text-muted tabular-nums">
-                  <Clock size={11} />
-                  {fmtDuration(duration)}
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-muted truncate mt-0.5">{a.url}</div>
-          </div>
+    <tr className="transition-colors hover:bg-white/[0.022]">
+      <td className={TD}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggle}
+          aria-label={`Select ${a.label}`}
+          className="w-4 h-4 accent-brand cursor-pointer"
+        />
+      </td>
+      <td className={TD}>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.25)]">
+            <Music size={13} />
+          </span>
+          <span className="font-semibold truncate">{a.label}</span>
         </div>
-        <div className="flex items-center gap-2 sm:shrink-0">
-          <audio controls preload="none" src={a.url} className="h-8 w-full min-w-0 sm:w-[220px]" />
-          <IconButton icon={<Trash2 size={14} />} variant="danger" onClick={onRemove} />
-        </div>
-      </div>
-    </Card>
+      </td>
+      <td className={`${TD} tabular-nums text-ink2`}>{fmtDuration(duration) || "—"}</td>
+      <td className={TD}>
+        <Badge tone={a.source === "blob" ? "accent" : "muted"}>
+          {a.source === "blob" ? "Uploaded" : "Link"}
+        </Badge>
+      </td>
+      <td className={TD}>
+        {usedBy.length === 0 ? (
+          <Badge tone="warn">Not used</Badge>
+        ) : (
+          <span className="text-ink2" title={usedBy.join(", ")}>
+            {usedBy.length} campaign{usedBy.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </td>
+      <td className={TD}>
+        <audio controls preload="none" src={a.url} className="h-8 w-full min-w-[180px]" />
+      </td>
+      <td className={TD}>
+        <Kebab items={[{ label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: onRemove }]} />
+      </td>
+    </tr>
   );
 }
 
@@ -230,6 +251,21 @@ function Preview({ src, label }: { src: string | null; label: string }) {
 export default function AudiosTab() {
   const { data, reload } = useFetch<{ audios: Audio[] }>("/api/audios");
   const audios = data?.audios ?? [];
+  // Which campaigns point at each audio. Free — the campaigns list is already
+  // fetched on the next screen over, and it turns "campaigns using it will fall
+  // back to default" into a number you can see BEFORE you delete.
+  const { data: campData } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
+  const usedByAudio = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const c of campData?.campaigns ?? []) {
+      if (!c.audioId) continue;
+      m.set(c.audioId, [...(m.get(c.audioId) ?? []), c.name]);
+    }
+    return m;
+  }, [campData]);
+  const [addOpen, setAddOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<Audio | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
   const [mode, setMode] = useState<"url" | "upload">("url");
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
@@ -380,7 +416,6 @@ export default function AudiosTab() {
   }
 
   async function remove(id: string) {
-    if (!confirm("Delete this audio? Campaigns using it will fall back to default.")) return;
     try {
       await api(`/api/audios/${id}`, { method: "DELETE" });
       reload();
@@ -393,7 +428,6 @@ export default function AudiosTab() {
   async function removeSelected() {
     const ids = [...sel];
     if (!ids.length) return;
-    if (!confirm(`Delete ${ids.length} audio${ids.length > 1 ? "s" : ""}? Campaigns using them will fall back to default.`)) return;
     const results = await Promise.allSettled(ids.map((id) => api(`/api/audios/${id}`, { method: "DELETE" })));
     const failed = results.filter((r) => r.status === "rejected").length;
     setSel(new Set());
@@ -415,8 +449,88 @@ export default function AudiosTab() {
     });
   }
 
+  const totalSec = audios.reduce((n, a) => n + (a.durationSec || 0), 0);
+  const unusedCount = audios.filter((a) => !usedByAudio.get(a.id)?.length).length;
+
   return (
     <Section>
+      <Tiles>
+        <Tile label="Audio files" value={audios.length}
+              sub={`${audios.filter((a) => a.source === "blob").length} uploaded · ${audios.filter((a) => a.source !== "blob").length} linked`} />
+        <Tile label="Total length" value={fmtDuration(totalSec) || "0:00"}
+              sub={audios.length ? `longest ${fmtDuration(Math.max(...audios.map((a) => a.durationSec || 0))) || "—"}` : "nothing yet"} />
+        <Tile label="Used by campaigns" value={audios.length - unusedCount} sub="linked to at least one" />
+        <Tile label="Unused" value={unusedCount}
+              sub={unusedCount ? "not linked to any campaign" : "all in use"}
+              tone={unusedCount ? "warn" : "muted"} />
+      </Tiles>
+
+      {!audios.length ? (
+        <Card>
+          <EmptyState
+            icon={<Music size={20} />}
+            title="No audios yet"
+            description="Add one, then link it to a campaign under Campaigns."
+            action={<Button leftIcon={<Upload size={14} />} onClick={() => setAddOpen(true)}>Add audio</Button>}
+          />
+        </Card>
+      ) : (
+        <DataPanel
+          title="Audio library"
+          meta={`${audios.length} file${audios.length === 1 ? "" : "s"}`}
+          action={
+            <>
+              {sel.size > 0 && (
+                <Button variant="danger" size="sm" leftIcon={<Trash2 size={13} />} onClick={() => setConfirmBulk(true)}>
+                  Delete {sel.size}
+                </Button>
+              )}
+              <Button size="sm" leftIcon={<Upload size={13} />} onClick={() => setAddOpen(true)}>
+                Add audio
+              </Button>
+            </>
+          }
+        >
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={`${TH} w-[44px]`}>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all"
+                    className="w-4 h-4 accent-brand cursor-pointer"
+                  />
+                </th>
+                <th className={TH}>Label</th>
+                <th className={TH}>Length</th>
+                <th className={TH}>Source</th>
+                <th className={TH}>Used by</th>
+                <th className={TH}>Preview</th>
+                <th className={`${TH} w-[52px]`} />
+              </tr>
+            </thead>
+            <tbody>
+              {audios.map((a) => (
+                <AudioRow
+                  key={a.id}
+                  a={a}
+                  usedBy={usedByAudio.get(a.id) ?? []}
+                  selected={sel.has(a.id)}
+                  onToggle={() => toggleOne(a.id)}
+                  onRemove={() => setConfirmDel(a)}
+                />
+              ))}
+            </tbody>
+          </DataTable>
+        </DataPanel>
+      )}
+
+      {/* Adding moved off the page and into a dialog. Same URL/upload switch,
+          same waveform, same progress bar — it just no longer occupies the top
+          half of the screen when you only came to find a file. */}
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add audio" maxWidth="max-w-3xl">
       <Card
         title="Add audio"
         description="Paste a public audio URL, or upload a file to S3."
@@ -543,46 +657,52 @@ export default function AudiosTab() {
         </div>
       </Card>
 
-      {!audios.length ? (
-        <Card>
-          <EmptyState
-            icon={<Music size={20} />}
-            title="No audios yet"
-            description="Add one above. Once added, link it to a campaign in the Campaigns tab."
-          />
-        </Card>
-      ) : (
-        <>
-          <div className="flex items-center justify-between gap-3 px-1">
-            <label className="inline-flex items-center gap-2 text-xs text-muted cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleAll}
-                aria-label="Select all"
-                className="w-4 h-4 accent-brand cursor-pointer"
-              />
-              {sel.size ? `${sel.size} selected` : `${audios.length} audio${audios.length > 1 ? "s" : ""}`}
-            </label>
-            {sel.size > 0 && (
-              <Button variant="danger" size="sm" onClick={removeSelected} leftIcon={<Trash2 size={13} />}>
-                Delete {sel.size}
-              </Button>
-            )}
-          </div>
-          <div className="space-y-2">
-            {audios.map((a) => (
-              <AudioRow
-                key={a.id}
-                a={a}
-                selected={sel.has(a.id)}
-                onToggle={() => toggleOne(a.id)}
-                onRemove={() => remove(a.id)}
-              />
-            ))}
-          </div>
-        </>
-      )}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        title="Delete audio"
+        confirmLabel="Delete audio"
+        body={
+          <>
+            Delete <span className="font-medium text-ink">{confirmDel?.label}</span>?
+            {(() => {
+              const names = confirmDel ? usedByAudio.get(confirmDel.id) ?? [] : [];
+              return names.length ? (
+                <>
+                  {" "}It is used by <span className="font-medium text-ink">{names.length} campaign
+                  {names.length === 1 ? "" : "s"}</span> ({names.join(", ")}), which will fall back to the
+                  default audio.
+                </>
+              ) : (
+                <> No campaign is using it.</>
+              );
+            })()}
+          </>
+        }
+        onConfirm={() => {
+          if (confirmDel) remove(confirmDel.id);
+          setConfirmDel(null);
+        }}
+        onClose={() => setConfirmDel(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulk}
+        title={`Delete ${sel.size} audio${sel.size === 1 ? "" : "s"}`}
+        confirmLabel={`Delete ${sel.size}`}
+        body={
+          <>
+            Delete {sel.size} selected file{sel.size === 1 ? "" : "s"}? Any campaign using one of them falls
+            back to the default audio.
+          </>
+        }
+        onConfirm={() => {
+          removeSelected();
+          setConfirmBulk(false);
+        }}
+        onClose={() => setConfirmBulk(false)}
+      />
     </Section>
   );
 }

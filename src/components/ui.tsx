@@ -50,11 +50,16 @@ export function Button({
     "inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 " +
     "disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 " +
     "focus-visible:ring-brand/40 active:scale-[0.98] whitespace-nowrap";
+  // Same button language as the landing and sign-in pages: the primary action is
+  // a teal gradient with a glow under it and lifts a pixel on hover.
   const variantCls = {
-    primary: "bg-brand text-bg hover:bg-brand/90 shadow-card",
-    ghost: "bg-elev/60 border border-line text-ink hover:bg-elev hover:border-line2",
-    outline: "border border-line text-ink hover:bg-elev hover:border-line2",
-    subtle: "text-ink2 hover:text-ink hover:bg-elev/60",
+    primary:
+      "bg-gradient-to-b from-[#a9f2e8] to-brand text-[#042420] " +
+      "shadow-[0_12px_28px_-12px_rgba(94,234,212,0.7)] hover:-translate-y-px " +
+      "disabled:hover:translate-y-0",
+    ghost: "bg-white/[0.03] border border-line2 text-ink hover:border-white/30 hover:bg-white/5",
+    outline: "border border-line2 text-ink hover:bg-white/5 hover:border-white/30",
+    subtle: "text-ink2 hover:text-ink hover:bg-white/[0.04]",
     danger: "bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20",
   }[variant];
   const sizeCls = {
@@ -224,9 +229,17 @@ export function Card({
 }) {
   return (
     <div
-      className={`bg-panel border border-line rounded-2xl shadow-card ${
-        noPadding ? "" : "p-5"
-      } ${className}`}
+      className={
+        // Gradient surface + deep soft shadow + the teal hairline across the top
+        // edge — the same treatment as the sign-in card and the landing page's
+        // product windows, so the console reads as part of the same product.
+        "relative bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.96)] " +
+        "border border-line2 rounded-2xl " +
+        "shadow-[0_34px_70px_-50px_#000,inset_0_1px_0_rgba(255,255,255,0.04)] " +
+        "before:absolute before:inset-x-6 before:-top-px before:h-px before:content-[''] " +
+        "before:bg-gradient-to-r before:from-transparent before:via-brand/40 before:to-transparent " +
+        `${noPadding ? "" : "p-5"} ${className}`
+      }
     >
       {(title || action) && (
         <div className={`flex items-start justify-between gap-3 ${noPadding ? "p-5 pb-3" : "mb-4"}`}>
@@ -260,16 +273,18 @@ export function Badge({
   dot?: boolean;
   className?: string;
 }) {
+  // Drawn with an inner ring rather than a hard border, matching the tags on the
+  // landing page — softer edge, same information.
   const c = {
-    muted: "bg-line/60 text-ink2 border-line",
-    ok: "bg-ok/10 text-ok border-ok/25",
-    warn: "bg-warn/10 text-warn border-warn/25",
-    danger: "bg-danger/10 text-danger border-danger/25",
-    accent: "bg-brand/10 text-brand border-brand/25",
-    info: "bg-info/10 text-info border-info/25",
+    muted: "bg-white/5 text-ink2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]",
+    ok: "bg-ok/10 text-ok shadow-[inset_0_0_0_1px_rgba(34,197,94,0.2)]",
+    warn: "bg-warn/10 text-warn shadow-[inset_0_0_0_1px_rgba(245,158,11,0.2)]",
+    danger: "bg-danger/10 text-danger shadow-[inset_0_0_0_1px_rgba(239,68,68,0.2)]",
+    accent: "bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.2)]",
+    info: "bg-info/10 text-info shadow-[inset_0_0_0_1px_rgba(99,102,241,0.2)]",
   }[tone];
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs border ${c} ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${c} ${className}`}>
       {dot && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse2" />}
       {children}
     </span>
@@ -627,5 +642,236 @@ export function Modal({
         {footer && <div className="px-5 py-3 border-t border-line flex justify-end gap-2">{footer}</div>}
       </div>
     </div>
+  );
+}
+
+/* ==================================================================
+   Shared list-screen furniture
+   ------------------------------------------------------------------
+   Every screen that shows "many of a thing" now uses the same three
+   pieces, so Campaigns, Audios, Sheets, Batches and Clients stop each
+   inventing their own layout:
+
+     <Tiles>      four headline numbers answering "is this healthy?"
+     <DataPanel>  a titled surface holding a scannable table
+     <Kebab>      per-row actions, collapsed behind a single ··· button
+
+   and <ConfirmDialog> replaces the browser's plain grey confirm(),
+   which three screens were still using.
+   ================================================================== */
+
+export function Tiles({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 ${className}`}>{children}</div>
+  );
+}
+
+export function Tile({
+  label,
+  value,
+  sub,
+  tone = "muted",
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  sub?: ReactNode;
+  /** Colours only the sub-line — the value itself always stays plain. */
+  tone?: "muted" | "ok" | "warn" | "danger";
+}) {
+  const subCls = {
+    muted: "text-muted",
+    ok: "text-brand",
+    warn: "text-warn",
+    danger: "text-danger",
+  }[tone];
+  return (
+    <div className="rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.95)] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">{label}</div>
+      <div className="mt-1 text-[22px] font-extrabold tracking-[-0.04em] tabular-nums leading-tight">
+        {value}
+      </div>
+      {sub != null && <div className={`mt-0.5 text-[11.5px] ${subCls}`}>{sub}</div>}
+    </div>
+  );
+}
+
+export function DataPanel({
+  title,
+  meta,
+  action,
+  children,
+  footer,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.96)] shadow-[0_34px_70px_-50px_#000,inset_0_1px_0_rgba(255,255,255,0.04)] before:absolute before:inset-x-8 before:-top-px before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/40 before:to-transparent before:content-['']">
+      <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="text-sm font-bold tracking-[-0.015em]">{title}</div>
+          {meta && <div className="mt-0.5 text-[11.5px] text-muted">{meta}</div>}
+        </div>
+        {action && <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div>}
+      </div>
+      {children}
+      {footer && <div className="border-t border-line px-4 py-3 text-xs text-muted">{footer}</div>}
+    </div>
+  );
+}
+
+/** Table styling shared by every DataPanel, so column rhythm matches across screens. */
+export const TH =
+  "text-left text-[10px] font-bold uppercase tracking-[0.14em] text-muted px-4 py-2.5 border-b border-line";
+export const TD = "px-4 py-3 text-[13px] align-middle border-b border-line/60";
+
+export function DataTable({ children, className = "" }: { children: ReactNode; className?: string }) {
+  // Wide tables scroll inside their own panel rather than pushing the page sideways.
+  return (
+    <div className="overflow-x-auto">
+      <table className={`w-full border-collapse ${className}`}>{children}</table>
+    </div>
+  );
+}
+
+export interface KebabItem {
+  label: string;
+  onClick: () => void;
+  icon?: ReactNode;
+  danger?: boolean;
+}
+
+/** Row actions behind a single ··· button, so a row stays readable. */
+export function Kebab({ items, label = "Actions" }: { items: KebabItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrap} className="relative inline-block text-left">
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-line2 bg-white/[0.03] text-muted transition-colors hover:text-ink hover:bg-white/[0.07]"
+      >
+        <span className="-mt-1 text-base leading-none">···</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-30 mt-1 min-w-[172px] overflow-hidden rounded-xl border border-line2 bg-[rgba(18,21,29,0.98)] py-1 shadow-[0_24px_50px_-20px_#000] backdrop-blur"
+        >
+          {items.map((it) => (
+            <button
+              key={it.label}
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+              className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] transition-colors ${
+                it.danger ? "text-danger hover:bg-danger/10" : "text-ink2 hover:bg-white/[0.06] hover:text-ink"
+              }`}
+            >
+              {it.icon}
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One confirmation dialog for the whole app.
+ *
+ * `typeToConfirm` guards the genuinely unrecoverable actions: the button stays
+ * disabled until the exact word is typed. Used for "clear the whole DND list",
+ * where the old flow was a browser confirm() one click away from wiping it.
+ */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel = "Confirm",
+  tone = "danger",
+  typeToConfirm,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  body: ReactNode;
+  confirmLabel?: string;
+  tone?: "danger" | "primary";
+  typeToConfirm?: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    if (open) setTyped("");
+  }, [open]);
+
+  const ready = !typeToConfirm || typed.trim() === typeToConfirm;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      maxWidth="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant={tone === "danger" ? "danger" : "primary"}
+            disabled={!ready}
+            loading={busy}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-sm text-ink2">
+        <div>{body}</div>
+        {typeToConfirm && (
+          <div>
+            <Label>
+              Type <span className="font-mono text-ink">{typeToConfirm}</span> to confirm
+            </Label>
+            <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
