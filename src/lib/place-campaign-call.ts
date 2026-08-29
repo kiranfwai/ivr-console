@@ -94,7 +94,14 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   // the shared env account (unconnected clients dial exactly as before). Caller
   // ID: the campaign's own from-number, else the client's default, else env.
   const creds = await getClientPlivoCreds(clientId);
-  const fromNumber = campaign.fromNumber || creds.fromNumber || undefined;
+  // Normalize the CALLER ID too, not just the destination.
+  //
+  // Plivo rejects a `from` that isn't in E.164 with a 400, and because the
+  // caller ID is per-campaign that failure hits every single call on that
+  // campaign — it looks like "everything is broken" rather than "one field is
+  // wrong". A campaign saved with a bare "8031805258" did exactly that.
+  const rawFrom = campaign.fromNumber || creds.fromNumber || undefined;
+  const fromNumber = rawFrom ? normalizePhone(String(rawFrom)) || rawFrom : undefined;
 
   const result = await placeCall({
     to,

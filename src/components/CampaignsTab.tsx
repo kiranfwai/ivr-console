@@ -28,6 +28,28 @@ function isValidHttpsUrl(v: string) {
   }
 }
 
+/**
+ * A caller ID must reach Plivo in E.164. A bare "8031805258" is accepted by
+ * Plivo's API only as a 400, and because this field is per-campaign that breaks
+ * EVERY call on the campaign — which reads as "the whole system is down".
+ * Blank is fine: it falls back to the account default.
+ */
+function fromNumberError(v: string): string | null {
+  const raw = v.trim();
+  if (!raw) return null;
+  if (!/^\+/.test(raw)) {
+    const digits = raw.replace(/\D+/g, "");
+    if (digits.length === 10) {
+      return `Missing the country code. Write it as +91${digits}.`;
+    }
+    return "Must start with + and the country code, e.g. +918031340818.";
+  }
+  if (!/^\+[1-9]\d{7,14}$/.test(raw.replace(/[\s-]/g, ""))) {
+    return "That doesn't look like a valid number. Use the full E.164 form, e.g. +918031340818.";
+  }
+  return null;
+}
+
 function formatDate(iso?: string) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -373,10 +395,11 @@ function CampaignEditor({
 
   const webhookValid = isValidHttpsUrl(webhookUrl);
   const fromEmpty = !fromNumber.trim();
+  const fromErr = fromNumberError(fromNumber);
   // FEATURE 5: require a name AND a selected audio (plus a valid webhook).
   const nameValid = !!name.trim();
   const audioValid = !!audioId;
-  const canSave = nameValid && audioValid && webhookValid;
+  const canSave = nameValid && audioValid && webhookValid && !fromErr;
 
   async function save() {
     if (!canSave) return;
@@ -525,12 +548,15 @@ function CampaignEditor({
             value={fromNumber}
             onChange={(e) => setFromNumber(e.target.value)}
             placeholder="+918031340818"
+            className={fromErr ? "border-danger/60 focus:border-danger/60" : ""}
           />
-          {fromEmpty && (
+          {fromErr ? (
+            <div className="text-xs text-danger mt-1">{fromErr}</div>
+          ) : fromEmpty ? (
             <div className="text-xs text-warn mt-1">
-              No from-number set — calls will use the PLIVO_FROM_NUMBER env default.
+              No from-number set — calls will use the account default.
             </div>
-          )}
+          ) : null}
         </div>
           </div>
         </details>

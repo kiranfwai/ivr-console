@@ -437,7 +437,13 @@ export default function BulkTab() {
                 {failed.map((r, i) => (
                   <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
                     <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
-                    <span className="text-muted">{r.status}{r.hangupCause ? ` · ${r.hangupCause}` : ""}</span>
+                    {/* Show the recorded error, not just the status. "failed"
+                        alone tells you nothing; "Plivo 400" tells you the
+                        caller ID is wrong. */}
+                    <span className="text-muted">
+                      {r.error || r.status}
+                      {r.hangupCause ? ` · ${r.hangupCause}` : ""}
+                    </span>
                   </div>
                 ))}
               </div>
