@@ -27,6 +27,7 @@ import {
   Badge,
   Spinner,
   EmptyState,
+  Loading,
   toast,
 } from "@/components/ui";
 import { api } from "@/components/useData";
@@ -87,6 +88,9 @@ function fmtTime(iso: string | null) {
 export default function GSheetsTab() {
   const [connections, setConnections] = useState<GSheetConn[] | undefined>(undefined); // undefined = loading
   const [leads, setLeads]             = useState<GSheetLead[]>([]);
+  // Separate from `leads.length`, because an empty list before the first
+  // response and an empty list after one mean opposite things to the reader.
+  const [leadsLoaded, setLeadsLoaded]  = useState(false);
   const [campaigns, setCampaigns]     = useState<Campaign[]>([]);
   const [showConnectForm, setShowConnectForm] = useState(false);
   const [polling, setPolling]         = useState(false);
@@ -107,7 +111,13 @@ export default function GSheetsTab() {
     try {
       const d = await api<{ leads: GSheetLead[] }>("/api/gsheets/leads");
       setLeads(d.leads);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    } finally {
+      // Marked loaded even on failure: the queue then reads as empty rather
+      // than spinning forever, and the 10s refresh will correct it.
+      setLeadsLoaded(true);
+    }
   }, []);
 
   const loadCampaigns = useCallback(async () => {
@@ -334,7 +344,9 @@ export default function GSheetsTab() {
             </div>
           }
         >
-          {leads.length === 0 ? (
+          {!leadsLoaded ? (
+            <Loading label="Loading the lead queue…" />
+          ) : leads.length === 0 ? (
             <EmptyState
               icon={<FileSpreadsheet size={20} />}
               title="No leads yet"

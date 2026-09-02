@@ -12,7 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import {
-  Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, Modal,
+  Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, Modal,
   Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
 } from "./ui";
 import { useFetch, api } from "./useData";
@@ -58,7 +58,7 @@ function formatDate(iso?: string) {
 }
 
 export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: string) => void }) {
-  const { data: cdata, reload: reloadC } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
+  const { data: cdata, loading: loadingC, reload: reloadC } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: adata } = useFetch<{ audios: Audio[] }>("/api/audios");
   const campaigns = cdata?.campaigns ?? [];
   const audios = adata?.audios ?? [];
@@ -99,7 +99,11 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
         </Button>
       </div>
 
-      {!campaigns.length ? (
+      {loadingC && !cdata ? (
+        <Card>
+          <Loading label="Loading campaigns…" />
+        </Card>
+      ) : !campaigns.length ? (
         <Card>
           <EmptyState
             icon={<Megaphone size={20} />}

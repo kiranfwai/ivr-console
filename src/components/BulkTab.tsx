@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download, Gauge, Server, Activity } from "lucide-react";
-import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Section, CsvFilePicker, Modal, toast } from "./ui";
+import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, CsvFilePicker, Modal, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts, type Contact } from "@/lib/contacts";
 import ScheduleCard from "./ScheduleCard";
@@ -51,7 +51,7 @@ function summarize(job: BulkJobWithCounts) {
 }
 
 export default function BulkTab() {
-  const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
+  const { data: cdata, loading: loadingCampaigns } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJobWithCounts[] }>("/api/bulk");
   // Wallet balance — to warn (before dialing) when it can't cover a connected call.
   const { data: wallet } = useFetch<{ balance: number; currency: string; rate: number; noClient?: boolean }>("/api/wallet");
@@ -310,6 +310,16 @@ export default function BulkTab() {
   const acctCps = acct?.cps ?? 0;
   const estSec = acctCps > 0 ? Math.ceil(previewCount / acctCps) : 0;
   const estMin = Math.max(1, Math.ceil(estSec / 60));
+
+  if (loadingCampaigns && !cdata) {
+    return (
+      <Section>
+        <Card>
+          <Loading label="Loading campaigns…" />
+        </Card>
+      </Section>
+    );
+  }
 
   if (!campaigns.length) {
     return (

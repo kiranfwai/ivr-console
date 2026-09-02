@@ -61,7 +61,17 @@ function makeError(status: number, message: string): ApiError {
 
 export function useFetch<T>(url: string | null, deps: any[] = []) {
   const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Starts TRUE when there is something to fetch.
+  //
+  // The fetch itself is kicked off by an effect, which React runs AFTER the
+  // first paint. Starting at false therefore meant every screen painted one
+  // frame of "loading: false, data: null" before anything was requested — and
+  // since a screen with no data reads as a screen with nothing in it, each tab
+  // flashed "No campaigns" / "No audios" / "No sheets connected" before its
+  // real content arrived. Callers that correctly wrote `loading && !data` were
+  // defeated by this too, which is why the fix belongs here and not at every
+  // call site.
+  const [loading, setLoading] = useState(url != null);
   const [err, setErr] = useState<string | null>(null);
   // Abort the in-flight request when url/deps change or on unmount, so a slow
   // response can't overwrite newer state or update an unmounted component.

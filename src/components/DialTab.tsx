@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw, RefreshCw } from "lucide-react";
-import { Button, Card, Input, Label, Select, Badge, EmptyState, Section, IconButton, DataTable, TH, TD, Spinner, toast } from "./ui";
+import { Button, Card, Input, Label, Select, Badge, EmptyState, Loading, Section, IconButton, DataTable, TH, TD, Spinner, toast } from "./ui";
 import { useFetch, api, usePersistentState } from "./useData";
 import type { Campaign } from "@/lib/models";
 
@@ -77,7 +77,7 @@ function OutcomeBadge({ outcome, durationSec }: { outcome: string; durationSec: 
 }
 
 export default function DialTab() {
-  const { data: c } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
+  const { data: c, loading: loadingCampaigns } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const campaigns = c?.campaigns ?? [];
   // Selected campaign + caller name persist across tab switches / refresh (BUG 1).
   const [campaignId, setCampaignId] = usePersistentState<string>("ivr.dial.campaignId", "");
@@ -147,6 +147,16 @@ export default function DialTab() {
     } catch {
       toast("Copy failed", "danger");
     }
+  }
+
+  if (loadingCampaigns && !c) {
+    return (
+      <Section>
+        <Card>
+          <Loading label="Loading campaigns…" />
+        </Card>
+      </Section>
+    );
   }
 
   if (!campaigns.length) {

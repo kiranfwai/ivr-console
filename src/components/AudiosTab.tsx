@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link as LinkIcon, Upload, Trash2, Music, X, Clock } from "lucide-react";
 import {
-  Button, Card, Input, Label, Badge, EmptyState, Section, Modal,
+  Button, Card, Input, Label, Badge, EmptyState, Loading, Section, Modal,
   Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
 } from "./ui";
 import { useFetch, api } from "./useData";
@@ -249,7 +249,7 @@ function Preview({ src, label }: { src: string | null; label: string }) {
 }
 
 export default function AudiosTab() {
-  const { data, reload } = useFetch<{ audios: Audio[] }>("/api/audios");
+  const { data, loading, reload } = useFetch<{ audios: Audio[] }>("/api/audios");
   const audios = data?.audios ?? [];
   // Which campaigns point at each audio. Free — the campaigns list is already
   // fetched on the next screen over, and it turns "campaigns using it will fall
@@ -465,7 +465,11 @@ export default function AudiosTab() {
               tone={unusedCount ? "warn" : "muted"} />
       </Tiles>
 
-      {!audios.length ? (
+      {loading && !data ? (
+        <Card>
+          <Loading label="Loading your audio library…" />
+        </Card>
+      ) : !audios.length ? (
         <Card>
           <EmptyState
             icon={<Music size={20} />}
