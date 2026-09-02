@@ -445,6 +445,23 @@ export function EmptyState({
   );
 }
 
+/* -------------------- Loading state -------------------- */
+/**
+ * What a screen shows while its first request is in flight.
+ *
+ * It exists so that "we don't know yet" never looks like "there is nothing
+ * here". Sized to roughly the height of EmptyState so the panel doesn't jump
+ * when the real answer arrives and one replaces the other.
+ */
+export function Loading({ label, py = "py-12" }: { label?: string; py?: string }) {
+  return (
+    <div className={`flex flex-col items-center justify-center ${py} px-4 text-center text-muted`}>
+      <Spinner size={20} />
+      {label && <div className="mt-3 text-xs">{label}</div>}
+    </div>
+  );
+}
+
 /* -------------------- Skeleton loader -------------------- */
 export function Skeleton({ className = "h-4 w-full" }: { className?: string }) {
   return (
