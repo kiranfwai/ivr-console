@@ -13,6 +13,14 @@ scripts/_test-charts.xlsx
 skills/
 .env.tmp
 
+# PWA service worker files (generated at build time)
+public/sw.js
+public/sw.js.map
+public/workbox-*.js
+public/workbox-*.js.map
+public/swe-worker-*.js
+public/swe-worker-*.js.map
+
 # stray scratch files from a botched curl -o
 /campaignId
 /campaignName

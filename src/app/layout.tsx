@@ -13,7 +13,11 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+
+export const viewport: Viewport = {
+  themeColor: "#0f172a",
+};
 
 export const metadata: Metadata = {
   title: {
@@ -24,6 +28,13 @@ export const metadata: Metadata = {
   applicationName: "IVR Console",
   icons: {
     icon: "/favicon.ico",
+    apple: "/icon-180x180.png",
+  },
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "IVR Console",
   },
   openGraph: {
     title: "IVR Console",
