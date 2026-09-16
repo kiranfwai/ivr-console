@@ -247,7 +247,7 @@ export function Card({
             {title && <div className="font-semibold text-ink">{title}</div>}
             {description && <div className="text-xs text-muted mt-0.5">{description}</div>}
           </div>
-          {action && <div className="shrink-0">{action}</div>}
+          {action && <div className="w-full sm:w-auto shrink-0">{action}</div>}
         </div>
       )}
       {children}
