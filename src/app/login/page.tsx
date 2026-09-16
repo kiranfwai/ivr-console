@@ -108,7 +108,7 @@ function LoginForm() {
       const r = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password: password.trim() }),
       });
       if (r.ok) {
         router.replace(from);
