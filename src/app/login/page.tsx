@@ -245,6 +245,9 @@ function LoginForm() {
                   id="password"
                   type={showPw ? "text" : "password"}
                   autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyUp={detectCaps}
