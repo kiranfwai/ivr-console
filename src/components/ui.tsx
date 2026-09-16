@@ -242,8 +242,8 @@ export function Card({
       }
     >
       {(title || action) && (
-        <div className={`flex items-start justify-between gap-3 ${noPadding ? "p-5 pb-3" : "mb-4"}`}>
-          <div className="min-w-0">
+        <div className={`flex flex-wrap items-start gap-3 ${noPadding ? "p-5 pb-3" : "mb-4"}`}>
+          <div className="min-w-0 flex-1">
             {title && <div className="font-semibold text-ink">{title}</div>}
             {description && <div className="text-xs text-muted mt-0.5">{description}</div>}
           </div>
