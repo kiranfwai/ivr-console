@@ -246,7 +246,7 @@ export function Shell({
 
       {/* Main */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="sticky top-0 z-30 min-h-[60px] py-2.5 px-4 lg:px-6 flex items-center gap-3 bg-bg/80 backdrop-blur border-b border-line">
+        <header className="sticky top-0 z-30 min-h-[60px] py-2.5 px-4 lg:px-6 flex items-center gap-3 bg-bg/80 backdrop-blur border-b border-line [padding-top:max(0.625rem,env(safe-area-inset-top))]">
           <IconButton
             icon={<Menu size={18} />}
             className="lg:hidden"
