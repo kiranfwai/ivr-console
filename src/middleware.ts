@@ -18,6 +18,12 @@ const PUBLIC_PREFIXES = [
   "/_next",
   "/favicon",
   "/fwai-logo", // login-page logo, served before auth
+  // PWA assets — must be public so Chrome can verify installability
+  "/manifest.json",
+  "/sw.js",
+  "/workbox-",
+  "/swe-worker-",
+  "/icon-",
 ];
 
 // Admin-only. Everything under here requires role === "admin".
