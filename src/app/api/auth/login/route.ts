@@ -14,7 +14,14 @@ export const runtime = "nodejs";
  *    a client session scoped to that client's tenant + granted feature tabs.
  */
 export async function POST(req: NextRequest) {
-  const { email, password } = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
+  const { email, password } = body;
+  console.log("[login] attempt email=%s pwdLen=%s pwdBytes=%s ua=%s",
+    email,
+    typeof password === "string" ? password.length : "n/a",
+    typeof password === "string" ? Buffer.from(password).length : "n/a",
+    req.headers.get("user-agent")?.slice(0, 80),
+  );
   if (typeof password !== "string" || !password) {
     return NextResponse.json({ ok: false, error: "email and password required" }, { status: 400 });
   }
