@@ -463,6 +463,32 @@ async function bootstrap(): Promise<void> {
     CREATE INDEX IF NOT EXISTS access_request_new ON access_request (created_at DESC);
     -- Cheap lookup for the per-IP flood guard on the public endpoint.
     CREATE INDEX IF NOT EXISTS access_request_ip ON access_request (ip, created_at DESC);
+
+    -- WhatsApp + email sent to every lead of an "always" campaign the moment its
+    -- call is placed (see lead-notify.ts). One row per message, and dedupe_key is
+    -- what makes it one: a sheet lead is keyed by client + phone (so the same
+    -- number in two sheets, a re-poll or a manual re-call never sends twice), a
+    -- bulk row by job + row (a 429 re-queue re-dials it), anything else by call.
+    -- The INSERT is the claim; the sender only moves pending -> sending -> sent.
+    CREATE TABLE IF NOT EXISTS lead_notify (
+      id          bigserial PRIMARY KEY,
+      dedupe_key  text NOT NULL UNIQUE,
+      client_id   text NOT NULL DEFAULT '',
+      source      text NOT NULL,               -- 'sheet' | 'bulk' | 'call'
+      phone       text NOT NULL,
+      call_uuid   text,                        -- our internal call id, null when no call was placed
+      webhook_url text NOT NULL,
+      payload     jsonb NOT NULL,
+      status      text NOT NULL DEFAULT 'pending', -- pending | sending | sent | failed | unknown
+      http_status int,
+      error       text,
+      attempts    int NOT NULL DEFAULT 0,
+      created_at  timestamptz NOT NULL DEFAULT now(),
+      claimed_at  timestamptz,
+      sent_at     timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS lead_notify_pending ON lead_notify (id) WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS lead_notify_client ON lead_notify (client_id, created_at DESC);
   `;
   await pool().query(alterSql);
 }

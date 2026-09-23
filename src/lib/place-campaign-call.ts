@@ -6,6 +6,11 @@ import { currentClientId } from "./tenant";
 import { canDial } from "./wallet";
 import { isDnd } from "./dnd";
 import { getClientPlivoCreds } from "./plivo-config";
+import { triggerOf } from "./whatsapp-notify";
+import {
+  enqueueLeadNotify, bulkNotifyKey, callNotifyKey,
+  type NotifySource, type NotifyCallState,
+} from "./lead-notify";
 import type { Campaign, CallRecord } from "./models";
 
 /** Thrown by placeCampaignCall when the client's prepaid wallet can't cover a call. */
@@ -34,6 +39,13 @@ export interface PlaceCampaignCallInput {
   bulkJobId?: string;
   bulkRowIndex?: number;
   req?: Request; // only used to derive the public base URL for the webhooks
+  /**
+   * "always" campaigns: who this lead is for WhatsApp dedupe purposes. Sheet
+   * Auto-Dial passes its client + phone key so a lead is messaged once across
+   * every sheet; left out, a bulk row or the call itself is the key.
+   */
+  notifyKey?: string;
+  notifySource?: NotifySource;
 }
 
 export interface PlaceCampaignCallResult {
@@ -68,6 +80,29 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
   // answer/dtmf/hangup callbacks re-enter this client's data scope.
   const clientId = currentClientId() ?? "";
 
+  // "always" campaigns send the lead's WhatsApp + email as soon as the call is
+  // placed — and also when it is NOT placed because of DND or a low wallet, so
+  // every lead handed to a campaign gets the message. Queued, not sent inline,
+  // so Pabbly never slows dialing; dedupe lives in the queue (lead-notify.ts).
+  const sendOnPlace = triggerOf(campaign) === "always";
+  const isBulk = !!bulkJobId && typeof bulkRowIndex === "number";
+  const notify = async (call: NotifyCallState, callUuid: string | null, from?: string) => {
+    if (!sendOnPlace) return;
+    await enqueueLeadNotify({
+      clientId,
+      source: input.notifySource || (isBulk ? "bulk" : "call"),
+      dedupeKey:
+        input.notifyKey || (isBulk ? bulkNotifyKey(bulkJobId!, bulkRowIndex!) : callNotifyKey(internalId)),
+      campaign,
+      phone: to,
+      name: callerName,
+      email,
+      callUuid,
+      from: from || campaign.fromNumber,
+      call,
+    });
+  };
+
   // Do-Not-Disturb gate: never dial a number on this client's DND list, even if
   // it's present in a campaign / bulk upload. Mark the linked bulk row (if any)
   // as skipped and abort — no Plivo call, no call record, no wallet charge.
@@ -79,12 +114,16 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
         attemptedAt: new Date().toISOString(),
       });
     }
+    await notify("dnd", null);
     throw new DndSkipError(to);
   }
 
   // Prepaid gate: block dialing when the wallet can't cover a connected call.
   const gate = await canDial(clientId);
-  if (!gate.ok) throw new InsufficientBalanceError(gate.balance, gate.rate);
+  if (!gate.ok) {
+    await notify("low_balance", null);
+    throw new InsufficientBalanceError(gate.balance, gate.rate);
+  }
 
   const cq = clientId ? `&client=${encodeURIComponent(clientId)}` : "";
   const answerUrl = `${base}/api/answer/${campaign.id}?req=${internalId}${cq}`;
@@ -130,8 +169,11 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
     digit: "",
     triggeredAt: new Date().toISOString(),
     bulkJobId: bulkJobId || undefined,
+    ...(callerName ? { name: callerName } : {}),
+    ...(sendOnPlace ? { notifyOnPlace: true } : {}),
   };
   await recordCall(record);
+  await notify(result.ok ? "placed" : "call_failed", internalId, record.from);
 
   if (bulkJobId && typeof bulkRowIndex === "number") {
     await updateBulkRow(bulkJobId, bulkRowIndex, {

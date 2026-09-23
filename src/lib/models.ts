@@ -30,6 +30,10 @@ export interface Campaign {
    *   "answer" — the moment the call is picked up. Pressing 1 still works and
    *              is still counted, it just isn't what sends the message.
    *   "press1" — only when the lead presses 1. The original behaviour.
+   *   "always" — to EVERY lead, the moment their call is placed, whatever the
+   *              outcome (answered, busy, no answer, failed) — and even when no
+   *              call is made because of DND or a low wallet. Answer/press-1 then
+   *              send nothing, so each lead still gets exactly one message.
    *
    * Absent means "press1": campaigns that already existed keep behaving exactly
    * as they did, and are moved over deliberately rather than by an upgrade.
@@ -37,7 +41,7 @@ export interface Campaign {
   whatsappTrigger?: WhatsappTrigger;
 }
 
-export type WhatsappTrigger = "answer" | "press1";
+export type WhatsappTrigger = "answer" | "press1" | "always";
 
 export type CallStatus =
   | "triggered"
@@ -71,6 +75,13 @@ export interface CallRecord {
    * not two — and a Plivo callback delivered twice cannot double-send either.
    */
   whatsappSentAt?: string;
+  /** Lead name, so the WhatsApp payload can greet them. */
+  name?: string;
+  /**
+   * The campaign sent this lead's WhatsApp when the call was placed ("always"),
+   * so the answer / press-1 webhooks must not send another one.
+   */
+  notifyOnPlace?: boolean;
 }
 
 export type BulkRowStatus =

@@ -44,7 +44,7 @@ export interface CampaignInput {
  * "press1" — a typo must not silently start messaging everyone who answers.
  */
 function normalizeTrigger(v: unknown): WhatsappTrigger {
-  return v === "answer" ? "answer" : "press1";
+  return v === "answer" || v === "always" ? v : "press1";
 }
 
 /** Coerce a Call Ending Duration input into a positive integer, or undefined. */

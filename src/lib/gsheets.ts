@@ -4,6 +4,7 @@ import { runWithTenant } from "./tenant";
 import { getCampaign } from "./campaigns";
 import { placeCampaignCall } from "./place-campaign-call";
 import { normalizePhone } from "./phone";
+import { sheetNotifyKey } from "./lead-notify";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -481,8 +482,23 @@ async function fireLeadCall(
         phone,
         callerName: name || undefined,
         email: email || undefined,
+        // "always" campaigns: one WhatsApp + email per client + phone, across
+        // every sheet connection and every re-call of this lead.
+        notifyKey: sheetNotifyKey(clientId, phone),
+        notifySource: "sheet",
       });
     });
+
+    if (!result.ok) {
+      // Plivo refused the call. Used to be recorded as 'called', which hid it.
+      const error = `telephony provider error (status ${result.status})`;
+      await query(
+        `UPDATE gsheet_lead SET status = 'failed', call_uuid = $3, called_at = now(), error = $4
+         WHERE client_id = $1 AND id = $2`,
+        [clientId, leadId, result.callUuid, error],
+      );
+      return { ok: false, error };
+    }
 
     await query(
       `UPDATE gsheet_lead SET status = 'called', call_uuid = $3, called_at = now(), error = NULL

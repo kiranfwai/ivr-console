@@ -10,6 +10,10 @@ export async function register() {
   // so deployed behavior is unchanged.
   if (process.env.WORKER_DISABLED === "1") return;
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    // First, so sends interrupted by the last restart are settled before any
+    // dial path can queue new ones.
+    const { startLeadNotifier } = await import("./lib/lead-notify");
+    await startLeadNotifier();
     const { startWorker } = await import("./lib/worker");
     await startWorker();
     const { startGsheetsPoller } = await import("./lib/gsheets");

@@ -19,14 +19,15 @@ import type { CallRecord, WhatsappTrigger } from "./models";
 
 /** A campaign with no explicit setting keeps the original press-1 behaviour. */
 export function triggerOf(campaign: { whatsappTrigger?: WhatsappTrigger } | null): WhatsappTrigger {
-  return campaign?.whatsappTrigger === "answer" ? "answer" : "press1";
+  const t = campaign?.whatsappTrigger;
+  return t === "answer" || t === "always" ? t : "press1";
 }
 
 export interface NotifyResult {
   sent: boolean;
   /** HTTP status from the webhook, 0 if not attempted, -1 if the request threw. */
   status: number;
-  reason?: "already-sent" | "no-webhook" | "no-record";
+  reason?: "already-sent" | "no-webhook" | "no-record" | "sent-on-place";
 }
 
 /**
@@ -43,6 +44,9 @@ export async function notifyWhatsapp(
   const record = await getCall(internalId);
   if (!record) return { sent: false, status: 0, reason: "no-record" };
   if (record.whatsappSentAt) return { sent: false, status: 0, reason: "already-sent" };
+  // "always" campaigns message the lead when the call is placed (lead-notify.ts),
+  // so a pickup or a press-1 must not send a second one.
+  if (record.notifyOnPlace) return { sent: false, status: 0, reason: "sent-on-place" };
 
   // The webhook and the recipient come ONLY from the stored record — never from
   // the incoming request. Signature verification is off by default, so trusting
@@ -61,7 +65,10 @@ export async function notifyWhatsapp(
     event: opts.event,
     campaign: record.campaignName,
   };
+  if (record.name) payload.name = record.name;
   if (record.email) payload.email = record.email;
+  // Same flag as the "always" send (lead-notify.ts), for Pabbly's email filter.
+  payload.has_email = record.email ? "yes" : "no";
 
   // Claim the send BEFORE the request goes out. Losing a message because the
   // webhook was slow is better than sending the lead two.
@@ -103,7 +110,7 @@ export function notifyWhatsappInBackground(
     (r) => {
       if (r.sent) {
         console.info(`[whatsapp] ${opts.event} -> webhook ${r.status} for ${record?.to ?? internalId}`);
-      } else if (r.reason !== "already-sent") {
+      } else if (r.reason !== "already-sent" && r.reason !== "sent-on-place") {
         console.warn(`[whatsapp] ${opts.event} not sent (${r.reason}) for ${record?.to ?? internalId}`);
       }
     },

@@ -4,6 +4,8 @@ import { normalizePhone } from "./phone";
 import { recordCall } from "./calls";
 import { currentClientId } from "./tenant";
 import { isDnd } from "./dnd";
+import { triggerOf } from "./whatsapp-notify";
+import { enqueueLeadNotify, bulkNotifyKey, type NotifyCallState } from "./lead-notify";
 import type { Campaign } from "./models";
 
 export interface ClaimedRow {
@@ -36,6 +38,26 @@ export async function fireOne(
     return { ok: false };
   }
 
+  // "always" campaigns queue the row's WhatsApp + email when it is dialed (or
+  // skipped for DND). Keyed by job + row, so a 429 re-queue can't send twice.
+  const sendOnPlace = triggerOf(campaign) === "always";
+  const clientIdForNotify = currentClientId() ?? "";
+  const notify = async (call: NotifyCallState, callUuid: string | null, from?: string) => {
+    if (!sendOnPlace) return;
+    await enqueueLeadNotify({
+      clientId: clientIdForNotify,
+      source: "bulk",
+      dedupeKey: bulkNotifyKey(jobId, row.index),
+      campaign,
+      phone: to,
+      name: row.name,
+      email: row.email,
+      callUuid,
+      from: from || campaign.fromNumber,
+      call,
+    });
+  };
+
   // Do-Not-Disturb: skip numbers on the client's DND list. Terminal outcome
   // ('dnd'), so the worker never re-dials it and the job still completes — but
   // no call is placed, no record is written, and no wallet charge is incurred.
@@ -45,6 +67,7 @@ export async function fireOne(
       error: "on DND list",
       attemptedAt: new Date().toISOString(),
     });
+    await notify("dnd", null);
     return { ok: false };
   }
 
@@ -100,7 +123,10 @@ export async function fireOne(
     digit: "",
     triggeredAt,
     bulkJobId: jobId,
+    ...(row.name ? { name: row.name } : {}),
+    ...(sendOnPlace ? { notifyOnPlace: true } : {}),
   });
+  await notify(result.ok ? "placed" : "call_failed", internalId, fromNumber);
 
   await updateBulkRow(jobId, row.index, {
     status: result.ok ? "ok" : "failed",

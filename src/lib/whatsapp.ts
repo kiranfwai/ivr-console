@@ -65,8 +65,19 @@ export function buildWaPayload(input: {
   };
 }
 
-/** POST a payload to a Pabbly webhook with retry + exponential backoff. */
-export async function postToPabbly(hook: string, payload: unknown): Promise<WaSendResult> {
+/**
+ * POST a payload to a Pabbly webhook with retry + exponential backoff.
+ *
+ * `retryOnTimeout: false` is for sends that must never duplicate: a timeout
+ * doesn't say whether Pabbly got the request, so retrying it can message the
+ * lead twice. 429s, 5xx and refused connections are still retried.
+ */
+export async function postToPabbly(
+  hook: string,
+  payload: unknown,
+  opts: { retryOnTimeout?: boolean } = {},
+): Promise<WaSendResult> {
+  const retryOnTimeout = opts.retryOnTimeout ?? true;
   const t0 = Date.now();
   let status = 0;
   let body = "";
@@ -99,7 +110,7 @@ export async function postToPabbly(hook: string, payload: unknown): Promise<WaSe
       status = timedOut ? 408 : 0;
       body = timedOut ? "timeout" : String(e?.message || e);
       // Network error / timeout is transient — retry.
-      if (attempt < MAX_RETRIES) {
+      if (attempt < MAX_RETRIES && (retryOnTimeout || !timedOut)) {
         await sleep(backoffMs(attempt, null));
         continue;
       }

@@ -18,6 +18,13 @@ import {
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
+type WaTrigger = "answer" | "press1" | "always";
+
+/** Anything unrecognised (or unset, on old campaigns) is the original press-1 behaviour. */
+function toTrigger(v: unknown): WaTrigger {
+  return v === "answer" || v === "always" ? v : "press1";
+}
+
 function isValidHttpsUrl(v: string) {
   if (!v.trim()) return true; // blank is allowed (falls back to env)
   try {
@@ -89,6 +96,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
 
   const editorOpen = creating || !!editing || !!clone;
   const onAnswerCount = campaigns.filter((c) => c.whatsappTrigger === "answer").length;
+  const alwaysCount = campaigns.filter((c) => c.whatsappTrigger === "always").length;
+  const press1Count = campaigns.length - onAnswerCount - alwaysCount;
   const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
 
   return (
@@ -126,10 +135,15 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
               sub="everyone who picks up gets it"
             />
             <Tile
+              label="Message everyone"
+              value={alwaysCount}
+              sub="sent when the call is placed"
+            />
+            <Tile
               label="Only on press 1"
-              value={campaigns.length - onAnswerCount}
-              sub={campaigns.length - onAnswerCount ? "nothing sent unless they press" : "none"}
-              tone={campaigns.length - onAnswerCount ? "warn" : "muted"}
+              value={press1Count}
+              sub={press1Count ? "nothing sent unless they press" : "none"}
+              tone={press1Count ? "warn" : "muted"}
             />
             <Tile
               label="No caller ID set"
@@ -165,7 +179,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                   const created = formatDate(c.createdAt);
                   // Anything saved before this setting existed has no value and
                   // keeps the old press-1 behaviour until someone changes it.
-                  const onAnswer = c.whatsappTrigger === "answer";
+                  const trigger = c.whatsappTrigger;
                   return (
                     <tr key={c.id} className="transition-colors hover:bg-white/[0.022]">
                       <td className={TD}>
@@ -192,7 +206,9 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                         {/* The setting that decides whether a lead gets a message
                             at all. It was previously only visible by opening the
                             campaign one at a time. */}
-                        {onAnswer ? (
+                        {trigger === "always" ? (
+                          <Badge tone="ok">Everyone, when the call is placed</Badge>
+                        ) : trigger === "answer" ? (
                           <Badge tone="ok">As soon as they pick up</Badge>
                         ) : (
                           <Badge tone="warn">Only if they press 1</Badge>
@@ -380,8 +396,8 @@ function CampaignEditor({
   // What sends the WhatsApp message. New campaigns send on answer; a campaign
   // saved before this setting existed has no value and keeps the press-1
   // behaviour until someone changes it here.
-  const [whatsappTrigger, setWhatsappTrigger] = useState<"answer" | "press1">(
-    seed ? (seed.whatsappTrigger === "answer" ? "answer" : "press1") : "answer",
+  const [whatsappTrigger, setWhatsappTrigger] = useState<WaTrigger>(
+    seed ? toTrigger(seed.whatsappTrigger) : "answer",
   );
   const [busy, setBusy] = useState(false);
 
@@ -476,13 +492,16 @@ function CampaignEditor({
           <Label>Send the WhatsApp message</Label>
           <Select
             value={whatsappTrigger}
-            onChange={(e) => setWhatsappTrigger(e.target.value === "answer" ? "answer" : "press1")}
+            onChange={(e) => setWhatsappTrigger(toTrigger(e.target.value))}
           >
             <option value="answer">As soon as they pick up</option>
             <option value="press1">Only if they press 1</option>
+            <option value="always">Everyone, when the call is placed (no conditions)</option>
           </Select>
           <div className="text-xs text-muted mt-1">
-            {whatsappTrigger === "answer"
+            {whatsappTrigger === "always"
+              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed, DND or low balance alike. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+              : whatsappTrigger === "answer"
               ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
               : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
           </div>
