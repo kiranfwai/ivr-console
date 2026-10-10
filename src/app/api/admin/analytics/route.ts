@@ -27,8 +27,10 @@ function istToday(): string {
 function summarize(agg: RangeAggregate) {
   const o = agg.outcomes;
   const connected = o.press1 + o.connected; // "lifted"
-  // Everything settled that isn't lifted or busy.
-  const failed = Math.max(0, agg.total - connected - o.busy);
+  // Carrier rejects + errors — the same "Failed" the client Dashboard shows.
+  // (It used to be "everything not lifted or busy", which already contained
+  // the No-answer column beside it, so the row double-counted no-answers.)
+  const failed = o.rejected + o.error;
   return {
     total: agg.total,
     connected,

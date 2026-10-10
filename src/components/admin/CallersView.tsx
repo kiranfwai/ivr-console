@@ -6,6 +6,7 @@ import { Card, Section, Badge, KPI, Spinner, EmptyState } from "../ui";
 import { api } from "../useData";
 import { fmtMoney, istToday, istDaysAgo } from "./money";
 import { RangeControl } from "./shared";
+import { formatPhone, isDiallablePhone, normalizePhone } from "@/lib/phone";
 
 interface CallerRow {
   clientId: string;
@@ -242,7 +243,12 @@ export default function CallersView() {
                     const meta = OUTCOME_META[r.outcome] || { label: r.outcome, tone: "muted" as const };
                     return (
                       <tr key={`${r.to}-${r.triggeredAt}-${i}`} className="border-t border-line hover:bg-elev/40">
-                        <td className="py-2 px-2 font-mono text-ink2 whitespace-nowrap">{r.to}</td>
+                        <td className="py-2 px-2 font-mono text-ink2 whitespace-nowrap">
+                          {formatPhone(r.to)}
+                          {!isDiallablePhone(normalizePhone(r.to)) && (
+                            <span className="ml-2 font-sans text-[11px] text-warn">invalid number</span>
+                          )}
+                        </td>
                         {client === "all" && (
                           <td className="px-2 text-ink2 max-w-[160px] truncate">{r.clientName}</td>
                         )}
@@ -250,9 +256,14 @@ export default function CallersView() {
                         <td className="px-2">
                           <Badge tone={meta.tone}>{meta.label}</Badge>
                         </td>
-                        <td className="px-2 text-right tabular-nums text-ink2">{fmtDuration(r.durationSec)}</td>
-                        <td className={`px-2 text-right tabular-nums ${r.charge > 0 ? "text-danger" : "text-muted"}`}>
-                          {r.charge > 0 ? `−${fmtMoney(r.charge, currency)}` : "—"}
+                        {/* Talk time only means something on a connected call; on a
+                            no-answer the carrier reports ring time, which read as a
+                            36s "no answer". */}
+                        <td className="px-2 text-right tabular-nums text-ink2">
+                          {r.outcome === "connected" || r.outcome === "press1" ? fmtDuration(r.durationSec) : "—"}
+                        </td>
+                        <td className="px-2 text-right tabular-nums text-ink2">
+                          {r.charge > 0 ? fmtMoney(r.charge, currency) : "—"}
                         </td>
                         <td className="px-2 text-right text-muted whitespace-nowrap text-xs">{fmtTime(r.triggeredAt)}</td>
                       </tr>
@@ -263,7 +274,8 @@ export default function CallersView() {
             </div>
             {data.capped && (
               <p className="text-xs text-muted mt-3">
-                Showing the most recent 2000 calls. Narrow the date range or pick a client to see more.
+                The table lists the newest {data.rows.length.toLocaleString()} of {data.totals.total.toLocaleString()} calls —
+                the totals above cover all of them. Narrow the date range or pick a client to list the rest.
               </p>
             )}
           </>

@@ -118,7 +118,7 @@ function ClientsView() {
                 <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
                   <th className="font-medium py-2 px-1">Client</th>
                   <th className="font-medium px-1">Status</th>
-                  <th className="font-medium px-1">Access</th>
+                  <th className="font-medium px-1 hidden md:table-cell">Access</th>
                   <th className="font-medium px-1 text-right">Actions</th>
                 </tr>
               </thead>
@@ -142,16 +142,19 @@ function ClientsView() {
                       <Badge tone={c.active ? "ok" : "muted"} dot={c.active}>
                         {c.active ? "Active" : "Disabled"}
                       </Badge>
+                      {/* On phones the Access column is hidden — say how much access instead. */}
+                      <div className="md:hidden mt-1 text-xs text-muted">
+                        {c.perms.length} feature{c.perms.length === 1 ? "" : "s"}
+                      </div>
                     </td>
-                    <td className="px-1 py-2.5">
+                    <td className="px-1 py-2.5 hidden md:table-cell">
                       <div className="flex flex-wrap gap-1 max-w-[280px]">
                         {c.perms.length === 0 ? (
                           <span className="text-xs text-muted">No access</span>
                         ) : (
-                          c.perms.map((p) => (
-                            <Badge key={p} tone="accent">
-                              {FEATURES.find((f) => f.id === p)?.label ?? p}
-                            </Badge>
+                          // Menu order, so every client's chips line up the same way.
+                          FEATURES.filter((f) => c.perms.includes(f.id)).map((f) => (
+                            <Badge key={f.id} tone="accent">{f.label}</Badge>
                           ))
                         )}
                       </div>
@@ -241,7 +244,9 @@ function DeleteButton({ client, onDone }: { client: Client; onDone: () => void }
     return (
       <button
         onClick={() => setConfirming(true)}
-        className="inline-flex items-center gap-1 text-xs text-danger hover:text-danger2 px-2 py-1 rounded-md hover:bg-danger/10"
+        // Quiet until hovered: a red Delete beside Edit on every row is easy to hit.
+        className="inline-flex items-center gap-1 text-xs text-muted hover:text-danger px-2 py-1 rounded-md hover:bg-danger/10"
+        title={`Delete ${client.email}`}
       >
         <Trash2 size={12} /> Delete
       </button>

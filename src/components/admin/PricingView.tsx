@@ -139,6 +139,8 @@ function CashfreeCard() {
   const [cfg, setCfg] = useState<CashfreeConfig | null>(null);
   const [env, setEnv] = useState<"sandbox" | "production">("sandbox");
   const [appId, setAppId] = useState("");
+  // Hidden by default like the secret; shown only on purpose (screen shares, demos).
+  const [showAppId, setShowAppId] = useState(false);
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -231,8 +233,14 @@ function CashfreeCard() {
               </select>
             </div>
             <div>
-              <Label>App ID (x-client-id)</Label>
-              <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="CF..." />
+              <div className="flex items-center justify-between">
+                <Label>App ID (x-client-id)</Label>
+                <button type="button" className="text-xs text-brand hover:underline mb-1.5" onClick={() => setShowAppId((v) => !v)}>
+                  {showAppId ? "Hide" : "Show"}
+                </button>
+              </div>
+              <Input type={showAppId ? "text" : "password"} autoComplete="off"
+                     value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="CF..." />
             </div>
           </div>
           <div>
