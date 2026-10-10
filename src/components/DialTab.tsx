@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPhone, isDiallablePhone, normalizePhone } from "@/lib/phone";
 import { useCallback, useEffect, useState } from "react";
 import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw, RefreshCw } from "lucide-react";
 import { Button, Card, Input, Label, Select, Badge, EmptyState, Loading, Section, IconButton, DataTable, TH, TD, Spinner, toast } from "./ui";
@@ -45,7 +46,9 @@ function whenLabel(iso: string): string {
   if (mins < 60) return `${mins} min ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
-  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return new Date(t).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true,
+  });
 }
 
 /** Outcome as a pill, with talk time when the call actually connected. */
@@ -318,7 +321,14 @@ export default function DialTab() {
             <tbody>
               {recent.map((r) => (
                 <tr key={r.callUuid} className="transition-colors hover:bg-white/[0.022]">
-                  <td className={`${TD} font-mono tabular-nums`}>{r.to}</td>
+                  <td className={`${TD} font-mono tabular-nums whitespace-nowrap`}>
+                    {formatPhone(r.to)}
+                    {!isDiallablePhone(normalizePhone(r.to)) && (
+                      <span className="ml-2 font-sans text-[11px] text-warn" title="Too few or too many digits — calls to this number are now refused">
+                        invalid number
+                      </span>
+                    )}
+                  </td>
                   <td className={`${TD} text-ink2`}>{r.campaignName || "—"}</td>
                   <td className={TD}><OutcomeBadge outcome={r.outcome} durationSec={r.durationSec} /></td>
                   <td className={`${TD} text-right text-muted whitespace-nowrap`}>{whenLabel(r.triggeredAt)}</td>

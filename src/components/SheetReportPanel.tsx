@@ -89,7 +89,12 @@ export default function SheetReportPanel({
    *  an expandable panel inside Sheet Auto-Dial — then there is nothing to close. */
   onClose?: () => void;
 }) {
-  const [preset, setPreset] = useState<Preset>("7d");
+  // A sheet that hasn't synced in the last week has nothing in "Last 7 days";
+  // open it on all time instead of an empty report.
+  const [preset, setPreset] = useState<Preset>(() => {
+    const last = conn.lastSyncedAt ? new Date(conn.lastSyncedAt).getTime() : 0;
+    return last > Date.now() - 7 * 864e5 ? "7d" : "all";
+  });
   const [outcome, setOutcome] = useState<string>("");
   const [visible, setVisible] = useState(PAGE);
 

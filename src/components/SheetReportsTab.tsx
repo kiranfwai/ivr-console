@@ -24,12 +24,18 @@ export default function SheetReportsTab() {
   );
   const { data: campData } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
 
-  const conns = useMemo(() => cdata?.connections ?? [], [cdata]);
+  // Active sheets first, then the most recently synced — so the screen opens on
+  // the sheet you are most likely running, not on whichever was connected first.
+  const conns = useMemo(() => {
+    const list = [...(cdata?.connections ?? [])];
+    const t = (c: GSheetConn) => (c.lastSyncedAt ? new Date(c.lastSyncedAt).getTime() : 0);
+    return list.sort((a, b) => Number(b.enabled) - Number(a.enabled) || t(b) - t(a));
+  }, [cdata]);
   const campaigns = campData?.campaigns ?? [];
   const [connId, setConnId] = useState("");
 
-  // Default to the first connection once they load, so the screen opens on a
-  // report instead of an empty picker.
+  // Default to the first (= most relevant, see sort above) connection once they
+  // load, so the screen opens on a report instead of an empty picker.
   useEffect(() => {
     if (!connId && conns.length) setConnId(conns[0].id);
   }, [conns, connId]);
@@ -69,12 +75,17 @@ export default function SheetReportsTab() {
           <div className="min-w-[260px] flex-1">
             <Label hint={`${conns.length} connected`}>Sheet</Label>
             <Select value={connId} onChange={(e) => setConnId(e.target.value)}>
-              {conns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.connName || c.tabName}
-                  {c.enabled ? "" : " (paused)"}
-                </option>
-              ))}
+              {[true, false].map((on) => {
+                const group = conns.filter((c) => c.enabled === on);
+                if (!group.length) return null;
+                return (
+                  <optgroup key={String(on)} label={on ? "Active" : "Paused"}>
+                    {group.map((c) => (
+                      <option key={c.id} value={c.id}>{c.connName || c.tabName}</option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </Select>
           </div>
           {conn && (

@@ -233,11 +233,14 @@ export default function ScheduledTab() {
                     <td className={TD}>
                       <Kebab
                         items={[
-                          {
-                            label: s.enabled ? "Pause" : "Resume",
-                            icon: s.enabled ? <Pause size={13} /> : <Play size={13} />,
-                            onClick: () => toggle(s),
-                          },
+                          // A finished one-off has nothing left to fire.
+                          ...(finished
+                            ? []
+                            : [{
+                                label: s.enabled ? "Pause" : "Resume",
+                                icon: s.enabled ? <Pause size={13} /> : <Play size={13} />,
+                                onClick: () => toggle(s),
+                              }]),
                           {
                             label: "Delete",
                             icon: <Trash2 size={13} />,

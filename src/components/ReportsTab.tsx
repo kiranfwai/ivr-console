@@ -117,7 +117,9 @@ const OUTCOME_COLOR: Record<string, string> = {
 };
 
 export default function ReportsTab() {
-  const [from, setFrom] = useState<string>(todayKey());
+  // Open on the last 7 days: "Today" is empty most mornings, and an empty first
+  // screen reads as "no data" rather than "nothing yet today".
+  const [from, setFrom] = useState<string>(() => offsetDay(-6));
   const [to, setTo] = useState<string>(todayKey());
   const [campaign, setCampaign] = useState<string>("");
   const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
@@ -178,7 +180,7 @@ export default function ReportsTab() {
     return "flat";
   }, [data]);
 
-  const isRangeFiltered = !isToday || campaign !== "";
+  const isRangeFiltered = !is7d || campaign !== "";
 
   return (
     <Section>
@@ -248,7 +250,7 @@ export default function ReportsTab() {
             description={
               isRangeFiltered
                 ? "No calls matched these filters. Try widening the date range or selecting all campaigns."
-                : "Place a call from the Dial tab, then come back."
+                : "Calls from Dial, Bulk calls and Sheet Auto-Dial show up here once they are placed."
             }
           />
         </Card>

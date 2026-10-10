@@ -19,6 +19,14 @@ type SummaryData = { job: BulkJobWithCounts; durationSum: number; durationCount:
 // = TRUE Plivo account-wide live calls (all apps), or null if the lookup failed.
 type AcctStats = { cps: number; maxLive: number; live: number; accountLive: number | null };
 
+/** "8 Oct 2026, 6:14 pm" in IST — one date format across the console. */
+function fmtWhen(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true,
+  });
+}
+
 function summarize(job: BulkJobWithCounts) {
   const c = job.counts || {};
   const press1 = c.press1 ?? 0, connected = c.connected ?? 0, ok = c.ok ?? 0;
@@ -57,6 +65,11 @@ export default function BulkTab() {
   const { data: wallet } = useFetch<{ balance: number; currency: string; rate: number; noClient?: boolean }>("/api/wallet");
   const lowBalance = !!wallet && !wallet.noClient && wallet.rate > 0 && wallet.balance < wallet.rate;
   const campaigns = cdata?.campaigns ?? [];
+  // Jobs only carry a campaign id; show people the campaign's name.
+  const campaignName = useMemo(() => {
+    const m = new Map(campaigns.map((c) => [c.id, c.name]));
+    return (id: string) => m.get(id) || "Deleted campaign";
+  }, [campaigns]);
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
   // Persisted across tab switches + refresh so uploaded contacts and the active
@@ -363,8 +376,8 @@ export default function BulkTab() {
             </div>
           }
           description={
-            <span className="flex items-center gap-2 font-mono text-xs">
-              {job.id}
+            <span className="flex items-center gap-2 text-xs">
+              {job.kind === "whatsapp" ? "WhatsApp send" : campaignName(job.campaignId)} · started {fmtWhen(job.createdAt)}
               <ConnDot stale={stale} updatedAt={updatedAt} />
             </span>
           }
@@ -618,15 +631,17 @@ export default function BulkTab() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Users size={14} className="text-muted shrink-0" />
                     <div className="min-w-0">
-                      <div className="font-mono text-xs truncate">{j.id}</div>
-                      <div className="text-xs text-muted">{new Date(j.createdAt).toLocaleString()}</div>
+                      <div className="text-sm font-medium text-ink truncate" title={j.id}>
+                        {j.kind === "whatsapp" ? "WhatsApp send" : campaignName(j.campaignId)}
+                      </div>
+                      <div className="text-xs text-muted">{fmtWhen(j.createdAt)}</div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <StatusPill status={j.status} remaining={s.pending + s.dialing} small />
-                    <Badge tone="ok">{s.connectedLifted.toLocaleString()}</Badge>
-                    {s.bad > 0 && <Badge tone="danger">{s.bad.toLocaleString()}</Badge>}
-                    <span className="text-muted">/ {s.total.toLocaleString()}</span>
+                    <span className="text-ok tabular-nums">{s.connectedLifted.toLocaleString()} answered</span>
+                    {s.bad > 0 && <span className="text-muted tabular-nums">· {s.bad.toLocaleString()} not answered</span>}
+                    <span className="text-muted tabular-nums">· {s.total.toLocaleString()} total</span>
                   </div>
                 </button>
               );

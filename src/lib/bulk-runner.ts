@@ -1,6 +1,6 @@
 import { updateBulkRow } from "./bulk";
 import { placeCall } from "./plivo";
-import { normalizePhone } from "./phone";
+import { normalizePhone, isDiallablePhone } from "./phone";
 import { recordCall } from "./calls";
 import { currentClientId } from "./tenant";
 import { isDnd } from "./dnd";
@@ -29,7 +29,7 @@ export async function fireOne(
   creds?: { authId: string; authToken: string; fromNumber: string },
 ): Promise<{ ok: boolean }> {
   const to = normalizePhone(row.phone);
-  if (!to) {
+  if (!to || !isDiallablePhone(to)) {
     await updateBulkRow(jobId, row.index, {
       status: "failed",
       error: "invalid phone",
