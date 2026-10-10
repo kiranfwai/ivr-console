@@ -397,7 +397,7 @@ export default function GSheetsTab() {
                     {showNames && <th className="font-medium py-2 px-1">Name</th>}
                     <th className="font-medium px-1">Phone</th>
                     <th className="font-medium px-1 hidden sm:table-cell">Connection</th>
-                    <th className="font-medium px-1">Status</th>
+                    <th className="font-medium px-1 hidden sm:table-cell">Status</th>
                     <th className="font-medium px-1">Call Result</th>
                     <th className="font-medium px-1 hidden md:table-cell">Duration</th>
                     <th className="font-medium px-1 hidden md:table-cell">Called at</th>
@@ -969,7 +969,7 @@ function LeadRow({
       <td className="px-1 text-xs text-muted truncate max-w-[120px] hidden sm:table-cell" title={connLabel}>
         {connLabel}
       </td>
-      <td className="px-1">
+      <td className="px-1 hidden sm:table-cell">
         <div className="flex flex-col items-start gap-0.5">
           <Badge tone={meta.tone}>{meta.label}</Badge>
           {lead.error && (

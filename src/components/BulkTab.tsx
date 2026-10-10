@@ -1,4 +1,5 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
 import { fmtDateTime } from "@/lib/format";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -494,10 +495,7 @@ export default function BulkTab() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="col-span-2 md:col-span-2">
             <Label>Campaign</Label>
-            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              <option value="">Choose campaign…</option>
-              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
           </div>
           <div>
             <Label hint="max calls live at once">Max live calls</Label>
@@ -509,24 +507,29 @@ export default function BulkTab() {
             <Label hint="delay between batches">Batch delay</Label>
             <Select value={batchDelay} onChange={(e) => setBatchDelay(Number(e.target.value))}>
               {[0, 250, 500, 1000, 2000, 5000].map((v) => (
-                <option key={v} value={v}>{v === 0 ? "0ms (off)" : `${v}ms`}</option>
+                <option key={v} value={v}>{v === 0 ? "No delay" : v >= 1000 ? `${v / 1000}s` : `${v}ms`}</option>
               ))}
             </Select>
           </div>
           <div className="flex items-end">
             <Button onClick={onStart} disabled={!campaignId || !previewCount || submitting} loading={submitting}
               leftIcon={<Play size={14} />} className="w-full" size="lg">
-              {submitting ? "Queuing…" : `Start · ${previewCount.toLocaleString()}`}
+              {submitting ? "Queuing…" : previewCount ? `Start · ${previewCount.toLocaleString()} numbers` : "Start"}
             </Button>
           </div>
         </div>
         <p className="text-xs text-muted mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="inline-flex items-center gap-1">
-            <Server size={12} className="text-muted" />
-            Account CPS limit <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span> (shared by all campaigns)
-          </span>
-          <span className="text-line">·</span>
-          <span>This campaign dials up to <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span>, max <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> live at once</span>
+          {/* Unknown limits used to print as "—/s"; say nothing until we know. */}
+          {acctCps > 0 && (
+            <>
+              <span className="inline-flex items-center gap-1">
+                <Server size={12} className="text-muted" />
+                Up to <span className="text-ink2 font-medium tabular-nums">{acctCps}</span> new calls a second across your account
+              </span>
+              <span className="text-line">·</span>
+            </>
+          )}
+          <span>At most <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> calls live at once</span>
           {previewCount > 0 && acctCps > 0 && (
             <>
               <span className="text-line">·</span>

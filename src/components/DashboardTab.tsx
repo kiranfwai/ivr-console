@@ -1,4 +1,5 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
 import { fmtDayKey } from "@/lib/format";
 
 import { useMemo, useState } from "react";
@@ -224,12 +225,7 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
           ))}
         </div>
         <div className="w-56">
-          <Select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
-            <option value="">All campaigns</option>
-            {(data?.campaigns ?? []).map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </Select>
+          <CampaignSelect campaigns={data?.campaigns ?? []} value={campaign} onChange={setCampaign} emptyLabel="All campaigns" />
         </div>
       </div>
 

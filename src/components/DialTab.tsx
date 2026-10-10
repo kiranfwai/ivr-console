@@ -1,4 +1,5 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
 import { fmtDateTime } from "@/lib/format";
 
 import { formatPhone, isDiallablePhone, normalizePhone } from "@/lib/phone";
@@ -185,12 +186,7 @@ export default function DialTab() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <Label>Campaign</Label>
-            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              <option value="">Choose a campaign…</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
             {selectedCampaign && (
               <div className="mt-2 text-xs text-muted">
                 Audio: <span className="text-ink2">{selectedCampaign.audioId ? "configured" : "fallback day1.mp3"}</span>

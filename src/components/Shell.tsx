@@ -118,7 +118,9 @@ export function Shell({
     let alive = true;
     async function ping() {
       try {
-        const r = await fetch("/api/campaigns", { method: "GET" });
+        // A light authenticated call — this runs every minute on every screen,
+        // and the full campaign list (1–3 s on live) was far too heavy for it.
+        const r = await fetch("/api/me", { method: "GET" });
         if (!alive) return;
         setHealth(r.ok ? "ok" : "down");
       } catch {

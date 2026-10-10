@@ -1,5 +1,6 @@
 "use client";
 import { fmtDate } from "@/lib/format";
+import { formatPhone } from "@/lib/phone";
 
 import { useEffect, useState } from "react";
 import {
@@ -73,6 +74,10 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [creating, setCreating] = useState(false);
   const [clone, setClone] = useState<Campaign | null>(null);
+  // Search + paging: one live account has 107 campaigns in a single long table.
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
+  const PER_PAGE = 25;
   const [confirmDelete, setConfirmDelete] = useState<Campaign | null>(null);
   const [testFor, setTestFor] = useState<Campaign | null>(null);
 
@@ -101,13 +106,18 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   const press1Count = campaigns.length - onAnswerCount - alwaysCount;
   const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
 
+  const needle = q.trim().toLowerCase();
+  const matching = needle
+    ? campaigns.filter((c) => c.name.toLowerCase().includes(needle) ||
+        (audios.find((a) => a.id === c.audioId)?.label || "").toLowerCase().includes(needle))
+    : campaigns;
+  const pages = Math.max(1, Math.ceil(matching.length / PER_PAGE));
+  const pg = Math.min(page, pages - 1);
+  const shown = matching.slice(pg * PER_PAGE, (pg + 1) * PER_PAGE);
+
+  // One "New campaign" button (in the table header), not two on the same screen.
   return (
     <Section>
-      <div className="flex justify-end">
-        <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
-          New campaign
-        </Button>
-      </div>
 
       {loadingC && !cdata ? (
         <Card>
@@ -146,36 +156,39 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
               sub={press1Count ? "nothing sent unless they press" : "none"}
               tone={press1Count ? "warn" : "muted"}
             />
-            <Tile
-              label="No caller ID set"
-              value={noFromCount}
-              sub={noFromCount ? "using the account default" : "all have their own"}
-              tone={noFromCount ? "warn" : "muted"}
-            />
+            {/* Only worth a tile when it needs attention; a fifth "0 — all fine"
+                tile sat alone on its own row. */}
+            {noFromCount > 0 && (
+              <Tile label="No caller ID set" value={noFromCount} sub="using the account default" tone="warn" />
+            )}
           </Tiles>
 
           <DataPanel
             title="Your campaigns"
-            meta={`${campaigns.length} total`}
+            meta={needle ? `${matching.length} of ${campaigns.length}` : `${campaigns.length} total`}
             action={
-              <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setCreating(true)}>
-                New campaign
-              </Button>
+              <div className="flex items-center gap-2">
+                <Input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
+                       placeholder="Search campaigns or audio…" className="w-40 sm:w-56" />
+                <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setCreating(true)}>
+                  New campaign
+                </Button>
+              </div>
             }
           >
             <DataTable>
               <thead>
                 <tr>
                   <th className={TH}>Campaign</th>
-                  <th className={TH}>Audio</th>
+                  <th className={`${TH} hidden md:table-cell`}>Audio</th>
                   <th className={TH}>WhatsApp message</th>
-                  <th className={TH}>Caller ID</th>
-                  <th className={TH}>Created</th>
+                  <th className={`${TH} hidden lg:table-cell`}>Caller ID</th>
+                  <th className={`${TH} hidden md:table-cell`}>Created</th>
                   <th className={`${TH} w-[52px]`} />
                 </tr>
               </thead>
               <tbody>
-                {campaigns.map((c) => {
+                {shown.map((c) => {
                   const a = audios.find((a) => a.id === c.audioId);
                   const created = formatDate(c.createdAt);
                   // Anything saved before this setting existed has no value and
@@ -189,7 +202,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                           <div className="mt-0.5 text-[11.5px] text-muted">custom message webhook</div>
                         )}
                       </td>
-                      <td className={TD}>
+                      <td className={`${TD} hidden md:table-cell`}>
                         {a ? (
                           <>
                             <span className="text-ink2">{a.label}</span>
@@ -208,21 +221,21 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                             at all. It was previously only visible by opening the
                             campaign one at a time. */}
                         {trigger === "always" ? (
-                          <Badge tone="ok">Everyone, when the call is placed</Badge>
+                          <Badge tone="ok" className="whitespace-nowrap">Everyone, on dial</Badge>
                         ) : trigger === "answer" ? (
-                          <Badge tone="ok">As soon as they pick up</Badge>
+                          <Badge tone="ok" className="whitespace-nowrap">When they pick up</Badge>
                         ) : (
-                          <Badge tone="warn">Only if they press 1</Badge>
+                          <Badge tone="warn" className="whitespace-nowrap">Only if they press 1</Badge>
                         )}
                       </td>
-                      <td className={TD}>
+                      <td className={`${TD} hidden lg:table-cell`}>
                         {c.fromNumber ? (
-                          <span className="font-mono text-[12.5px] tabular-nums">{c.fromNumber}</span>
+                          <span className="font-mono text-[12.5px] tabular-nums whitespace-nowrap">{formatPhone(c.fromNumber)}</span>
                         ) : (
                           <Badge tone="muted">Account default</Badge>
                         )}
                       </td>
-                      <td className={`${TD} whitespace-nowrap text-muted`}>{created ?? "—"}</td>
+                      <td className={`${TD} whitespace-nowrap text-muted hidden md:table-cell`}>{created ?? "—"}</td>
                       <td className={TD}>
                         <Kebab
                           items={[
@@ -238,6 +251,15 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                 })}
               </tbody>
             </DataTable>
+            {pages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 text-xs text-muted border-t border-line">
+                <span>{pg * PER_PAGE + 1}–{Math.min(matching.length, (pg + 1) * PER_PAGE)} of {matching.length}</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="ghost" disabled={pg === 0} onClick={() => setPage(pg - 1)}>Prev</Button>
+                  <Button size="sm" variant="ghost" disabled={pg >= pages - 1} onClick={() => setPage(pg + 1)}>Next</Button>
+                </div>
+              </div>
+            )}
           </DataPanel>
         </>
       )}

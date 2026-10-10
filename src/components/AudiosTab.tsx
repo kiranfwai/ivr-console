@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link as LinkIcon, Upload, Trash2, Music, X, Clock } from "lucide-react";
+import { Link as LinkIcon, Upload, Trash2, Music, X, Clock, Play, Pause } from "lucide-react";
 import {
   Button, Card, Input, Label, Badge, EmptyState, Loading, Section, Modal,
   Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
@@ -10,6 +10,40 @@ import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
 /* -------------------- helpers -------------------- */
+
+/**
+ * A small dark play/pause button for the library rows. The browser's own
+ * <audio controls> drew a white bar per row that read "0:00 / 0:00" until
+ * played, on a dark page. One shared player: starting a row stops the last.
+ */
+let sharedPlayer: HTMLAudioElement | null = null;
+const PLAY_EVENT = "ivr-audio-play";
+function PlayButton({ src, label }: { src: string; label: string }) {
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => {
+    const other = (e: Event) => { if ((e as CustomEvent).detail !== src) setPlaying(false); };
+    window.addEventListener(PLAY_EVENT, other);
+    return () => window.removeEventListener(PLAY_EVENT, other);
+  }, [src]);
+  function toggle() {
+    if (playing) { sharedPlayer?.pause(); setPlaying(false); return; }
+    sharedPlayer?.pause();
+    sharedPlayer = new Audio(src);
+    sharedPlayer.onended = () => setPlaying(false);
+    sharedPlayer.onerror = () => { setPlaying(false); toast("Couldn't play this audio", "danger"); };
+    window.dispatchEvent(new CustomEvent(PLAY_EVENT, { detail: src }));
+    void sharedPlayer.play().catch(() => setPlaying(false));
+    setPlaying(true);
+  }
+  return (
+    <button type="button" onClick={toggle} aria-label={`${playing ? "Pause" : "Play"} ${label}`}
+      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
+        playing ? "border-brand/40 bg-brand/10 text-brand" : "border-line text-ink2 hover:text-ink hover:bg-elev/60"}`}>
+      {playing ? <Pause size={13} /> : <Play size={13} />}
+      {playing ? "Pause" : "Play"}
+    </button>
+  );
+}
 function fmtDuration(sec: number | null | undefined): string {
   if (sec == null || !isFinite(sec) || sec <= 0) return "";
   const s = Math.round(sec);
@@ -218,7 +252,7 @@ function AudioRow({
         )}
       </td>
       <td className={TD}>
-        <audio controls preload="none" src={a.url} className="h-8 w-full min-w-[180px]" />
+        <PlayButton src={a.url} label={a.label} />
       </td>
       <td className={TD}>
         <Kebab items={[{ label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: onRemove }]} />
@@ -264,6 +298,8 @@ export default function AudiosTab() {
     return m;
   }, [campData]);
   const [addOpen, setAddOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [onlyUnused, setOnlyUnused] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Audio | null>(null);
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [mode, setMode] = useState<"url" | "upload">("url");
@@ -436,9 +472,14 @@ export default function AudiosTab() {
     else toast(`Deleted ${ids.length}`, "ok");
   }
 
-  const allSelected = audios.length > 0 && sel.size === audios.length;
+  // Search / Unused narrow the list; select-all must only ever pick what is
+  // on screen, or a bulk Delete would remove rows the filter is hiding.
+  const visible = audios
+    .filter((a) => !onlyUnused || !(usedByAudio.get(a.id)?.length))
+    .filter((a) => !q.trim() || a.label.toLowerCase().includes(q.trim().toLowerCase()));
+  const allSelected = visible.length > 0 && visible.every((a) => sel.has(a.id));
   function toggleAll() {
-    setSel(allSelected ? new Set() : new Set(audios.map((a) => a.id)));
+    setSel(allSelected ? new Set() : new Set(visible.map((a) => a.id)));
   }
   function toggleOne(id: string) {
     setSel((prev) => {
@@ -484,6 +525,11 @@ export default function AudiosTab() {
           meta={`${audios.length} file${audios.length === 1 ? "" : "s"}`}
           action={
             <>
+              <Input value={q} onChange={(e) => { setQ(e.target.value); setSel(new Set()); }} placeholder="Search audios…" className="w-40 sm:w-48" />
+              <Button size="sm" variant={onlyUnused ? "primary" : "ghost"} onClick={() => { setOnlyUnused((v) => !v); setSel(new Set()); }}
+                      title="Show only audios no campaign uses">
+                Unused{unusedCount ? ` (${unusedCount})` : ""}
+              </Button>
               {sel.size > 0 && (
                 <Button variant="danger" size="sm" leftIcon={<Trash2 size={13} />} onClick={() => setConfirmBulk(true)}>
                   Delete {sel.size}
@@ -516,7 +562,7 @@ export default function AudiosTab() {
               </tr>
             </thead>
             <tbody>
-              {audios.map((a) => (
+              {visible.map((a) => (
                 <AudioRow
                   key={a.id}
                   a={a}

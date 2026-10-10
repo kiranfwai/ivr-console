@@ -1,4 +1,5 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
 
 import { Fragment, useMemo, useState } from "react";
 import {
@@ -219,12 +220,7 @@ export default function ReportsTab() {
           </div>
           <div className="min-w-[200px]">
             <div className="text-xs uppercase tracking-wider text-muted mb-1.5">Campaign</div>
-            <Select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
-              <option value="">All campaigns</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaign} onChange={setCampaign} emptyLabel="All campaigns" />
           </div>
           <div className="ml-auto flex gap-2">
             <Button variant="ghost" onClick={reload} loading={loading} leftIcon={!loading && <RefreshCw size={14} />}>
