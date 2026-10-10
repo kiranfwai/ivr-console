@@ -257,7 +257,7 @@ export default function Console() {
         className="w-full cursor-pointer rounded-lg bg-transparent text-xs text-ink outline-none"
         title="View a client's data"
       >
-        <option value="">Select client…</option>
+        <option value="">FWAI admin (no client)</option>
         {switcherClients.map((c) => (
           <option key={c.id} value={c.id}>
             {c.name || c.email}
@@ -298,6 +298,7 @@ export default function Console() {
               {selectedClient && !selectedClient.active && (
                 <span className="text-muted"> (disabled)</span>
               )}
+              <span className="text-muted"> · calls and messages you start here use their wallet</span>
             </span>
             <button
               onClick={exitViewAs}

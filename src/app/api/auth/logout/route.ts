@@ -12,5 +12,9 @@ export async function POST() {
     maxAge: 0,
     path: "/",
   });
+  // Also forget which client an admin was "viewing as". Otherwise the next admin
+  // sign-in on this browser lands silently inside that client's console, where
+  // calls and sends are charged to the client's wallet.
+  res.cookies.set("ivr_admin_client", "", { sameSite: "lax", maxAge: 0, path: "/" });
   return res;
 }
