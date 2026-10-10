@@ -195,7 +195,10 @@ export default function Console() {
   // that lacks this feature), fall back to the first allowed tab.
   useEffect(() => {
     if (!me || !allowedTabs.length) return;
-    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
+    // Functional update: on first load this runs in the same commit as the
+    // ?tab= pick above, and the closed-over `tab` is still the initial "dial" —
+    // which is not an admin tab, so every admin deep link was reset to Clients.
+    setTab((cur) => (allowedTabs.includes(cur) ? cur : allowedTabs[0]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allowedTabs]);
 

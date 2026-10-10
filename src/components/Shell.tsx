@@ -219,7 +219,7 @@ export function Shell({
           className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-ink2 hover:text-ink hover:bg-elev/60 transition-colors"
         >
           <LogOut size={14} className="shrink-0" />
-          <span>Sign out</span>
+          <span className="shrink-0 whitespace-nowrap">Sign out</span>
           {/* Who is signed in shares the sign-out row, so the sidebar fits a
               768px-tall laptop screen without scrolling. */}
           {userLabel && (
