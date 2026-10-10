@@ -35,6 +35,7 @@ function loadTs(rel, exportNames) {
     .replace(/:\s*string\[\]/g, "")
     .replace(/:\s*string/g, "")
     .replace(/:\s*number/g, "")
+    .replace(/:\s*boolean/g, "")
     .replace(/\bconst\s+(\w+)\s*:\s*\w+\[\]\s*=/g, "const $1 =");
   const fn = new Function(`${js}\nreturn { ${exportNames.join(", ")} };`);
   return fn();
