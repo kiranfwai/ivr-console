@@ -4,6 +4,7 @@ import { getGlobalPricing } from "@/lib/pricing";
 import { listCalls } from "@/lib/calls";
 import { deriveOutcome } from "@/lib/outcome";
 import { runWithTenant } from "@/lib/tenant";
+import { readRange } from "@/lib/stats";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -86,29 +87,45 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const perTenant = await Promise.all(
-    targets.map((c) => rowsForTenant(c.id, c.name || c.email, rateOf(c.perConnectedCall))),
-  );
+  // Totals come from the rolled-up daily counters for the WHOLE range — never
+  // from the row list, which is capped. Summing the capped rows is what made
+  // "Total charged" read ₹392.85 for a week that really had thousands of calls.
+  async function totalsForTenant(id: string, rate: number) {
+    const a = await runWithTenant(id, () => readRange(from, to));
+    const o = a.outcomes;
+    const counts: Record<string, number> = {
+      connected: o.press1 + o.connected,
+      busy: o.busy,
+      "no-answer": o.noAnswer,
+      failed: o.rejected + o.error,
+    };
+    const total = status ? counts[status] ?? 0 : a.total;
+    const connected = !status || status === "connected" ? o.press1 + o.connected : 0;
+    return { total, connected, charge: connected * rate };
+  }
+
+  const [perTenant, perTenantTotals] = await Promise.all([
+    Promise.all(targets.map((c) => rowsForTenant(c.id, c.name || c.email, rateOf(c.perConnectedCall)))),
+    Promise.all(targets.map((c) => totalsForTenant(c.id, rateOf(c.perConnectedCall)))),
+  ]);
   let rows = perTenant.flat();
 
   if (group) rows = rows.filter((r) => group.has(r.outcome));
 
   // Newest first, capped.
   rows.sort((a, b) => (a.triggeredAt < b.triggeredAt ? 1 : a.triggeredAt > b.triggeredAt ? -1 : 0));
-  const capped = rows.length > limit;
   rows = rows.slice(0, limit);
 
-  const totals = rows.reduce(
-    (t, r) => {
-      const connected = r.outcome === "connected" || r.outcome === "press1";
-      return {
-        total: t.total + 1,
-        connected: t.connected + (connected ? 1 : 0),
-        charge: Math.round((t.charge + r.charge) * 100) / 100,
-      };
-    },
+  const totals = perTenantTotals.reduce(
+    (t, x) => ({
+      total: t.total + x.total,
+      connected: t.connected + x.connected,
+      charge: Math.round((t.charge + x.charge) * 100) / 100,
+    }),
     { total: 0, connected: 0, charge: 0 },
   );
+  // The table is a sample when the range holds more calls than it lists.
+  const capped = totals.total > rows.length;
 
   return NextResponse.json({
     range: { from, to },

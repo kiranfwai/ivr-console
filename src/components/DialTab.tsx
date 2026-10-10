@@ -1,5 +1,8 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
+import { fmtDateTime } from "@/lib/format";
 
+import { formatPhone, isDiallablePhone, normalizePhone } from "@/lib/phone";
 import { useCallback, useEffect, useState } from "react";
 import { Phone, PhoneCall, Megaphone, ArrowRight, CheckCircle2, XCircle, Copy, Check, History, RotateCcw, RefreshCw } from "lucide-react";
 import { Button, Card, Input, Label, Select, Badge, EmptyState, Loading, Section, IconButton, DataTable, TH, TD, Spinner, toast } from "./ui";
@@ -45,7 +48,7 @@ function whenLabel(iso: string): string {
   if (mins < 60) return `${mins} min ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
-  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return fmtDateTime(iso, { short: true });
 }
 
 /** Outcome as a pill, with talk time when the call actually connected. */
@@ -125,7 +128,7 @@ export default function DialTab() {
       });
       setLast(r);
       setCopied(false);
-      toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Call could not be placed (error ${r.status})`, r.ok ? "ok" : "danger");
       if (!overridePhone) setPhone("");
       // Pull it straight away so the row appears, then again once the call has
       // had time to settle so the outcome stops saying "in progress".
@@ -178,17 +181,12 @@ export default function DialTab() {
     <Section>
       <Card
         title="Place a call"
-        description="Pick a campaign, enter a phone, and Plivo will dial."
+        description="Pick a campaign, enter a phone number, and the call goes out straight away."
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <Label>Campaign</Label>
-            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              <option value="">Choose a campaign…</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
             {selectedCampaign && (
               <div className="mt-2 text-xs text-muted">
                 Audio: <span className="text-ink2">{selectedCampaign.audioId ? "configured" : "fallback day1.mp3"}</span>
@@ -254,7 +252,7 @@ export default function DialTab() {
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-medium">
-                  {last.ok ? "Call queued at Plivo" : `Plivo error ${last.status}`}
+                  {last.ok ? "Call placed" : `Call could not be placed (error ${last.status})`}
                 </div>
                 <div className="text-xs text-muted font-mono truncate flex items-center gap-1.5">
                   <Phone size={11} />
@@ -318,7 +316,14 @@ export default function DialTab() {
             <tbody>
               {recent.map((r) => (
                 <tr key={r.callUuid} className="transition-colors hover:bg-white/[0.022]">
-                  <td className={`${TD} font-mono tabular-nums`}>{r.to}</td>
+                  <td className={`${TD} font-mono tabular-nums whitespace-nowrap`}>
+                    {formatPhone(r.to)}
+                    {!isDiallablePhone(normalizePhone(r.to)) && (
+                      <span className="ml-2 font-sans text-[11px] text-warn" title="Too few or too many digits — calls to this number are now refused">
+                        invalid number
+                      </span>
+                    )}
+                  </td>
                   <td className={`${TD} text-ink2`}>{r.campaignName || "—"}</td>
                   <td className={TD}><OutcomeBadge outcome={r.outcome} durationSec={r.durationSec} /></td>
                   <td className={`${TD} text-right text-muted whitespace-nowrap`}>{whenLabel(r.triggeredAt)}</td>

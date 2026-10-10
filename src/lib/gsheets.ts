@@ -3,7 +3,7 @@ import { query } from "./db";
 import { runWithTenant } from "./tenant";
 import { getCampaign } from "./campaigns";
 import { placeCampaignCall } from "./place-campaign-call";
-import { normalizePhone } from "./phone";
+import { normalizePhone, isDiallablePhone } from "./phone";
 import { sheetNotifyKey } from "./lead-notify";
 
 // ---------------------------------------------------------------------------
@@ -725,8 +725,9 @@ export async function scanSheet(
     if (!raw) { blank++; continue; }
 
     const phone = normalizePhone(raw);
-    // Guard against a stray "12" or a header repeated mid-sheet becoming a call.
-    if (phone.replace(/\D+/g, "").length < 8) { invalid++; continue; }
+    // Guard against a stray "12", a header repeated mid-sheet, or a number with
+    // digits missing becoming a call.
+    if (!isDiallablePhone(phone)) { invalid++; continue; }
     // The same number listed twice in one sheet is one person, so one call.
     if (seenInSheet.has(phone)) { duplicates++; continue; }
     seenInSheet.add(phone);

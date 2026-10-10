@@ -118,7 +118,9 @@ export function Shell({
     let alive = true;
     async function ping() {
       try {
-        const r = await fetch("/api/campaigns", { method: "GET" });
+        // A light authenticated call — this runs every minute on every screen,
+        // and the full campaign list (1–3 s on live) was far too heavy for it.
+        const r = await fetch("/api/me", { method: "GET" });
         if (!alive) return;
         setHealth(r.ok ? "ok" : "down");
       } catch {
@@ -147,9 +149,9 @@ export function Shell({
   const groups = Array.from(new Set(nav.map((n) => n.group)));
 
   const sidebar = (
-    <div className="flex flex-col h-full w-60 bg-panel/80 border-r border-line backdrop-blur">
+    <div className="flex flex-col h-full w-60 overflow-y-auto bg-panel/80 border-r border-line backdrop-blur">
       {/* Brand — the real FWAI mark, same lockup as the landing and sign-in pages. */}
-      <div className="px-4 h-14 flex items-center gap-2.5 border-b border-line">
+      <div className="px-4 h-14 flex-none flex items-center gap-2.5 border-b border-line">
         <span className="block h-[30px] w-[30px] flex-none overflow-hidden rounded-[9px] shadow-[0_4px_14px_-4px_rgba(0,0,0,0.7),inset_0_0_0_1px_rgba(255,255,255,0.09)]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/fwai-logo.png" alt="Freedom With AI" className="h-full w-full object-cover" />
@@ -161,7 +163,7 @@ export function Shell({
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+      <nav className="flex-1 px-2 py-2 space-y-3">
         {groups.map((g) => (
           <div key={g}>
             <div className="px-2 mb-1 text-[10px] uppercase tracking-widest text-muted font-bold">
@@ -178,7 +180,7 @@ export function Shell({
                       setTab(item.id);
                       setMobileOpen(false);
                     }}
-                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-[5px] rounded-lg text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${
                       active
                         ? "bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.25)]"
                         : "text-ink2 hover:text-ink hover:bg-white/[0.04]"
@@ -195,14 +197,9 @@ export function Shell({
       </nav>
 
       {/* Account picker + wallet + status + logout */}
-      <div className="border-t border-line p-3 space-y-2">
+      <div className="flex-none border-t border-line p-3 space-y-1.5">
         {accountPicker}
         {wallet}
-        {userLabel && (
-          <div className="px-2 py-1 text-xs text-muted truncate" title="Signed in as">
-            {userLabel}
-          </div>
-        )}
         <div
           className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-elev/50 text-xs"
           title={checkedLabel ? `Last checked ${checkedLabel}` : undefined}
@@ -221,8 +218,15 @@ export function Shell({
           onClick={onLogout}
           className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-ink2 hover:text-ink hover:bg-elev/60 transition-colors"
         >
-          <LogOut size={14} />
+          <LogOut size={14} className="shrink-0" />
           <span>Sign out</span>
+          {/* Who is signed in shares the sign-out row, so the sidebar fits a
+              768px-tall laptop screen without scrolling. */}
+          {userLabel && (
+            <span className="ml-auto min-w-0 truncate text-xs text-muted" title={`Signed in as ${userLabel}`}>
+              {userLabel}
+            </span>
+          )}
         </button>
       </div>
     </div>

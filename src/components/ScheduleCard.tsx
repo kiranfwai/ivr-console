@@ -142,20 +142,26 @@ export default function ScheduleCard({
           />
         ) : (
           <div className="grid gap-2">
-            {items.map((s) => (
+            {items.map((s) => {
+              // Same rule as the Scheduled page: a one-off that has run and has
+              // nothing left to fire is finished, not paused — and has nothing to resume.
+              const finished = !s.nextRunAt && !s.enabled && s.runs > 0;
+              return (
               <div key={s.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-ink truncate">{s.name}</span>
-                    {s.enabled
-                      ? <Badge tone="ok">Armed</Badge>
-                      : <Badge tone="muted">Paused</Badge>}
+                    {finished
+                      ? <Badge tone="muted">Finished</Badge>
+                      : s.enabled
+                        ? <Badge tone="ok">Armed</Badge>
+                        : <Badge tone="warn">Paused</Badge>}
                     {s.runs > 0 && <span className="text-xs text-muted">ran {s.runs}×</span>}
                   </div>
                   <div className="text-xs text-muted mt-0.5">
                     {describe(s)} · {s.recipientCount.toLocaleString()} recipient{s.recipientCount === 1 ? "" : "s"}
                     {s.nextRunAt && s.enabled && <> · next {istWhen(s.nextRunAt)} IST</>}
-                    {!s.nextRunAt && !s.enabled && s.runs > 0 && <> · finished</>}
+                    {finished && s.lastRunAt && <> · ran {istWhen(s.lastRunAt)} IST</>}
                   </div>
                   {s.lastError && (
                     <div className="text-xs text-danger mt-1 flex items-center gap-1">
@@ -164,16 +170,19 @@ export default function ScheduleCard({
                   )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button size="sm" variant="ghost" leftIcon={s.enabled ? <Pause size={13} /> : <Play size={13} />}
-                          onClick={() => toggle(s)}>
-                    {s.enabled ? "Pause" : "Resume"}
-                  </Button>
+                  {!finished && (
+                    <Button size="sm" variant="ghost" leftIcon={s.enabled ? <Pause size={13} /> : <Play size={13} />}
+                            onClick={() => toggle(s)}>
+                      {s.enabled ? "Pause" : "Resume"}
+                    </Button>
+                  )}
                   <Button size="sm" variant="ghost" leftIcon={<Trash2 size={13} />} onClick={() => remove(s)}>
                     Delete
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>

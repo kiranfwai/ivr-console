@@ -1,4 +1,5 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
 
 import { Fragment, useMemo, useState } from "react";
 import {
@@ -117,7 +118,9 @@ const OUTCOME_COLOR: Record<string, string> = {
 };
 
 export default function ReportsTab() {
-  const [from, setFrom] = useState<string>(todayKey());
+  // Open on the last 7 days: "Today" is empty most mornings, and an empty first
+  // screen reads as "no data" rather than "nothing yet today".
+  const [from, setFrom] = useState<string>(() => offsetDay(-6));
   const [to, setTo] = useState<string>(todayKey());
   const [campaign, setCampaign] = useState<string>("");
   const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
@@ -178,7 +181,7 @@ export default function ReportsTab() {
     return "flat";
   }, [data]);
 
-  const isRangeFiltered = !isToday || campaign !== "";
+  const isRangeFiltered = !is7d || campaign !== "";
 
   return (
     <Section>
@@ -217,12 +220,7 @@ export default function ReportsTab() {
           </div>
           <div className="min-w-[200px]">
             <div className="text-xs uppercase tracking-wider text-muted mb-1.5">Campaign</div>
-            <Select value={campaign} onChange={(e) => setCampaign(e.target.value)}>
-              <option value="">All campaigns</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaign} onChange={setCampaign} emptyLabel="All campaigns" />
           </div>
           <div className="ml-auto flex gap-2">
             <Button variant="ghost" onClick={reload} loading={loading} leftIcon={!loading && <RefreshCw size={14} />}>
@@ -248,7 +246,7 @@ export default function ReportsTab() {
             description={
               isRangeFiltered
                 ? "No calls matched these filters. Try widening the date range or selecting all campaigns."
-                : "Place a call from the Dial tab, then come back."
+                : "Calls from Dial, Bulk calls and Sheet Auto-Dial show up here once they are placed."
             }
           />
         </Card>
@@ -304,7 +302,7 @@ function ReportBody({ data, from, to }: { data: Report; from: string; to: string
         <Card title="By campaign">
           <CampaignBars rows={data.byCampaign} />
         </Card>
-        <Card title="Hangup causes (Plivo)" description="From Plivo's call history, most frequent first.">
+        <Card title="Why calls ended" description="As reported by the phone network for your most recent calls, most frequent first.">
           <KVList rows={data.hangupCauseCounts} />
         </Card>
       </div>

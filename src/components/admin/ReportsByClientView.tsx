@@ -96,9 +96,7 @@ export default function ReportsByClientView() {
                     <td className="px-2 text-right tabular-nums">{r.noAnswer.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">{r.failed.toLocaleString()}</td>
                     <td className="px-2 text-right tabular-nums">
-                      <Badge tone={r.liftRate >= 30 ? "ok" : r.liftRate >= 10 ? "warn" : "muted"}>
-                        {r.liftRate}%
-                      </Badge>
+                      {r.liftRate}%
                     </td>
                     <td className="px-2 text-right whitespace-nowrap">
                       <button
@@ -118,7 +116,11 @@ export default function ReportsByClientView() {
                   <td className="px-2 text-right tabular-nums">{data.totals.total.toLocaleString()}</td>
                   <td className="px-2 text-right tabular-nums">{data.totals.connected.toLocaleString()}</td>
                   <td className="px-2 text-right tabular-nums">{data.totals.press1.toLocaleString()}</td>
-                  <td colSpan={3} />
+                  {(["busy", "noAnswer", "failed"] as const).map((k) => (
+                    <td key={k} className="px-2 text-right tabular-nums">
+                      {data.rows.reduce((n, r) => n + r[k], 0).toLocaleString()}
+                    </td>
+                  ))}
                   <td className="px-2 text-right tabular-nums">{totalLift}%</td>
                   <td />
                 </tr>

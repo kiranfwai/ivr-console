@@ -1,5 +1,5 @@
 import { placeCall, publicBaseUrl } from "./plivo";
-import { normalizePhone } from "./phone";
+import { normalizePhone, isDiallablePhone } from "./phone";
 import { recordCall } from "./calls";
 import { updateBulkRow } from "./bulk";
 import { currentClientId } from "./tenant";
@@ -19,6 +19,15 @@ export class InsufficientBalanceError extends Error {
   constructor(public balance: number, public rate: number) {
     super("insufficient_balance");
     this.name = "InsufficientBalanceError";
+  }
+}
+
+/** Thrown by placeCampaignCall when the number is too short/long to be a real phone number. */
+export class InvalidPhoneError extends Error {
+  code = "invalid_phone" as const;
+  constructor(public to: string) {
+    super(`invalid phone number ${to}`);
+    this.name = "InvalidPhoneError";
   }
 }
 
@@ -73,6 +82,8 @@ export interface PlaceCampaignCallResult {
 export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<PlaceCampaignCallResult> {
   const { campaign, callerName, email, bulkJobId, bulkRowIndex, req } = input;
   const to = normalizePhone(String(input.phone));
+  // Refuse before anything else happens: no Plivo call, no record, no message.
+  if (!isDiallablePhone(to)) throw new InvalidPhoneError(to || String(input.phone));
   const base = publicBaseUrl(req);
 
   const internalId = `c_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;

@@ -151,14 +151,14 @@ export default function InvoicesCard() {
                     <tr key={i.id} className="border-b border-line/60 hover:bg-elev/50">
                       <td className="py-2 pr-3 tabular-nums">{i.invoiceNo}</td>
                       <td className="py-2 pr-3 text-ink2">{formatDate(i.issuedAt)}</td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{money(i.totals.taxableP)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">₹{money(i.totals.taxableP)}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">
                         {money(tax)}
                         <span className="text-muted text-xs ml-1">
                           {i.totals.interState ? "IGST" : "CGST+SGST"}
                         </span>
                       </td>
-                      <td className="py-2 pr-3 text-right tabular-nums font-medium">{money(i.totals.totalP)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums font-medium">₹{money(i.totals.totalP)}</td>
                       <td className="py-2 pr-3 text-right">
                         <a
                           href={`/api/wallet/invoices/${i.id}/pdf`}

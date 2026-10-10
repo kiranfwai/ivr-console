@@ -103,6 +103,10 @@ export default function Console() {
   const [me, setMe] = useState<Me | null>(null);
   const [meErr, setMeErr] = useState(false);
   const [tab, setTab] = useState<TabId>("dial");
+  // False until the starting tab is chosen. Rendering before that briefly
+  // mounted the Dial screen on every page load, which fetched the campaign list
+  // and recent calls for nothing.
+  const [tabReady, setTabReady] = useState(false);
 
   // Admin-only: which client's data the admin is currently viewing.
   const [clients, setClients] = useState<ClientOpt[]>([]);
@@ -176,6 +180,7 @@ export default function Console() {
       ? fromUrl
       : allowedTabs[0] ?? "admin";
     setTab(initial);
+    setTabReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me]);
 
@@ -235,7 +240,7 @@ export default function Console() {
       </div>
     );
   }
-  if (!me) {
+  if (!me || !tabReady) {
     return (
       <div className="min-h-screen flex items-center justify-center text-muted">
         <Spinner size={20} />
@@ -257,7 +262,7 @@ export default function Console() {
         className="w-full cursor-pointer rounded-lg bg-transparent text-xs text-ink outline-none"
         title="View a client's data"
       >
-        <option value="">Select client…</option>
+        <option value="">FWAI admin (no client)</option>
         {switcherClients.map((c) => (
           <option key={c.id} value={c.id}>
             {c.name || c.email}
@@ -298,6 +303,7 @@ export default function Console() {
               {selectedClient && !selectedClient.active && (
                 <span className="text-muted"> (disabled)</span>
               )}
+              <span className="text-muted"> · calls and messages you start here use their wallet</span>
             </span>
             <button
               onClick={exitViewAs}

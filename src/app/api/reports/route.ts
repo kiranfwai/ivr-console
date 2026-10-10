@@ -21,6 +21,25 @@ export async function GET(req: NextRequest) {
   const today = new Date(Date.now() + (5 * 60 + 30) * 60 * 1000).toISOString().slice(0, 10);
   const agg = await readRange(fromDay || today, toDay || today, campaignId);
 
+  // Plivo's recent-call history is a remote API and was the slow part of this
+  // endpoint: it ran last, page after page, even for a range with no calls.
+  // Start it now so it overlaps the database reads, and skip it when the range
+  // is empty (there is nothing in it to explain).
+  const plivoPromise: Promise<any[]> = agg.total === 0 ? Promise.resolve([]) : (async () => {
+    let out: any[] = [];
+    for (let p = 0; p < wantPages; p++) {
+      try {
+        const r = await listRecentCalls(20, p * 20);
+        const objs = (r as any).objects || [];
+        out = out.concat(objs);
+        if (objs.length < 20) break;
+      } catch {
+        break;
+      }
+    }
+    return out;
+  })();
+
   const total = agg.total;
   const answered = agg.answered;
   const press1 = agg.press1;
@@ -98,17 +117,7 @@ export async function GET(req: NextRequest) {
   }));
 
   // ----- hangup causes from Plivo's recent call history (separate source) -----
-  let plivoCalls: any[] = [];
-  for (let p = 0; p < wantPages; p++) {
-    try {
-      const r = await listRecentCalls(20, p * 20);
-      const objs = (r as any).objects || [];
-      plivoCalls = plivoCalls.concat(objs);
-      if (objs.length < 20) break;
-    } catch {
-      break;
-    }
-  }
+  const plivoCalls = await plivoPromise;
   const hangupCauseCounts: Record<string, number> = {};
   for (const c of plivoCalls) {
     const k = c.hangup_cause_name || "Unknown";

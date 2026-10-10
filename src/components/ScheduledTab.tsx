@@ -122,17 +122,18 @@ export default function ScheduledTab() {
           value={stats.next?.nextRunAt ? istWhen(stats.next.nextRunAt).split(",")[0] : "—"}
           sub={stats.next?.nextRunAt ? `${istWhen(stats.next.nextRunAt).split(", ")[1]} IST` : "nothing armed"}
         />
-        <Tile
-          label="Queued recipients"
-          value={stats.queued.toLocaleString()}
-          sub={`across ${stats.armed} armed job${stats.armed === 1 ? "" : "s"}`}
-        />
-        <Tile
-          label="Last error"
-          value={stats.failing}
-          sub={stats.failing ? "needs a look" : "none"}
-          tone={stats.failing ? "danger" : "muted"}
-        />
+        {/* These two only earn their space when there is something in them —
+            "0 · none" and "0 across 0 armed jobs" took half the row. */}
+        {stats.armed > 0 && (
+          <Tile
+            label="Queued recipients"
+            value={stats.queued.toLocaleString()}
+            sub={`across ${stats.armed} armed job${stats.armed === 1 ? "" : "s"}`}
+          />
+        )}
+        {stats.failing > 0 && (
+          <Tile label="Failed last run" value={stats.failing} sub="needs a look" tone="danger" />
+        )}
       </Tiles>
 
       <DataPanel
@@ -233,11 +234,14 @@ export default function ScheduledTab() {
                     <td className={TD}>
                       <Kebab
                         items={[
-                          {
-                            label: s.enabled ? "Pause" : "Resume",
-                            icon: s.enabled ? <Pause size={13} /> : <Play size={13} />,
-                            onClick: () => toggle(s),
-                          },
+                          // A finished one-off has nothing left to fire.
+                          ...(finished
+                            ? []
+                            : [{
+                                label: s.enabled ? "Pause" : "Resume",
+                                icon: s.enabled ? <Pause size={13} /> : <Play size={13} />,
+                                onClick: () => toggle(s),
+                              }]),
                           {
                             label: "Delete",
                             icon: <Trash2 size={13} />,

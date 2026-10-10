@@ -1,4 +1,5 @@
 "use client";
+import { fmtDate } from "@/lib/format";
 
 import { useCallback, useEffect, useState } from "react";
 import { FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
@@ -60,6 +61,9 @@ export default function InvoicingCard() {
   const [invoices, setInvoices] = useState<InvoiceRow[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [filling, setFilling] = useState(false);
+  // The seller details are set once and rarely touched; show them as a summary
+  // and open the form only on purpose, so a stray edit can't reach live invoices.
+  const [editing, setEditing] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -75,18 +79,21 @@ export default function InvoicingCard() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function save(next?: Partial<Seller>) {
-    if (!f) return;
+  async function save(next?: Partial<Seller>): Promise<boolean> {
+    if (!f) return false;
     const body = { ...f, ...next };
     setSaving(true);
     try {
       const c = await api<Cfg>("/api/admin/invoicing", { method: "PUT", body: JSON.stringify(body) });
       setCfg(c); setF({ ...c.settings });
       toast(c.issuing ? "Saved — invoices are being issued." : "Saved.", "ok");
+      setSaving(false);
+      return true;
     } catch (e: any) {
       toast(e?.message || "Could not save", "danger");
     }
     setSaving(false);
+    return false;
   }
 
   async function backfill() {
@@ -104,6 +111,8 @@ export default function InvoicingCard() {
   if (!f || !cfg) return <Card title="Tax invoices"><div className="flex justify-center py-8"><Spinner /></div></Card>;
 
   const set = (k: keyof Seller) => (e: any) => setF({ ...f, [k]: e.target.value });
+  // Open the form straight away only while invoicing isn't set up yet.
+  const isEditing = editing ?? !cfg.issuing;
 
   return (
     <Card
@@ -130,6 +139,16 @@ export default function InvoicingCard() {
         </div>
       )}
 
+      {!isEditing ? (
+        <div className="rounded-lg border border-line px-3 py-2.5 text-sm grid gap-x-6 gap-y-1 sm:grid-cols-2">
+          <div><span className="text-muted">Legal name · </span>{f.legalName || "—"}</div>
+          <div><span className="text-muted">GSTIN · </span>{f.gstin || "—"}</div>
+          <div><span className="text-muted">State · </span>{f.state || "—"}</div>
+          <div><span className="text-muted">Numbering · </span>{f.seriesPrefix}/… · GST {f.gstRate}% · SAC {f.sacCode}</div>
+          <div className="sm:col-span-2"><span className="text-muted">Tax · </span>
+            {f.taxMode === "inclusive" ? "Already included in what the customer pays" : "Added on top at checkout"}</div>
+        </div>
+      ) : (<>
       <BillingIdentityFields
         value={sellerToIdentity(f)}
         onChange={(n) => setF({
@@ -174,12 +193,23 @@ export default function InvoicingCard() {
           <Input value={f.description} onChange={set("description")} />
         </div>
       </div>
+      </>)}
 
       <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-line">
-        <Button onClick={() => save()} loading={saving}>Save details</Button>
+        {isEditing ? (
+          <>
+            <Button onClick={async () => { if (await save()) setEditing(false); }} loading={saving}>Save details</Button>
+            {cfg.issuing && <Button variant="ghost" onClick={() => { void load(); setEditing(false); }}>Cancel</Button>}
+          </>
+        ) : (
+          <Button variant="ghost" onClick={() => setEditing(true)}>Edit details</Button>
+        )}
         <Button
           variant={f.enabled ? "ghost" : "primary"}
-          onClick={() => save({ enabled: !f.enabled })}
+          onClick={() => {
+            if (f.enabled && !window.confirm("Stop issuing invoices? Top-ups taken while it is off will have no invoice until you issue the missing ones.")) return;
+            void save({ enabled: !f.enabled });
+          }}
           loading={saving}
         >
           {f.enabled ? "Stop issuing invoices" : "Start issuing invoices"}
@@ -196,6 +226,7 @@ export default function InvoicingCard() {
             <thead>
               <tr className="text-left text-xs uppercase tracking-wider text-muted border-b border-line">
                 <th className="py-2 pr-3 font-medium">Invoice</th>
+                <th className="py-2 pr-3 font-medium">Date</th>
                 <th className="py-2 pr-3 font-medium">Customer</th>
                 <th className="py-2 pr-3 font-medium">GSTIN</th>
                 <th className="py-2 pr-3 font-medium text-right">Total</th>
@@ -205,10 +236,15 @@ export default function InvoicingCard() {
             <tbody>
               {invoices.map((i) => (
                 <tr key={i.id} className="border-b border-line/60 hover:bg-elev/50">
-                  <td className="py-2 pr-3 tabular-nums">{i.invoiceNo}</td>
+                  <td className="py-2 pr-3 tabular-nums whitespace-nowrap">
+                    {i.invoiceNo}
+                    {/* ₹1 / ₹10 top-ups were tests; flag them so they're easy to spot. */}
+                    {i.totals.totalP < 10000 && <span className="ml-2 text-[11px] text-warn" title="Under ₹100 — probably a test top-up">test?</span>}
+                  </td>
+                  <td className="py-2 pr-3 text-muted whitespace-nowrap">{fmtDate(i.issuedAt)}</td>
                   <td className="py-2 pr-3">{i.buyer.legalName || i.buyer.name || i.clientId}</td>
                   <td className="py-2 pr-3 text-muted text-xs">{i.buyer.gstin || "Unregistered"}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{money(i.totals.totalP)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">₹{money(i.totals.totalP)}</td>
                   <td className="py-2 pr-3 text-right">
                     <a
                       href={`/api/admin/invoices/${i.id}/pdf`}

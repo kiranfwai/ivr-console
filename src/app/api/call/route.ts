@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCampaign } from "@/lib/campaigns";
-import { placeCampaignCall, InsufficientBalanceError, DndSkipError } from "@/lib/place-campaign-call";
+import { placeCampaignCall, InsufficientBalanceError, DndSkipError, InvalidPhoneError } from "@/lib/place-campaign-call";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,12 @@ export async function POST(req: NextRequest) {
     const result = await placeCampaignCall({ campaign, phone, callerName, email, bulkJobId, bulkRowIndex, req });
     return NextResponse.json(result);
   } catch (e) {
+    if (e instanceof InvalidPhoneError) {
+      return NextResponse.json(
+        { error: `"${phone}" is not a valid phone number — check the digits.`, code: "invalid_phone" },
+        { status: 400 },
+      );
+    }
     if (e instanceof DndSkipError) {
       // Not an error — the number is on the DND list, so the call was skipped by design.
       return NextResponse.json({ skipped: true, code: "dnd", to: e.to, message: "Number is on the DND list — call skipped." });

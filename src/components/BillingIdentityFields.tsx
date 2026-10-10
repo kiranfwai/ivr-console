@@ -145,7 +145,7 @@ function AddressBlock({
           inputMode="numeric"
           maxLength={6}
           onChange={(e) => onPatch({ [key("pincode")]: e.target.value.replace(/\D/g, "").slice(0, 6) })}
-          placeholder="560103"
+          placeholder="e.g. 560103"
           error={pincode && !isValidPincode(pincode) ? "A PIN code is six digits." : undefined}
           invalid={req(pincode)}
         />
@@ -214,7 +214,7 @@ export default function BillingIdentityFields({
         <Input
           value={value.gstin}
           onChange={(e) => setGstin(e.target.value)}
-          placeholder="29AABCF1234M1Z7"
+          placeholder="e.g. 29AABCF1234M1Z7"
           className="font-mono"
           error={
             value.gstin && !isValidGstin(value.gstin)
@@ -230,7 +230,7 @@ export default function BillingIdentityFields({
         <Input
           value={value.pan}
           onChange={(e) => patch({ pan: e.target.value.toUpperCase().replace(/\s/g, "").slice(0, 10) })}
-          placeholder="AABCF1234M"
+          placeholder="e.g. AABCF1234M"
           className="font-mono"
           error={value.pan && !isValidPan(value.pan) ? "10 characters, e.g. AABCF1234M." : undefined}
         />
@@ -250,7 +250,7 @@ export default function BillingIdentityFields({
         <Input
           value={value.phone}
           onChange={(e) => patch({ phone: e.target.value })}
-          placeholder="9876543210"
+          placeholder="Optional · e.g. 98765 43210"
         />
       </div>
 

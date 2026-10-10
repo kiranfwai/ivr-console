@@ -291,7 +291,8 @@ export default function Landing() {
             </p>
             <div className="mt-[50px] flex flex-wrap justify-center gap-[clamp(28px,4vw,58px)]">
               {[
-                ["10,000+", "Calls placed"],
+                // Live figure, 10 Oct 2026: 43,903 calls placed in the previous 30 days.
+                ["40,000+", "Calls a month"],
                 ["100%", "Answered → WhatsApp"],
                 ["5 min", "Sheet polling"],
                 ["Zero", "Duplicates dialled"],
@@ -633,8 +634,9 @@ export default function Landing() {
                 </span>
                 {[
                   ["Tomorrow · 19:00", "rt", "Queued"],
-                  ["Thu 29 Aug · 19:00", "no", "Scheduled"],
-                  ["Fri 30 Aug · 19:00", "no", "Scheduled"],
+                  // Weekdays only — a dated mock ("Thu 29 Aug") goes stale.
+                  ["Thursday · 19:00", "no", "Scheduled"],
+                  ["Friday · 19:00", "no", "Scheduled"],
                 ].map(([l, tone, s]) => (
                   <div key={l as string} className="flex items-center justify-between gap-3 border-b border-line py-[9px] text-[12.8px] text-ink2 last:border-b-0">
                     <b className="font-medium text-ink">{l}</b>

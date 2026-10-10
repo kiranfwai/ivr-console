@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FileSpreadsheet,
   RefreshCw,
@@ -46,6 +46,8 @@ interface SheetPreview {
   error: string | null;
 }
 import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
+import { fmtDateTime } from "@/lib/format";
+import { formatPhone } from "@/lib/phone";
 import SheetReportPanel from "./SheetReportPanel";
 
 type Campaign = { id: string; name: string };
@@ -74,11 +76,7 @@ function fmtHour(h: number) {
 }
 
 function fmtTime(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString([], {
-    month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
+  return fmtDateTime(iso, { short: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +222,24 @@ export default function GSheetsTab() {
     setDeletingSelected(false);
   }
 
+  // Search + paging over the loaded queue (the server returns the newest 300).
+  const [leadQuery, setLeadQuery] = useState("");
+  const [leadPage, setLeadPage] = useState(0);
+  const LEAD_PAGE = 50;
+  const filteredLeads = useMemo(() => {
+    const q = leadQuery.trim().toLowerCase();
+    if (!q) return leads;
+    const qd = q.replace(/\D+/g, "");
+    return leads.filter((l) =>
+      (l.name || "").toLowerCase().includes(q) ||
+      (qd && l.phone.replace(/\D+/g, "").includes(qd)));
+  }, [leads, leadQuery]);
+  const pageCount = Math.max(1, Math.ceil(filteredLeads.length / LEAD_PAGE));
+  const page = Math.min(leadPage, pageCount - 1);
+  const pageLeads = filteredLeads.slice(page * LEAD_PAGE, (page + 1) * LEAD_PAGE);
+  // A sheet without a name column gave every row "—"; drop the column then.
+  const showNames = leads.some((l) => !!l.name);
+
   if (connections === undefined) {
     return (
       <div className="flex justify-center py-20 text-muted">
@@ -231,6 +247,7 @@ export default function GSheetsTab() {
       </div>
     );
   }
+
 
   const counts = leads.reduce<Record<string, number>>((acc, l) => {
     acc[l.status] = (acc[l.status] ?? 0) + 1;
@@ -307,7 +324,7 @@ export default function GSheetsTab() {
           description="Rows picked up from all connected sheets — called automatically within each connection's window, queued outside it."
           action={
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge tone="muted">{leads.length} total</Badge>
+              <Badge tone="muted">{leads.length >= 300 ? "newest 300" : `${leads.length} total`}</Badge>
               {counts.queued  ? <Badge tone="accent">{counts.queued} queued</Badge>  : null}
               {counts.called  ? <Badge tone="ok">{counts.called} called</Badge>      : null}
               {counts.failed  ? <Badge tone="danger">{counts.failed} failed</Badge>  : null}
@@ -353,6 +370,16 @@ export default function GSheetsTab() {
               description="Click 'Poll all' or wait for the background sync to pick up new rows from your sheets."
             />
           ) : (
+            <>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Input
+                value={leadQuery}
+                onChange={(e) => { setLeadQuery(e.target.value); setLeadPage(0); }}
+                placeholder={showNames ? "Search name or phone…" : "Search phone…"}
+                className="max-w-xs"
+              />
+              {leadQuery && <span className="text-xs text-muted">{filteredLeads.length} match{filteredLeads.length === 1 ? "" : "es"}</span>}
+            </div>
             <div className="overflow-auto -mx-1">
               <table className="w-full text-sm">
                 <thead>
@@ -367,10 +394,10 @@ export default function GSheetsTab() {
                         className="cursor-pointer accent-brand"
                       />
                     </th>
-                    <th className="font-medium py-2 px-1">Name</th>
+                    {showNames && <th className="font-medium py-2 px-1">Name</th>}
                     <th className="font-medium px-1">Phone</th>
                     <th className="font-medium px-1 hidden sm:table-cell">Connection</th>
-                    <th className="font-medium px-1">Status</th>
+                    <th className="font-medium px-1 hidden sm:table-cell">Status</th>
                     <th className="font-medium px-1">Call Result</th>
                     <th className="font-medium px-1 hidden md:table-cell">Duration</th>
                     <th className="font-medium px-1 hidden md:table-cell">Called at</th>
@@ -378,9 +405,10 @@ export default function GSheetsTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {leads.map((lead) => (
+                  {pageLeads.map((lead) => (
                     <LeadRow
                       key={lead.id}
+                      showName={showNames}
                       lead={lead}
                       conn={lead.connId ? connMap.get(lead.connId) : undefined}
                       campaigns={campaigns}
@@ -393,6 +421,16 @@ export default function GSheetsTab() {
                 </tbody>
               </table>
             </div>
+            {pageCount > 1 && (
+              <div className="mt-3 flex items-center justify-between text-xs text-muted">
+                <span>{page * LEAD_PAGE + 1}–{Math.min(filteredLeads.length, (page + 1) * LEAD_PAGE)} of {filteredLeads.length}</span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setLeadPage(page - 1)}>Prev</Button>
+                  <Button size="sm" variant="ghost" disabled={page >= pageCount - 1} onClick={() => setLeadPage(page + 1)}>Next</Button>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </Card>
       )}
@@ -544,8 +582,9 @@ function SheetConnectionCard({
       }
     >
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-        <StatBox label="Sheet ID" value={conn.sheetId} />
-        <StatBox label="Tab / Campaign" value={`${describeTab(conn)} → ${campaignName}`} />
+        <StatBox label="Tab" value={describeTab(conn)}
+                 href={`https://docs.google.com/spreadsheets/d/${conn.sheetId}${conn.gid ? `/edit#gid=${conn.gid}` : ""}`} />
+        <StatBox label="Campaign" value={campaignName} />
         <StatBox label="Last synced" value={fmtTime(conn.lastSyncedAt)} />
         <StatBox label="Rows processed" value={String(conn.lastRow)} />
       </div>
@@ -877,6 +916,7 @@ function ConnectSheetForm({
 // ---------------------------------------------------------------------------
 
 function LeadRow({
+  showName = true,
   lead,
   conn,
   campaigns,
@@ -885,6 +925,7 @@ function LeadRow({
   onCall,
   onRemove,
 }: {
+  showName?: boolean;
   lead: GSheetLead;
   conn: GSheetConn | undefined;
   campaigns: Campaign[];
@@ -919,15 +960,17 @@ function LeadRow({
           className="cursor-pointer accent-brand"
         />
       </td>
-      <td className="py-2 px-1 font-medium truncate max-w-[120px]" title={lead.name ?? ""}>
-        {lead.name || <span className="text-muted">—</span>}
-      </td>
-      <td className="px-1 font-mono tabular-nums text-xs whitespace-nowrap">{lead.phone}</td>
+      {showName && (
+        <td className="py-2 px-1 font-medium truncate max-w-[120px]" title={lead.name ?? ""}>
+          {lead.name || <span className="text-muted">—</span>}
+        </td>
+      )}
+      <td className="px-1 font-mono tabular-nums text-xs whitespace-nowrap">{formatPhone(lead.phone)}</td>
       <td className="px-1 text-xs text-muted truncate max-w-[120px] hidden sm:table-cell" title={connLabel}>
         {connLabel}
       </td>
-      <td className="px-1">
-        <div className="flex flex-col gap-0.5">
+      <td className="px-1 hidden sm:table-cell">
+        <div className="flex flex-col items-start gap-0.5">
           <Badge tone={meta.tone}>{meta.label}</Badge>
           {lead.error && (
             <span className="text-[10px] text-danger truncate max-w-[120px]" title={lead.error}>
@@ -938,16 +981,13 @@ function LeadRow({
       </td>
       <td className="px-1">
         {lead.callOutcome ? (
-          <div className="flex flex-col gap-0.5">
+          // The carrier's code (USER_BUSY, NORMAL_CLEARING…) stays in the tooltip
+          // for support; the outcome label is what people read.
+          <span title={lead.hangupCause || undefined}>
             <Badge tone={OUTCOME_META[lead.callOutcome]?.tone ?? "muted"}>
               {OUTCOME_META[lead.callOutcome]?.label ?? lead.callOutcome}
             </Badge>
-            {lead.hangupCause && (
-              <span className="text-[10px] text-muted truncate max-w-[120px]" title={lead.hangupCause}>
-                {lead.hangupCause}
-              </span>
-            )}
-          </div>
+          </span>
         ) : (
           <span className="text-muted text-xs">—</span>
         )}
@@ -988,11 +1028,17 @@ function LeadRow({
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function StatBox({ label, value }: { label: string; value: string }) {
+function StatBox({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
-    <div className="bg-bg/50 border border-line rounded-lg px-3 py-2">
+    <div className="bg-bg/50 border border-line rounded-lg px-3 py-2 min-w-0">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className="text-sm font-medium text-ink truncate">{value}</div>
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer" className="block text-sm font-medium text-ink truncate hover:text-brand" title="Open the sheet">
+          {value} ↗
+        </a>
+      ) : (
+        <div className="text-sm font-medium text-ink truncate">{value}</div>
+      )}
     </div>
   );
 }

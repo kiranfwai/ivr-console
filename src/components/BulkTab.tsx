@@ -1,4 +1,6 @@
 "use client";
+import CampaignSelect from "./CampaignSelect";
+import { fmtDateTime } from "@/lib/format";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download, Gauge, Server, Activity } from "lucide-react";
@@ -18,6 +20,9 @@ type SummaryData = { job: BulkJobWithCounts; durationSum: number; durationCount:
 // Account-wide dialing telemetry. `live` = this app's live calls; `accountLive`
 // = TRUE Plivo account-wide live calls (all apps), or null if the lookup failed.
 type AcctStats = { cps: number; maxLive: number; live: number; accountLive: number | null };
+
+/** "8 Oct 2026, 6:14 pm" in IST — one date format across the console. */
+const fmtWhen = (iso: string) => fmtDateTime(iso);
 
 function summarize(job: BulkJobWithCounts) {
   const c = job.counts || {};
@@ -57,6 +62,11 @@ export default function BulkTab() {
   const { data: wallet } = useFetch<{ balance: number; currency: string; rate: number; noClient?: boolean }>("/api/wallet");
   const lowBalance = !!wallet && !wallet.noClient && wallet.rate > 0 && wallet.balance < wallet.rate;
   const campaigns = cdata?.campaigns ?? [];
+  // Jobs only carry a campaign id; show people the campaign's name.
+  const campaignName = useMemo(() => {
+    const m = new Map(campaigns.map((c) => [c.id, c.name]));
+    return (id: string) => m.get(id) || "Deleted campaign";
+  }, [campaigns]);
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
   // Persisted across tab switches + refresh so uploaded contacts and the active
@@ -214,7 +224,7 @@ export default function BulkTab() {
         method: "POST",
         body: JSON.stringify({ phone, campaignId, callerName: "Test" }),
       });
-      toast(r.ok ? `Test call placed to ${r.to}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      toast(r.ok ? `Test call placed to ${r.to}` : `Call could not be placed (error ${r.status})`, r.ok ? "ok" : "danger");
     } catch (e: any) {
       toast(e.message || "Test call failed", "danger");
     } finally {
@@ -363,8 +373,8 @@ export default function BulkTab() {
             </div>
           }
           description={
-            <span className="flex items-center gap-2 font-mono text-xs">
-              {job.id}
+            <span className="flex items-center gap-2 text-xs">
+              {job.kind === "whatsapp" ? "WhatsApp send" : campaignName(job.campaignId)} · started {fmtWhen(job.createdAt)}
               <ConnDot stale={stale} updatedAt={updatedAt} />
             </span>
           }
@@ -485,10 +495,7 @@ export default function BulkTab() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="col-span-2 md:col-span-2">
             <Label>Campaign</Label>
-            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              <option value="">Choose campaign…</option>
-              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
+            <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
           </div>
           <div>
             <Label hint="max calls live at once">Max live calls</Label>
@@ -500,24 +507,29 @@ export default function BulkTab() {
             <Label hint="delay between batches">Batch delay</Label>
             <Select value={batchDelay} onChange={(e) => setBatchDelay(Number(e.target.value))}>
               {[0, 250, 500, 1000, 2000, 5000].map((v) => (
-                <option key={v} value={v}>{v === 0 ? "0ms (off)" : `${v}ms`}</option>
+                <option key={v} value={v}>{v === 0 ? "No delay" : v >= 1000 ? `${v / 1000}s` : `${v}ms`}</option>
               ))}
             </Select>
           </div>
           <div className="flex items-end">
             <Button onClick={onStart} disabled={!campaignId || !previewCount || submitting} loading={submitting}
               leftIcon={<Play size={14} />} className="w-full" size="lg">
-              {submitting ? "Queuing…" : `Start · ${previewCount.toLocaleString()}`}
+              {submitting ? "Queuing…" : previewCount ? `Start · ${previewCount.toLocaleString()} numbers` : "Start"}
             </Button>
           </div>
         </div>
         <p className="text-xs text-muted mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="inline-flex items-center gap-1">
-            <Server size={12} className="text-muted" />
-            Account CPS limit <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span> (shared by all campaigns)
-          </span>
-          <span className="text-line">·</span>
-          <span>This campaign dials up to <span className="text-ink2 font-medium tabular-nums">{acctCps || "—"}/s</span>, max <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> live at once</span>
+          {/* Unknown limits used to print as "—/s"; say nothing until we know. */}
+          {acctCps > 0 && (
+            <>
+              <span className="inline-flex items-center gap-1">
+                <Server size={12} className="text-muted" />
+                Up to <span className="text-ink2 font-medium tabular-nums">{acctCps}</span> new calls a second across your account
+              </span>
+              <span className="text-line">·</span>
+            </>
+          )}
+          <span>At most <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> calls live at once</span>
           {previewCount > 0 && acctCps > 0 && (
             <>
               <span className="text-line">·</span>
@@ -618,15 +630,17 @@ export default function BulkTab() {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Users size={14} className="text-muted shrink-0" />
                     <div className="min-w-0">
-                      <div className="font-mono text-xs truncate">{j.id}</div>
-                      <div className="text-xs text-muted">{new Date(j.createdAt).toLocaleString()}</div>
+                      <div className="text-sm font-medium text-ink truncate" title={j.id}>
+                        {j.kind === "whatsapp" ? "WhatsApp send" : campaignName(j.campaignId)}
+                      </div>
+                      <div className="text-xs text-muted">{fmtWhen(j.createdAt)}</div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <StatusPill status={j.status} remaining={s.pending + s.dialing} small />
-                    <Badge tone="ok">{s.connectedLifted.toLocaleString()}</Badge>
-                    {s.bad > 0 && <Badge tone="danger">{s.bad.toLocaleString()}</Badge>}
-                    <span className="text-muted">/ {s.total.toLocaleString()}</span>
+                    <span className="text-ok tabular-nums">{s.connectedLifted.toLocaleString()} answered</span>
+                    {s.bad > 0 && <span className="text-muted tabular-nums">· {s.bad.toLocaleString()} not answered</span>}
+                    <span className="text-muted tabular-nums">· {s.total.toLocaleString()} total</span>
                   </div>
                 </button>
               );
