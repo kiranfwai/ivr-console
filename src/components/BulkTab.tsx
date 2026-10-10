@@ -1,4 +1,5 @@
 "use client";
+import { fmtDateTime } from "@/lib/format";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download, Gauge, Server, Activity } from "lucide-react";
@@ -20,12 +21,7 @@ type SummaryData = { job: BulkJobWithCounts; durationSum: number; durationCount:
 type AcctStats = { cps: number; maxLive: number; live: number; accountLive: number | null };
 
 /** "8 Oct 2026, 6:14 pm" in IST — one date format across the console. */
-function fmtWhen(iso: string): string {
-  return new Date(iso).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
-    hour: "numeric", minute: "2-digit", hour12: true,
-  });
-}
+const fmtWhen = (iso: string) => fmtDateTime(iso);
 
 function summarize(job: BulkJobWithCounts) {
   const c = job.counts || {};
@@ -227,7 +223,7 @@ export default function BulkTab() {
         method: "POST",
         body: JSON.stringify({ phone, campaignId, callerName: "Test" }),
       });
-      toast(r.ok ? `Test call placed to ${r.to}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      toast(r.ok ? `Test call placed to ${r.to}` : `Call could not be placed (error ${r.status})`, r.ok ? "ok" : "danger");
     } catch (e: any) {
       toast(e.message || "Test call failed", "danger");
     } finally {

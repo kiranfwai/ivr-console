@@ -66,7 +66,7 @@ function SingleSend() {
       });
       const j = await r.json();
       setLast(j);
-      if (r.ok && j.ok) toast(`Pabbly ${j.status} · ${j.ms}ms`, "ok");
+      if (r.ok && j.ok) toast(`WhatsApp sent (${j.ms} ms)`, "ok");
       else toast(`Failed: ${j.error || j.status}`, "danger");
     } finally {
       setBusy(false);
@@ -75,7 +75,7 @@ function SingleSend() {
 
   return (
     <>
-      <Card title="Send a single WhatsApp" description="Fires Pabbly directly, no Plivo involved.">
+      <Card title="Send a single WhatsApp" description="Sends one message now, to one number — no call is placed.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <Label>Phone</Label>
@@ -83,7 +83,7 @@ function SingleSend() {
           </div>
           <div>
             <Label hint="optional">Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Animesh" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Their first name" />
           </div>
           <div className="md:col-span-2">
             {/* Both fields below are optional and fall back to the account
@@ -101,7 +101,7 @@ function SingleSend() {
               </summary>
               <div className="mt-4 space-y-4">
                 <div>
-                  <Label hint="optional">Pabbly webhook URL</Label>
+                  <Label hint="optional">Webhook URL</Label>
                   <Input
                     value={webhookUrl}
                     onChange={(e) => setWebhookUrl(e.target.value)}
@@ -117,7 +117,7 @@ function SingleSend() {
           </div>
           <div className="md:col-span-2 flex justify-end">
             <Button onClick={send} disabled={!phone} loading={busy} leftIcon={<Send size={14} />}>
-              Send via Pabbly
+              Send WhatsApp
             </Button>
           </div>
         </div>
@@ -248,7 +248,7 @@ function BulkSend() {
 
   return (
     <>
-      <Card title="Bulk WhatsApp via Pabbly" description="Sent by the server, at the rate you choose. Safe to close this tab.">
+      <Card title="Bulk WhatsApp" description="Sent by the server, at the rate you choose. Safe to close this tab.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
             {/* Both fields below are optional and fall back to the account
@@ -266,7 +266,7 @@ function BulkSend() {
               </summary>
               <div className="mt-4 space-y-4">
                 <div>
-                  <Label hint="optional">Pabbly webhook URL</Label>
+                  <Label hint="optional">Webhook URL</Label>
                   <Input
                     value={webhookUrl}
                     onChange={(e) => setWebhookUrl(e.target.value)}
@@ -290,7 +290,7 @@ function BulkSend() {
             <div className="text-xs mt-1 text-muted">
               {ratePerMin > SAFE_MAX_RATE ? (
                 <span className="text-warn">
-                  Above {SAFE_MAX_RATE}/min — only go this high if Pabbly + your WhatsApp provider allow it.
+                  Above {SAFE_MAX_RATE}/min — only go this high if your WhatsApp provider allows it.
                 </span>
               ) : (
                 <>Recommended 300–600/min. ~{Math.ceil(20000 / Math.max(1, ratePerMin))}m for 20k.</>
@@ -332,7 +332,7 @@ function BulkSend() {
             rows={6}
             value={csv}
             onChange={(e) => setCsv(e.target.value)}
-            placeholder={"phone,name,email\n9876543210,Animesh,animesh@example.com\n9123456789,Test,"}
+            placeholder={"phone,name,email\n9876543210,Priya,priya@example.com\n9123456789,Test,"}
           />
           {previewCount > 0 && (
             <div className="mt-2 flex items-start gap-2 text-xs bg-ok/5 border border-ok/20 rounded-lg px-3 py-2">

@@ -1,4 +1,5 @@
 "use client";
+import { fmtDateTime } from "@/lib/format";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Phone, PhoneCall, Wallet, Download, Users2 } from "lucide-react";
@@ -58,15 +59,7 @@ function fmtDuration(sec: number | null): string {
 }
 
 function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return fmtDateTime(iso, { short: true });
 }
 
 /**

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Wallet, Plus, Download, RefreshCw } from "lucide-react";
 import { Card, Section, Button, Input, Label, Badge, EmptyState, Spinner, Modal, toast } from "./ui";
 import { api } from "./useData";
-import { formatINR, formatDate } from "./billing/config";
+import { formatINR } from "./billing/config";
+import { fmtDateTime } from "@/lib/format";
 import { startCheckout } from "./billing/cashfreeCheckout";
 import InvoicesCard from "./billing/InvoicesCard";
 
@@ -20,7 +21,8 @@ interface WalletTxnApi {
 
 const TXN_LABEL: Record<WalletTxnApi["type"], { label: string; tone: "ok" | "danger" | "accent" | "muted" }> = {
   topup: { label: "Top-up", tone: "ok" },
-  charge: { label: "Call charge", tone: "danger" },
+  // A normal per-call charge is not an error — keep it quiet.
+  charge: { label: "Call charge", tone: "muted" },
   adjustment: { label: "Adjustment", tone: "accent" },
   refund: { label: "Refund", tone: "ok" },
 };
@@ -271,12 +273,12 @@ export default function BillingTab() {
                     const meta = TXN_LABEL[t.type];
                     return (
                       <tr key={t.id} className="border-t border-line hover:bg-elev/40 transition-colors">
-                        <td className="py-2 px-1 whitespace-nowrap text-muted text-xs">{formatDate(t.createdAt)}</td>
+                        <td className="py-2 px-1 whitespace-nowrap text-muted text-xs">{fmtDateTime(t.createdAt, { short: true })}</td>
                         <td className="px-1">
                           <Badge tone={meta.tone}>{meta.label}</Badge>
                         </td>
                         <td className="px-1 max-w-[240px] truncate text-ink2">{t.description}</td>
-                        <td className={`px-1 text-right font-mono tabular-nums ${positive ? "text-ok" : "text-danger"}`}>
+                        <td className={`px-1 text-right font-mono tabular-nums ${positive ? "text-ok" : "text-ink2"}`}>
                           {positive ? "+" : "−"}
                           {formatINR(Math.abs(t.amount))}
                         </td>

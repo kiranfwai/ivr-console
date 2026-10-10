@@ -1,4 +1,5 @@
 "use client";
+import { fmtDate } from "@/lib/format";
 
 import { useEffect, useState } from "react";
 import {
@@ -61,7 +62,7 @@ function formatDate(iso?: string) {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return fmtDate(iso);
 }
 
 export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: string) => void }) {
@@ -185,7 +186,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                       <td className={TD}>
                         <div className="font-semibold">{c.name}</div>
                         {c.webhookUrl && (
-                          <div className="mt-0.5 text-[11.5px] text-muted">own Pabbly webhook</div>
+                          <div className="mt-0.5 text-[11.5px] text-muted">custom message webhook</div>
                         )}
                       </td>
                       <td className={TD}>
@@ -301,7 +302,7 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
         body: JSON.stringify({ phone: trimmed, campaignId: campaign.id, callerName: "Test" }),
       });
       setResult(r);
-      toast(r.ok ? `Test call queued to ${r.to}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      toast(r.ok ? `Test call queued to ${r.to}` : `Call could not be placed (error ${r.status})`, r.ok ? "ok" : "danger");
     } catch (e: any) {
       setResult({ ok: false });
       toast(e.message || "Test call failed", "danger");
@@ -349,7 +350,7 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
             {result.ok ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <XCircle size={16} className="mt-0.5 shrink-0" />}
             <div className="min-w-0">
               <div className="font-medium">
-                {result.ok ? "Queued at Plivo" : `Failed${result.status ? ` (${result.status})` : ""}`}
+                {result.ok ? "Call placed" : `Failed${result.status ? ` (${result.status})` : ""}`}
               </div>
               {result.ok && (
                 <div className="text-xs font-mono text-ink2 mt-0.5 truncate">

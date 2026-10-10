@@ -1,4 +1,5 @@
 "use client";
+import { fmtDayKey, fmtDateTime } from "@/lib/format";
 
 import { useMemo, useState } from "react";
 import {
@@ -9,7 +10,7 @@ import { Button, Card, KPI, Badge, Select, EmptyState, Skeleton } from "./ui";
 import { useFetch } from "./useData";
 import {
   OUTCOME_LABEL, OUTCOME_ORDER, OUTCOME_COLOR, OUTCOME_TONE,
-  istStamp, istToday, istDayOffset, fmtDuration,
+  istToday, istDayOffset, fmtDuration,
 } from "@/lib/gsheet-report-format";
 import type { GSheetConn } from "@/lib/gsheets";
 
@@ -129,7 +130,7 @@ export default function SheetReportPanel({
   );
 
   const dayData = useMemo(
-    () => (s ? s.byDay.map((d) => ({ day: d.day.slice(5), dialled: d.dialled, lifted: d.lifted })) : []),
+    () => (s ? s.byDay.map((d) => ({ day: fmtDayKey(d.day), dialled: d.dialled, lifted: d.lifted })) : []),
     [s],
   );
 
@@ -226,7 +227,7 @@ export default function SheetReportPanel({
             <KPI label="Avg duration" value={fmtDuration(s.avgDurationSec)} icon={<Clock size={18} />} tone="muted"
                  sub="across lifted calls" />
             <KPI label="Talk time" value={fmtDuration(s.talkTimeSec)} icon={<Clock size={18} />} tone="muted"
-                 sub={s.lastCallAt ? `last call ${istStamp(s.lastCallAt)}` : undefined} />
+                 sub={s.lastCallAt ? `last call ${fmtDateTime(s.lastCallAt, { short: true })}` : undefined} />
           </div>
 
           <div className="grid lg:grid-cols-2 gap-4 mt-4">
@@ -297,7 +298,7 @@ export default function SheetReportPanel({
               <tbody>
                 {shown.map((r) => (
                   <tr key={r.leadId} className="border-b border-line/60 hover:bg-elev/50">
-                    <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink2">{istStamp(r.calledAt)}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink2">{fmtDateTime(r.calledAt, { short: true })}</td>
                     <td className="py-2 pr-3 tabular-nums text-muted">{r.rowIndex}</td>
                     <td className="py-2 pr-3 truncate max-w-[14rem]">
                       {r.name || <span className="text-muted">—</span>}

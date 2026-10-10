@@ -1,4 +1,5 @@
 "use client";
+import { fmtDate } from "@/lib/format";
 
 import { useCallback, useEffect, useState } from "react";
 import { FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
@@ -112,8 +113,6 @@ export default function InvoicingCard() {
   const set = (k: keyof Seller) => (e: any) => setF({ ...f, [k]: e.target.value });
   // Open the form straight away only while invoicing isn't set up yet.
   const isEditing = editing ?? !cfg.issuing;
-  const fmtDate = (iso: string) =>
-    new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 
   return (
     <Card

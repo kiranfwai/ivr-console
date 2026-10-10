@@ -1,3 +1,4 @@
+import { fmtDate } from "@/lib/format";
 // Billing configuration — tweak these to change pricing/limits app-wide.
 // Kept as plain constants (no inline magic numbers in components) so the
 // finance team can adjust rates without hunting through JSX.
@@ -53,14 +54,7 @@ export function formatCredits(amount: number): string {
   return `${sign}${Math.abs(amount).toLocaleString("en-IN")}`;
 }
 
-// Dates across the app are shown in IST (Asia/Kolkata) — match that here.
-const istDate = new Intl.DateTimeFormat("en-IN", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  timeZone: "Asia/Kolkata",
-});
-/** "04 Jul 2026" in IST from an ISO string. */
+/** "4 Jul 2026" in IST — the console-wide format from lib/format. */
 export function formatDate(iso: string): string {
-  return istDate.format(new Date(iso));
+  return fmtDate(iso);
 }

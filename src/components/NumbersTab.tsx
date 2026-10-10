@@ -1,5 +1,6 @@
 "use client";
 
+import { formatPhone } from "@/lib/phone";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Phone, Download, Search, Link2, Link2Off, CheckCircle2, Star, ShoppingCart } from "lucide-react";
 import {
@@ -169,18 +170,20 @@ export default function NumbersTab() {
                   {filtered.map((n) => (
                     <tr key={n.number} className="border-t border-line hover:bg-elev/40">
                       <td className="py-2 px-1 font-mono tabular-nums whitespace-nowrap">
-                        {n.e164}
+                        {formatPhone(n.e164)}
                         {n.isDefault && <Badge tone="accent" className="ml-2">Default</Badge>}
                       </td>
-                      <td className="px-1 text-ink2">{n.numberType || "—"}</td>
-                      <td className="px-1 text-ink2 truncate max-w-[160px]" title={n.region}>{n.region || n.country || "—"}</td>
+                      <td className="px-1 text-ink2 capitalize">{n.numberType || "—"}</td>
+                      <td className="px-1 text-ink2 truncate max-w-[160px]" title={n.region}>{titleCase(n.region || n.country || "") || "—"}</td>
                       <td className="px-1 text-center">
                         <span className="inline-flex gap-1">
-                          <Badge tone={n.voiceEnabled ? "ok" : "muted"}>V</Badge>
-                          <Badge tone={n.smsEnabled ? "ok" : "muted"}>S</Badge>
+                          <Badge tone={n.voiceEnabled ? "ok" : "muted"}>{n.voiceEnabled ? "Voice" : "No voice"}</Badge>
+                          <Badge tone={n.smsEnabled ? "ok" : "muted"}>{n.smsEnabled ? "SMS" : "No SMS"}</Badge>
                         </span>
                       </td>
-                      <td className="px-1 text-right font-mono text-xs text-muted tabular-nums">{n.monthlyRentalRate || "—"}</td>
+                      <td className="px-1 text-right text-xs text-muted tabular-nums" title="Per month, in your Plivo account's currency">
+                        {n.monthlyRentalRate ? `${Number(n.monthlyRentalRate).toFixed(2)} / mo` : "—"}
+                      </td>
                       <td className="px-1 text-right">
                         {n.isDefault ? (
                           <span className="inline-flex items-center gap-1 text-xs text-brand">
@@ -429,10 +432,13 @@ function PlivoConnectCard({
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.94)] px-4 py-3 text-sm">
         <CheckCircle2 size={15} className="shrink-0 text-ok" />
         <b className="font-semibold">Plivo connected</b>
-        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Auth ID</span>
-        <span className="font-mono text-xs">{config.authId}</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Account</span>
+        {/* Only the tail: enough to tell accounts apart, not enough to copy. */}
+        <span className="font-mono text-xs" title="Plivo Auth ID (ending)">••••{config.authId.slice(-4)}</span>
         <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Default caller ID</span>
-        <span className="font-mono text-xs">{config.fromNumber || "— none set —"}</span>
+        <span className="text-xs text-ink2">
+          {config.fromNumber ? formatPhone(config.fromNumber) : "None — each campaign uses its own"}
+        </span>
         <div className="ml-auto">
           <Kebab
             items={[
@@ -505,4 +511,9 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
       <div className={`text-sm text-ink truncate ${mono ? "font-mono" : ""}`} title={value}>{value}</div>
     </div>
   );
+}
+
+/** "Bangalore, INDIA" → "Bangalore, India" (Plivo returns countries in capitals). */
+function titleCase(s: string): string {
+  return s.replace(/([A-Z])([A-Z]+)/g, (_, a: string, b: string) => a + b.toLowerCase());
 }

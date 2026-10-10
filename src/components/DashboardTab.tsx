@@ -1,4 +1,5 @@
 "use client";
+import { fmtDayKey } from "@/lib/format";
 
 import { useMemo, useState } from "react";
 import {
@@ -246,15 +247,19 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
             <Stat icon={<Clock size={18} />} tint="#7dd3fc" value={dur(data.kpis.avgTalkSec)}
                   label="Avg talk time" note="connected calls only" />
             <Stat icon={<Target size={18} />} tint={C_WARN} value={pct(data.kpis.press1Rate)}
-                  label="Pressed 1" delta={rel(data.kpis.press1Rate, data.kpis.press1RatePrev)} deltaGood
+                  label="Pressed 1"
+                  // A % change on a handful of press-1s is noise (4 → 5 reads as +25%).
+                  delta={data.kpis.press1 >= 30 ? rel(data.kpis.press1Rate, data.kpis.press1RatePrev) : null} deltaGood
                   note={`${data.kpis.press1.toLocaleString()} leads`} />
             <Stat icon={<Wallet size={18} />} tint="#e87ba4" value={rupee(data.kpis.spent)}
                   label="Spent" note={`${rupee(data.kpis.rate)} per connected call`} />
             <Stat icon={<TrendingUp size={18} />} tint="#9085e9"
                   value={data.kpis.press1 ? rupee(data.kpis.costPerLead) : "—"}
-                  label="Cost per lead"
-                  delta={rel(data.kpis.costPerLead, data.kpis.costPerLeadPrev)} deltaGood={false}
-                  note={data.kpis.press1 ? undefined : "no press-1 leads yet"} />
+                  label="Cost per press-1"
+                  delta={data.kpis.press1 >= 30 ? rel(data.kpis.costPerLead, data.kpis.costPerLeadPrev) : null} deltaGood={false}
+                  note={data.kpis.press1
+                    ? `${rupee(data.kpis.spent)} ÷ ${data.kpis.press1.toLocaleString()} press-1${data.kpis.press1 === 1 ? "" : "s"}`
+                    : "no press-1 leads yet"} />
           </div>
 
           {/* chart + outcomes */}
@@ -264,7 +269,7 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data.series} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.055)" vertical={false} />
-                    <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fill: "#7a8597", fontSize: 10 }}
+                    <XAxis dataKey="day" tickFormatter={(d: string) => fmtDayKey(d)} tick={{ fill: "#7a8597", fontSize: 10 }}
                            axisLine={{ stroke: "rgba(255,255,255,0.14)" }} tickLine={false} minTickGap={24} />
                     <YAxis tick={{ fill: "#7a8597", fontSize: 10 }} axisLine={false} tickLine={false} width={52} />
                     <Tooltip
@@ -304,6 +309,9 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
                   <div className="mt-3 border-t border-line pt-3">
                     <Bar label="Pressed 1" value={data.kpis.press1} share={data.kpis.press1Rate} color={C_BRAND} />
                     <div className="mt-1 text-[11px] text-muted">Share of connected calls, not of all calls.</div>
+                    <div className="mt-1 text-[11px] text-muted">
+                      Failed = the phone network refused the call (number switched off, invalid or barred). These calls are not charged.
+                    </div>
                   </div>
                 </>
               )}

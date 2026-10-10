@@ -306,7 +306,7 @@ function ReportBody({ data, from, to }: { data: Report; from: string; to: string
         <Card title="By campaign">
           <CampaignBars rows={data.byCampaign} />
         </Card>
-        <Card title="Hangup causes (Plivo)" description="From Plivo's call history, most frequent first.">
+        <Card title="Why calls ended" description="As reported by the phone network for your most recent calls, most frequent first.">
           <KVList rows={data.hangupCauseCounts} />
         </Card>
       </div>

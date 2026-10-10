@@ -1,4 +1,5 @@
 "use client";
+import { fmtDateTime } from "@/lib/format";
 
 import { formatPhone, isDiallablePhone, normalizePhone } from "@/lib/phone";
 import { useCallback, useEffect, useState } from "react";
@@ -46,9 +47,7 @@ function whenLabel(iso: string): string {
   if (mins < 60) return `${mins} min ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
-  return new Date(t).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true,
-  });
+  return fmtDateTime(iso, { short: true });
 }
 
 /** Outcome as a pill, with talk time when the call actually connected. */
@@ -128,7 +127,7 @@ export default function DialTab() {
       });
       setLast(r);
       setCopied(false);
-      toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Plivo error ${r.status}`, r.ok ? "ok" : "danger");
+      toast(r.ok ? `Dialing ${r.to ?? dialPhone}` : `Call could not be placed (error ${r.status})`, r.ok ? "ok" : "danger");
       if (!overridePhone) setPhone("");
       // Pull it straight away so the row appears, then again once the call has
       // had time to settle so the outcome stops saying "in progress".
@@ -181,7 +180,7 @@ export default function DialTab() {
     <Section>
       <Card
         title="Place a call"
-        description="Pick a campaign, enter a phone, and Plivo will dial."
+        description="Pick a campaign, enter a phone number, and the call goes out straight away."
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -257,7 +256,7 @@ export default function DialTab() {
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-medium">
-                  {last.ok ? "Call queued at Plivo" : `Plivo error ${last.status}`}
+                  {last.ok ? "Call placed" : `Call could not be placed (error ${last.status})`}
                 </div>
                 <div className="text-xs text-muted font-mono truncate flex items-center gap-1.5">
                   <Phone size={11} />

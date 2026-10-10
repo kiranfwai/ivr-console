@@ -85,6 +85,9 @@ export function resolveTabSelection(input: {
  */
 export function describeTab(conn: { tabName: string; gid: string | null }): string {
   if (!conn.gid) return conn.tabName;
+  // The gid is Google's internal tab number — meaningless to the people reading
+  // this, so it is never shown. A tab chosen from a pasted link is named if we
+  // know its name, otherwise described.
   const label = conn.tabName?.trim();
-  return label && label !== "Sheet1" ? `${label} (gid ${conn.gid})` : `gid ${conn.gid}`;
+  return label && label !== "Sheet1" ? label : "Tab from your link";
 }
