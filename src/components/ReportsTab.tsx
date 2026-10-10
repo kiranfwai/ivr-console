@@ -23,7 +23,6 @@ interface Report {
     answerRate: number;
     press1Rate: number;
     avgDurationSec: number;
-    totalsHorizonHint: number;
     lifted: number;
     notLifted: number;
     liftRate: number;
@@ -43,7 +42,6 @@ interface Report {
   range: { from: string; to: string };
   hangupCauseCounts: Record<string, number>;
   recent: (CallRecord & { outcome: string | null })[];
-  plivoRecent: any[];
 }
 
 interface CampaignRow {
@@ -302,7 +300,7 @@ function ReportBody({ data, from, to }: { data: Report; from: string; to: string
         <Card title="By campaign">
           <CampaignBars rows={data.byCampaign} />
         </Card>
-        <Card title="Why calls ended" description="As reported by the phone network for your most recent calls, most frequent first.">
+        <Card title="Why calls ended" description="As reported by the phone network for the latest calls in this range, most frequent first.">
           <KVList rows={data.hangupCauseCounts} />
         </Card>
       </div>
@@ -502,8 +500,31 @@ function CampaignBars({ rows }: { rows: Record<string, number> }) {
   );
 }
 
+/** Plain names for the carrier's hangup codes (the raw code stays in a tooltip). */
+const CAUSE_LABEL: Record<string, string> = {
+  NORMAL_CLEARING: "Call ended normally",
+  NO_ANSWER: "No answer",
+  NO_USER_RESPONSE: "No response",
+  ALLOTTED_TIMEOUT: "Rang out",
+  USER_BUSY: "Busy",
+  CALL_REJECTED: "Rejected",
+  UNALLOCATED_NUMBER: "Number not in use",
+  NUMBER_CHANGED: "Number changed",
+  INVALID_NUMBER_FORMAT: "Invalid number",
+  SUBSCRIBER_ABSENT: "Phone switched off / out of reach",
+  NETWORK_OUT_OF_ORDER: "Network problem",
+  NORMAL_TEMPORARY_FAILURE: "Temporary network failure",
+  RECOVERY_ON_TIMER_EXPIRE: "Network timed out",
+  ORIGINATOR_CANCEL: "Cancelled before answer",
+};
+function causeLabel(code: string): string {
+  if (CAUSE_LABEL[code]) return CAUSE_LABEL[code];
+  const s = code.replace(/_/g, " ").toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function KVList({ rows }: { rows: Record<string, number> }) {
-  // Hangup causes sorted by frequency (desc).
+  // Hangup causes sorted by frequency (desc), under plain names.
   const entries = Object.entries(rows).sort((a, b) => b[1] - a[1]);
   if (!entries.length) return <div className="text-sm text-muted">No data.</div>;
   const max = Math.max(...entries.map(([, v]) => v));
@@ -513,7 +534,7 @@ function KVList({ rows }: { rows: Record<string, number> }) {
         <div key={k} className="flex items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between text-xs mb-1">
-              <span className="truncate text-ink2">{k}</span>
+              <span className="truncate text-ink2" title={k}>{causeLabel(k)}</span>
               <span className="font-mono tabular-nums text-muted">{v}</span>
             </div>
             <div className="h-1 bg-line rounded-full overflow-hidden">

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listCalls, countCalls } from "@/lib/calls";
+import { listCalls } from "@/lib/calls";
 import { listCampaigns } from "@/lib/campaigns";
-import { listRecentCalls } from "@/lib/plivo";
 import { deriveOutcome } from "@/lib/outcome";
 import { readRange } from "@/lib/stats";
 import { resolveConnNamesByCallUuids } from "@/lib/gsheets";
@@ -14,31 +13,12 @@ export async function GET(req: NextRequest) {
   const fromDay = day || url.searchParams.get("from") || undefined;
   const toDay = day || url.searchParams.get("to") || fromDay;
   const campaignId = url.searchParams.get("campaign") || undefined;
-  const wantPages = Math.max(1, Math.min(10, Number(url.searchParams.get("pages") || "2")));
 
   // ----- aggregates: read rolled-up counters (O(days), not O(calls)) -----
   // Default to "today" (IST) if no range is supplied.
   const today = new Date(Date.now() + (5 * 60 + 30) * 60 * 1000).toISOString().slice(0, 10);
   const agg = await readRange(fromDay || today, toDay || today, campaignId);
 
-  // Plivo's recent-call history is a remote API and was the slow part of this
-  // endpoint: it ran last, page after page, even for a range with no calls.
-  // Start it now so it overlaps the database reads, and skip it when the range
-  // is empty (there is nothing in it to explain).
-  const plivoPromise: Promise<any[]> = agg.total === 0 ? Promise.resolve([]) : (async () => {
-    let out: any[] = [];
-    for (let p = 0; p < wantPages; p++) {
-      try {
-        const r = await listRecentCalls(20, p * 20);
-        const objs = (r as any).objects || [];
-        out = out.concat(objs);
-        if (objs.length < 20) break;
-      } catch {
-        break;
-      }
-    }
-    return out;
-  })();
 
   const total = agg.total;
   const answered = agg.answered;
@@ -116,12 +96,14 @@ export async function GET(req: NextRequest) {
     gsheetConnName: sheetNameByUuid.get(c.callUuid) ?? null,
   }));
 
-  // ----- hangup causes from Plivo's recent call history (separate source) -----
-  const plivoCalls = await plivoPromise;
+  // ----- why calls ended: from this range's own latest calls -----
+  // Used to come from Plivo's account-wide call history (a remote API, ~1 s
+  // per page, and not even limited to the selected range). The calls listed
+  // above already carry the carrier's hangup cause.
   const hangupCauseCounts: Record<string, number> = {};
-  for (const c of plivoCalls) {
-    const k = c.hangup_cause_name || "Unknown";
-    hangupCauseCounts[k] = (hangupCauseCounts[k] || 0) + 1;
+  for (const c of recentCalls) {
+    if (!c.hangupCause) continue;
+    hangupCauseCounts[c.hangupCause] = (hangupCauseCounts[c.hangupCause] || 0) + 1;
   }
 
   return NextResponse.json({
@@ -133,7 +115,6 @@ export async function GET(req: NextRequest) {
       answerRate: total ? Math.round((answered / total) * 100) : 0,
       press1Rate: total ? Math.round((press1 / total) * 100) : 0,
       avgDurationSec: avgDuration,
-      totalsHorizonHint: await countCalls(),
       lifted,
       notLifted,
       liftRate: total ? Math.round((lifted / total) * 100) : 0,
@@ -145,6 +126,5 @@ export async function GET(req: NextRequest) {
     range: { from: rangeFrom, to: rangeTo },
     hangupCauseCounts,
     recent,
-    plivoRecent: plivoCalls.slice(0, 15),
   });
 }
