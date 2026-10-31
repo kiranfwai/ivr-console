@@ -129,7 +129,7 @@ export default function DndTab() {
             <Ban size={15} className="text-danger" /> Blocked numbers
           </span>
         }
-        meta="never called — not by a single call, not by bulk, not by the trigger API"
+        meta="never called or messaged — no call, bulk, sheet, trigger API or WhatsApp"
         action={
           <>
             <Badge tone="danger">{total.toLocaleString()} on list</Badge>
@@ -212,7 +212,7 @@ export default function DndTab() {
             <EmptyState
               icon={<Ban size={20} />}
               title="No numbers on the DND list"
-              description="Add numbers and they will never be called by this client — however they were typed."
+              description="Add numbers and they will never be called or sent a WhatsApp by this client — however they were typed."
             />
           </div>
         ) : shown.length === 0 ? (

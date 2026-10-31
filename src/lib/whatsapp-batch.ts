@@ -3,6 +3,7 @@ import {
   setJobStatus, countPending, countDialing,
 } from "./bulk";
 import { buildWaPayload, postToPabbly, mapWithConcurrency } from "./whatsapp";
+import { isDnd } from "./dnd";
 
 /**
  * One batch of a WhatsApp bulk job.
@@ -62,6 +63,13 @@ export async function sendWhatsAppBatch(
 
   const attemptedAt = new Date().toISOString();
   const outcomes = await mapWithConcurrency(claimed, concurrency, async (row) => {
+    // The client's Do-Not-Disturb list applies to WhatsApp too. Terminal 'dnd',
+    // same as a skipped call, so the job still completes. Runs in the job's
+    // tenant scope (worker: runWithTenant; browser route: the session header).
+    if (await isDnd(row.phone)) {
+      await updateBulkRow(jobId, row.index, { status: "dnd", attemptedAt, error: "on DND list" }).catch(() => {});
+      return null; // skipped, not a failed send
+    }
     const payload = buildWaPayload({ phone: row.phone, name: row.name, email: row.email });
     const res = await postToPabbly(hook, payload);
     await updateBulkRow(jobId, row.index, {
@@ -72,12 +80,12 @@ export async function sendWhatsAppBatch(
     return res.ok;
   });
 
-  const sent = outcomes.filter(Boolean).length;
+  const sent = outcomes.filter((o) => o === true).length;
   let done = false;
   if ((await countPending(jobId)) === 0 && (await countDialing(jobId)) === 0) {
     if (job.status !== "completed") await setJobStatus(jobId, "completed");
     done = true;
   }
 
-  return { done, claimed: claimed.length, sent, failed: outcomes.length - sent };
+  return { done, claimed: claimed.length, sent, failed: outcomes.filter((o) => o === false).length };
 }

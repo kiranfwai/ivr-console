@@ -125,7 +125,8 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
         attemptedAt: new Date().toISOString(),
       });
     }
-    await notify("dnd", null);
+    // No WhatsApp / email either: DND means "do not contact", not just "do not
+    // call". "always" campaigns used to queue a message for DND numbers here.
     throw new DndSkipError(to);
   }
 

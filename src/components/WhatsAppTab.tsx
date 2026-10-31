@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
-import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
+import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, ConfirmDialog, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts } from "@/lib/contacts";
 import ScheduleCard from "./ScheduleCard";
@@ -167,6 +167,11 @@ function BulkSend() {
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   // Reflects the job on the server, not a loop in this tab.
   const running = activeJob?.status === "running";
+  // A send reaches real people, so Start only opens a confirmation; `starting`
+  // locks the button while the request is in flight so a double click can't
+  // queue the same list twice.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
   // Reflects the job on the server, not a loop in this tab.
 
   // Keep the "Recent WA jobs" list fresh without a manual refresh: poll the jobs
@@ -191,7 +196,8 @@ function BulkSend() {
 
   async function start() {
     const rows = parsed.rows;
-    if (!rows.length) return;
+    if (!rows.length || starting) return;
+    setStarting(true);
     const idempotencyKey = `idem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     try {
       const r = await apiRetry<{ job: BulkJobWithCounts }>("/api/bulk", {
@@ -208,9 +214,15 @@ function BulkSend() {
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
       reloadJobs();
+      // Clear the list once it is queued. It used to stay saved in the browser,
+      // so the next visit showed "Start · N sends" for people already messaged.
+      setCsv("phone,name,email\n");
       toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends — you can close this tab`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
+    } finally {
+      setStarting(false);
+      setConfirmOpen(false);
     }
   }
 
@@ -351,11 +363,30 @@ function BulkSend() {
         </div>
 
         <div className="mt-4 flex justify-end">
-          <Button onClick={start} disabled={!previewCount || running} loading={running} leftIcon={<Play size={14} />} size="lg">
+          <Button onClick={() => setConfirmOpen(true)} disabled={!previewCount || running || starting} loading={running || starting} leftIcon={<Play size={14} />} size="lg">
             {running ? "Sending…" : `Start · ${previewCount.toLocaleString()} sends`}
           </Button>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        tone="primary"
+        title="Send WhatsApp messages?"
+        confirmLabel={`Send to ${previewCount.toLocaleString()} ${previewCount === 1 ? "person" : "people"}`}
+        busy={starting}
+        body={
+          <>
+            This messages <span className="font-medium text-ink">{previewCount.toLocaleString()}</span>{" "}
+            {previewCount === 1 ? "person" : "people"} — about{" "}
+            {Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))).toLocaleString()} min at{" "}
+            {ratePerMin.toLocaleString()}/min. Numbers on your Do Not Disturb list are skipped. Messages cannot be
+            recalled once sent; the list is cleared after it is queued.
+          </>
+        }
+        onConfirm={start}
+        onClose={() => !starting && setConfirmOpen(false)}
+      />
 
       {activeJob && counts && (
         <Card
