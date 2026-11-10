@@ -377,7 +377,7 @@ function BulkSend() {
         busy={starting}
         body={
           <>
-            This messages <span className="font-medium text-ink">{previewCount.toLocaleString()}</span>{" "}
+            This will message <span className="font-medium text-ink">{previewCount.toLocaleString()}</span>{" "}
             {previewCount === 1 ? "person" : "people"} — about{" "}
             {Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))).toLocaleString()} min at{" "}
             {ratePerMin.toLocaleString()}/min. Numbers on your Do Not Disturb list are skipped. Messages cannot be
@@ -410,9 +410,10 @@ function BulkSend() {
           }
         >
           <ProgressBar counts={counts} />
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2">
             <Stat label="Sent" value={counts.ok} tone="ok" />
             <Stat label="Failed" value={counts.failedAll} tone="danger" />
+            <Stat label="Skipped · DND" value={counts.dnd} tone="warn" />
             <Stat label="Pending" value={counts.pending} tone="muted" />
             <Stat label="Total" value={counts.total} tone="muted" />
           </div>
@@ -501,24 +502,29 @@ function tally(job: BulkJobWithCounts) {
     ok: c.ok ?? 0,
     failedAll: c.failed ?? 0,
     pending: c.pending ?? 0,
+    dnd: c.dnd ?? 0,
     dialing: c.dialing ?? 0,
     total: job.total || 0,
   };
 }
 
-function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; total: number } }) {
+function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; dnd: number; total: number } }) {
   const okPct = (counts.ok / counts.total) * 100;
   const failPct = (counts.failedAll / counts.total) * 100;
-  const donePct = okPct + failPct;
+  // DND skips are finished rows too — without them a job that skipped one
+  // number sat at "67% complete" forever.
+  const dndPct = (counts.dnd / counts.total) * 100;
+  const donePct = okPct + failPct + dndPct;
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted">{Math.round(donePct)}% complete</span>
-        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll} / {counts.total}</span>
+        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll + counts.dnd} / {counts.total}</span>
       </div>
       <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
         <div className="h-full bg-ok transition-all duration-500" style={{ width: `${okPct}%` }} />
         <div className="h-full bg-danger transition-all duration-500" style={{ width: `${failPct}%` }} />
+        <div className="h-full bg-muted/60 transition-all duration-500" style={{ width: `${dndPct}%` }} />
       </div>
     </div>
   );
