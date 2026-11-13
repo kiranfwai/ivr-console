@@ -96,6 +96,8 @@ export async function clearConfig(): Promise<CashfreeConfigPublic> {
 }
 
 function baseUrl(env: CashfreeEnv): string {
+  // Test-only override (a local stand-in for Cashfree). Never set in production.
+  if (process.env.CASHFREE_API_BASE) return process.env.CASHFREE_API_BASE.replace(/\/$/, "");
   return env === "production" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
 }
 
