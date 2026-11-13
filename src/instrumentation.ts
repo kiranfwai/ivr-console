@@ -20,5 +20,8 @@ export async function register() {
     await startGsheetsPoller();
     const { startScheduler } = await import("./lib/schedule");
     await startScheduler();
+    // Credits top-ups whose Cashfree webhook and return visit both went missing.
+    const { startCashfreeReconciler } = await import("./lib/cashfree-reconcile");
+    await startCashfreeReconciler();
   }
 }

@@ -1,5 +1,6 @@
 import { query } from "./db";
 import { runWithTenant } from "./tenant";
+import { isDnd } from "./dnd";
 import { patchCall } from "./calls";
 import { digitsOnly, normalizePhone } from "./phone";
 import { postToPabbly, mapWithConcurrency } from "./whatsapp";
@@ -163,6 +164,13 @@ async function claim(n: number): Promise<NotifyRow[]> {
 }
 
 async function sendOne(row: NotifyRow): Promise<void> {
+  // Last line of defence: whatever queued this, a number on the client's DND
+  // list is never messaged. Checked at send time, so a number added to DND
+  // after the message was queued is still honoured.
+  if (await runWithTenant(row.client_id, () => isDnd(row.phone))) {
+    await query(`UPDATE lead_notify SET status = 'skipped', error = 'on DND list' WHERE id = $1`, [row.id]);
+    return;
+  }
   // No retry on timeout: Pabbly may have received it, and a second POST would
   // be a second WhatsApp. 429 / 5xx / refused connections are still retried.
   const res = await postToPabbly(row.webhook_url, row.payload, { retryOnTimeout: false });

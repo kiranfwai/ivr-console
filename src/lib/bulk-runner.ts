@@ -60,14 +60,15 @@ export async function fireOne(
 
   // Do-Not-Disturb: skip numbers on the client's DND list. Terminal outcome
   // ('dnd'), so the worker never re-dials it and the job still completes — but
-  // no call is placed, no record is written, and no wallet charge is incurred.
+  // no call is placed, no record is written, no wallet charge is incurred, and
+  // no WhatsApp / email is queued (DND means "do not contact", not just "do not
+  // call").
   if (await isDnd(to)) {
     await updateBulkRow(jobId, row.index, {
       status: "dnd",
       error: "on DND list",
       attemptedAt: new Date().toISOString(),
     });
-    await notify("dnd", null);
     return { ok: false };
   }
 
@@ -125,6 +126,7 @@ export async function fireOne(
     bulkJobId: jobId,
     ...(row.name ? { name: row.name } : {}),
     ...(sendOnPlace ? { notifyOnPlace: true } : {}),
+    ...(triggerOf(campaign) === "never" ? { noWhatsapp: true } : {}),
   });
   await notify(result.ok ? "placed" : "call_failed", internalId, fromNumber);
 

@@ -1,4 +1,5 @@
 import { getCall, patchCall } from "./calls";
+import { getCampaign } from "./campaigns";
 import { digitsOnly } from "./phone";
 import type { CallRecord, WhatsappTrigger } from "./models";
 
@@ -20,14 +21,14 @@ import type { CallRecord, WhatsappTrigger } from "./models";
 /** A campaign with no explicit setting keeps the original press-1 behaviour. */
 export function triggerOf(campaign: { whatsappTrigger?: WhatsappTrigger } | null): WhatsappTrigger {
   const t = campaign?.whatsappTrigger;
-  return t === "answer" || t === "always" ? t : "press1";
+  return t === "answer" || t === "always" || t === "never" ? t : "press1";
 }
 
 export interface NotifyResult {
   sent: boolean;
   /** HTTP status from the webhook, 0 if not attempted, -1 if the request threw. */
   status: number;
-  reason?: "already-sent" | "no-webhook" | "no-record" | "sent-on-place";
+  reason?: "already-sent" | "no-webhook" | "no-record" | "sent-on-place" | "disabled";
 }
 
 /**
@@ -47,6 +48,14 @@ export async function notifyWhatsapp(
   // "always" campaigns message the lead when the call is placed (lead-notify.ts),
   // so a pickup or a press-1 must not send a second one.
   if (record.notifyOnPlace) return { sent: false, status: 0, reason: "sent-on-place" };
+  // "Don't send" campaigns: flagged on the call when it was placed, and the
+  // campaign is re-checked so switching a campaign to "never" also stops calls
+  // that are already ringing. A lookup error falls through to the flag alone.
+  if (record.noWhatsapp) return { sent: false, status: 0, reason: "disabled" };
+  if (record.campaignId) {
+    const live = await getCampaign(record.campaignId).catch(() => null);
+    if (live && triggerOf(live) === "never") return { sent: false, status: 0, reason: "disabled" };
+  }
 
   // The webhook and the recipient come ONLY from the stored record — never from
   // the incoming request. Signature verification is off by default, so trusting
@@ -110,7 +119,7 @@ export function notifyWhatsappInBackground(
     (r) => {
       if (r.sent) {
         console.info(`[whatsapp] ${opts.event} -> webhook ${r.status} for ${record?.to ?? internalId}`);
-      } else if (r.reason !== "already-sent" && r.reason !== "sent-on-place") {
+      } else if (r.reason !== "already-sent" && r.reason !== "sent-on-place" && r.reason !== "disabled") {
         console.warn(`[whatsapp] ${opts.event} not sent (${r.reason}) for ${record?.to ?? internalId}`);
       }
     },

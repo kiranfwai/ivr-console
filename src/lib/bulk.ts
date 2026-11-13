@@ -134,8 +134,11 @@ export async function createBulkJob(input: {
   delayMs?: number;
   jitterPct?: number;
   concurrency?: number;
-}): Promise<BulkJob> {
+  /** Client-generated per-upload key; a retry with the same key gets the same job back. */
+  idempotencyKey?: string;
+}): Promise<BulkJob & { idempotent?: boolean }> {
   const id = newId("blk");
+  const idemKey = typeof input.idempotencyKey === "string" && input.idempotencyKey ? input.idempotencyKey.slice(0, 120) : null;
   const kind = input.kind ?? "call";
   const total = input.rows.length;
 
@@ -147,8 +150,9 @@ export async function createBulkJob(input: {
   const clientId = currentClientId();
   const created = await withTx(async (c) => {
     const { rows } = await c.query(
-      `INSERT INTO bulk_job (id, client_id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct, status, total, started_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'paused',$9, now())
+      `INSERT INTO bulk_job (id, client_id, kind, campaign_id, webhook_url, concurrency, delay_ms, jitter_pct, status, total, started_at, idem_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'paused',$9, now(), $10)
+       ON CONFLICT ((coalesce(client_id, '')), idem_key) WHERE idem_key IS NOT NULL DO NOTHING
        RETURNING ${JOB_COLS}`,
       [
         id,
@@ -160,16 +164,39 @@ export async function createBulkJob(input: {
         Math.max(0, input.delayMs ?? 0),
         input.jitterPct ?? null,
         total,
+        idemKey,
       ],
     );
-    return mapJob(rows[0]);
+    return rows.length ? mapJob(rows[0]) : null;
   });
+
+  // Same key already used by this client → this is a retry of an upload that
+  // already created its job. Hand that job back; never create a second one.
+  if (!created) {
+    // Same scope the unique index uses: this client's jobs, or tenant-less ones.
+    const { rows } = await query<JobDbRow>(
+      `SELECT ${JOB_COLS} FROM bulk_job WHERE idem_key=$1 AND coalesce(client_id, '')=$2`,
+      [idemKey, clientId ?? ""],
+    );
+    if (!rows.length) throw new Error("idempotency key conflict but no job found");
+    return { ...mapJob(rows[0]), idempotent: true };
+  }
 
   // 2) Rows in chunks with per-chunk autocommit — NOT one multi-second
   //    transaction. Each INSERT is short, so a large or slow upload can't hold a
   //    lock long enough to trip nginx's gateway timeout (the 504s) and partial
   //    progress is durable. `query()` autocommits each chunk.
-  await insertRows({ query }, id, input.rows);
+  try {
+    await insertRows({ query }, id, input.rows);
+  } catch (e) {
+    // Remove the half-made job so a retry with the same key starts clean rather
+    // than being handed a paused job holding only part of the list. If this
+    // cleanup fails too, the job stays paused (never dialled) and visible.
+    await query(`DELETE FROM bulk_row WHERE job_id=$1`, [id])
+      .then(() => query(`DELETE FROM bulk_job WHERE id=$1`, [id]))
+      .catch((ce) => console.error(`[bulk] could not remove half-created job ${id}:`, ce));
+    throw e;
+  }
 
   // 3) All rows are durable — flip to 'running' so the worker starts dialing.
   const ready = await setJobStatus(id, "running");

@@ -455,9 +455,18 @@ function isInWindow(startHour: number, endHour: number): boolean {
 // Call trigger
 // ---------------------------------------------------------------------------
 
+/** A lead is dialled only from these statuses — never while 'calling' or once 'called'. */
+const DIAL_FROM = ["queued", "failed"];
+
 /**
  * Place a call for one lead row, updating its DB status before and after.
  * Uses the lead's DB id for all updates (no row_hash dependency).
+ *
+ * The 'calling' flip IS the claim: the call is placed only if THIS caller moved
+ * the lead out of an allowed status. Two overlapping polls (a long flush still
+ * running when the next 5-minute tick starts, or "Poll now" during a background
+ * poll) used to both dial every lead they shared — the update matched nothing
+ * for the loser, but the call went out anyway.
  */
 async function fireLeadCall(
   clientId: string,
@@ -466,12 +475,16 @@ async function fireLeadCall(
   phone: string,
   name: string | null,
   email: string | null,
-): Promise<{ ok: boolean; error?: string }> {
-  await query(
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  const claim = await query(
     `UPDATE gsheet_lead SET status = 'calling'
-     WHERE client_id = $1 AND id = $2 AND status IN ('queued', 'failed')`,
-    [clientId, leadId],
+     WHERE client_id = $1 AND id = $2 AND status = ANY($3::text[]) AND deleted_at IS NULL
+     RETURNING id`,
+    [clientId, leadId, DIAL_FROM],
   );
+  if (!claim.rowCount) {
+    return { ok: false, skipped: true, error: "This lead is already being called, or was removed." };
+  }
 
   try {
     const result = await runWithTenant(clientId, async () => {
@@ -809,8 +822,8 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
     newRows++;
     const leadId = Number(inserted[0].id);
     if (inWindow) {
-      await fireLeadCall(conn.clientId, leadId, conn.campaignId, c.phone, c.name, c.email);
-      called++;
+      const r = await fireLeadCall(conn.clientId, leadId, conn.campaignId, c.phone, c.name, c.email);
+      if (!r.skipped) called++;
     } else {
       queued++;
     }
@@ -831,8 +844,8 @@ export async function pollClient(conn: GSheetConn): Promise<PollResult> {
       [conn.clientId, conn.id],
     );
     for (const r of pending) {
-      await fireLeadCall(conn.clientId, Number(r.id), conn.campaignId, r.phone, r.name, r.email);
-      flushed++;
+      const res = await fireLeadCall(conn.clientId, Number(r.id), conn.campaignId, r.phone, r.name, r.email);
+      if (!res.skipped) flushed++;
     }
   }
 
@@ -868,6 +881,22 @@ export async function updateLeadOutcomeByCallUuid(
 // ---------------------------------------------------------------------------
 
 export async function pollAllClients(): Promise<void> {
+  // One background poll at a time. A large flush dials leads one by one and can
+  // outlast the 5-minute interval; the next tick then skips instead of starting
+  // a second pass over the same queue.
+  if (G.__ivrGsheetsPolling) {
+    console.warn("[gsheets] previous poll still running — skipping this tick");
+    return;
+  }
+  G.__ivrGsheetsPolling = true;
+  try {
+    await pollAllClientsOnce();
+  } finally {
+    G.__ivrGsheetsPolling = false;
+  }
+}
+
+async function pollAllClientsOnce(): Promise<void> {
   let conns: ConnRow[];
   try {
     const res = await query<ConnRow>(`SELECT * FROM gsheet_conn WHERE enabled = true`);
@@ -931,7 +960,7 @@ export async function resolveConnNamesByCallUuids(
 // Poller bootstrap (called from instrumentation.ts)
 // ---------------------------------------------------------------------------
 
-const G = globalThis as unknown as { __ivrGsheetsPollerStarted?: boolean };
+const G = globalThis as unknown as { __ivrGsheetsPollerStarted?: boolean; __ivrGsheetsPolling?: boolean };
 const POLL_INTERVAL_MS = Number(process.env.GSHEETS_POLL_INTERVAL_MS) || 5 * 60 * 1000;
 
 export async function startGsheetsPoller(): Promise<void> {
@@ -942,6 +971,15 @@ export async function startGsheetsPoller(): Promise<void> {
   await ensurePhoneHashMigration().catch((e) =>
     console.error("[gsheets] row_hash migration failed — poller will retry on first poll:", e),
   );
+  // A lead left 'calling' was mid-dial when the process stopped; we cannot tell
+  // whether Plivo placed the call. Never re-dial it automatically — mark it
+  // failed so it shows up and can be retried by hand.
+  await query(
+    `UPDATE gsheet_lead SET status = 'failed', error = 'interrupted by a restart mid-call — check before retrying'
+     WHERE status = 'calling'`,
+  )
+    .then((r) => r.rowCount && console.warn(`[gsheets] ${r.rowCount} lead(s) left mid-call by a restart marked failed`))
+    .catch((e) => console.error("[gsheets] could not settle leads left mid-call:", e));
   console.info(`[gsheets] poller started — interval ${POLL_INTERVAL_MS / 1000}s`);
   const timer = setInterval(() => void pollAllClients(), POLL_INTERVAL_MS);
   if (timer && typeof (timer as any).unref === "function") (timer as any).unref();

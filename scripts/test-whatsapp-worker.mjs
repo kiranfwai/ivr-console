@@ -61,7 +61,7 @@ function dbConfig() {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/); if (m) env[m[1]] = m[2].trim();
   }
   return { host: env.PGHOST || "127.0.0.1", port: Number(env.PGPORT || 5432), user: env.PGUSER || "postgres",
-           password: env.PGPASSWORD || undefined, database: env.PGDATABASE || "ivr" };
+           password: env.PGPASSWORD || undefined, database: process.env.TEST_DB || env.PGDATABASE || "ivr" };
 }
 const db = new pg.Client(dbConfig());
 

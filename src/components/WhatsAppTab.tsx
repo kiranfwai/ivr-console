@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
-import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, toast } from "./ui";
+import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, ConfirmDialog, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts } from "@/lib/contacts";
 import ScheduleCard from "./ScheduleCard";
@@ -167,6 +167,11 @@ function BulkSend() {
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   // Reflects the job on the server, not a loop in this tab.
   const running = activeJob?.status === "running";
+  // A send reaches real people, so Start only opens a confirmation; `starting`
+  // locks the button while the request is in flight so a double click can't
+  // queue the same list twice.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [starting, setStarting] = useState(false);
   // Reflects the job on the server, not a loop in this tab.
 
   // Keep the "Recent WA jobs" list fresh without a manual refresh: poll the jobs
@@ -191,7 +196,8 @@ function BulkSend() {
 
   async function start() {
     const rows = parsed.rows;
-    if (!rows.length) return;
+    if (!rows.length || starting) return;
+    setStarting(true);
     const idempotencyKey = `idem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     try {
       const r = await apiRetry<{ job: BulkJobWithCounts }>("/api/bulk", {
@@ -208,9 +214,15 @@ function BulkSend() {
       setActiveJobId(r.job.id);
       setActiveJob(r.job);
       reloadJobs();
+      // Clear the list once it is queued. It used to stay saved in the browser,
+      // so the next visit showed "Start · N sends" for people already messaged.
+      setCsv("phone,name,email\n");
       toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends — you can close this tab`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
+    } finally {
+      setStarting(false);
+      setConfirmOpen(false);
     }
   }
 
@@ -351,11 +363,30 @@ function BulkSend() {
         </div>
 
         <div className="mt-4 flex justify-end">
-          <Button onClick={start} disabled={!previewCount || running} loading={running} leftIcon={<Play size={14} />} size="lg">
+          <Button onClick={() => setConfirmOpen(true)} disabled={!previewCount || running || starting} loading={running || starting} leftIcon={<Play size={14} />} size="lg">
             {running ? "Sending…" : `Start · ${previewCount.toLocaleString()} sends`}
           </Button>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        tone="primary"
+        title="Send WhatsApp messages?"
+        confirmLabel={`Send to ${previewCount.toLocaleString()} ${previewCount === 1 ? "person" : "people"}`}
+        busy={starting}
+        body={
+          <>
+            This will message <span className="font-medium text-ink">{previewCount.toLocaleString()}</span>{" "}
+            {previewCount === 1 ? "person" : "people"} — about{" "}
+            {Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))).toLocaleString()} min at{" "}
+            {ratePerMin.toLocaleString()}/min. Numbers on your Do Not Disturb list are skipped. Messages cannot be
+            recalled once sent; the list is cleared after it is queued.
+          </>
+        }
+        onConfirm={start}
+        onClose={() => !starting && setConfirmOpen(false)}
+      />
 
       {activeJob && counts && (
         <Card
@@ -379,9 +410,10 @@ function BulkSend() {
           }
         >
           <ProgressBar counts={counts} />
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2">
             <Stat label="Sent" value={counts.ok} tone="ok" />
             <Stat label="Failed" value={counts.failedAll} tone="danger" />
+            <Stat label="Skipped · DND" value={counts.dnd} tone="warn" />
             <Stat label="Pending" value={counts.pending} tone="muted" />
             <Stat label="Total" value={counts.total} tone="muted" />
           </div>
@@ -470,24 +502,29 @@ function tally(job: BulkJobWithCounts) {
     ok: c.ok ?? 0,
     failedAll: c.failed ?? 0,
     pending: c.pending ?? 0,
+    dnd: c.dnd ?? 0,
     dialing: c.dialing ?? 0,
     total: job.total || 0,
   };
 }
 
-function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; total: number } }) {
+function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; dnd: number; total: number } }) {
   const okPct = (counts.ok / counts.total) * 100;
   const failPct = (counts.failedAll / counts.total) * 100;
-  const donePct = okPct + failPct;
+  // DND skips are finished rows too — without them a job that skipped one
+  // number sat at "67% complete" forever.
+  const dndPct = (counts.dnd / counts.total) * 100;
+  const donePct = okPct + failPct + dndPct;
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted">{Math.round(donePct)}% complete</span>
-        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll} / {counts.total}</span>
+        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll + counts.dnd} / {counts.total}</span>
       </div>
       <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
         <div className="h-full bg-ok transition-all duration-500" style={{ width: `${okPct}%` }} />
         <div className="h-full bg-danger transition-all duration-500" style={{ width: `${failPct}%` }} />
+        <div className="h-full bg-muted/60 transition-all duration-500" style={{ width: `${dndPct}%` }} />
       </div>
     </div>
   );

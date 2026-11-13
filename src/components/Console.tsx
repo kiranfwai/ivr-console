@@ -30,7 +30,7 @@ const META: Record<TabId, { title: string; desc: string }> = {
   campaigns: { title: "Campaigns",       desc: "The audio, the message trigger and the caller ID for each campaign" },
   audios:    { title: "Audios",          desc: "The recordings your campaigns play when someone picks up" },
   numbers:   { title: "Phone Numbers",   desc: "The numbers you call from, on your own Plivo account" },
-  dnd:       { title: "Do Not Disturb",  desc: "Numbers that are never called — by single, trigger or bulk" },
+  dnd:       { title: "Do Not Disturb",  desc: "Numbers that are never called or messaged — calls, sheets, trigger API or WhatsApp" },
   reports:   { title: "Call reports",    desc: "Volumes, answer rate, outcomes, export" },
   sheetReports: { title: "Sheet reports", desc: "Every row a sheet produced, and what happened to it" },
   billing:   { title: "Billing & invoices", desc: "Wallet balance, top-ups, transactions and GST invoices" },

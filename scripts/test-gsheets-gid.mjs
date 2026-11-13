@@ -120,7 +120,7 @@ function dbConfig() {
     port: Number(env.PGPORT || 5432),
     user: env.PGUSER || "postgres",
     password: env.PGPASSWORD || undefined,
-    database: env.PGDATABASE || "ivr",
+    database: process.env.TEST_DB || env.PGDATABASE || "ivr",
   };
 }
 

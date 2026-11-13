@@ -34,6 +34,8 @@ export interface Campaign {
    *              outcome (answered, busy, no answer, failed) — and even when no
    *              call is made because of DND or a low wallet. Answer/press-1 then
    *              send nothing, so each lead still gets exactly one message.
+   *   "never"  — no WhatsApp at all from this campaign: not on place, not on
+   *              pickup, not on press 1. Press 1 is still counted.
    *
    * Absent means "press1": campaigns that already existed keep behaving exactly
    * as they did, and are moved over deliberately rather than by an upgrade.
@@ -41,7 +43,7 @@ export interface Campaign {
   whatsappTrigger?: WhatsappTrigger;
 }
 
-export type WhatsappTrigger = "answer" | "press1" | "always";
+export type WhatsappTrigger = "answer" | "press1" | "always" | "never";
 
 export type CallStatus =
   | "triggered"
@@ -82,6 +84,8 @@ export interface CallRecord {
    * so the answer / press-1 webhooks must not send another one.
    */
   notifyOnPlace?: boolean;
+  /** The campaign was set to "never" when this call was placed — send nothing. */
+  noWhatsapp?: boolean;
 }
 
 export type BulkRowStatus =

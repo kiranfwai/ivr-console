@@ -15,16 +15,41 @@ import {
 } from "lucide-react";
 import {
   Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, Modal,
-  Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
+  Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
 } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
-type WaTrigger = "answer" | "press1" | "always";
+type WaTrigger = "answer" | "press1" | "always" | "never";
 
 /** Anything unrecognised (or unset, on old campaigns) is the original press-1 behaviour. */
+/** How the campaigns split across the WhatsApp settings, as one bar + legend. */
+function WhatsappMix({ total, parts }: { total: number; parts: { label: string; value: number; dot: string }[] }) {
+  return (
+    <div className="rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.95)] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">WhatsApp message</div>
+      <div className="mt-2.5 flex h-2 w-full gap-[2px] overflow-hidden rounded-full bg-line">
+        {parts.filter((p) => p.value > 0).map((p) => (
+          <div key={p.label} className={`h-full ${p.dot}`} style={{ width: `${(p.value / Math.max(1, total)) * 100}%` }} />
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        {parts.map((p) => (
+          <div key={p.label} className={`min-w-0 ${p.value ? "" : "opacity-45"}`}>
+            <div className="flex items-center gap-1.5 text-[11.5px] text-muted">
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${p.dot}`} />
+              <span className="truncate">{p.label}</span>
+            </div>
+            <div className="mt-0.5 text-[18px] font-extrabold tabular-nums leading-tight tracking-[-0.03em]">{p.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function toTrigger(v: unknown): WaTrigger {
-  return v === "answer" || v === "always" ? v : "press1";
+  return v === "answer" || v === "always" || v === "never" ? v : "press1";
 }
 
 function isValidHttpsUrl(v: string) {
@@ -77,7 +102,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   // Search + paging: one live account has 107 campaigns in a single long table.
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
-  const PER_PAGE = 25;
+  const PER_PAGE = 10;
   const [confirmDelete, setConfirmDelete] = useState<Campaign | null>(null);
   const [testFor, setTestFor] = useState<Campaign | null>(null);
 
@@ -103,7 +128,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   const editorOpen = creating || !!editing || !!clone;
   const onAnswerCount = campaigns.filter((c) => c.whatsappTrigger === "answer").length;
   const alwaysCount = campaigns.filter((c) => c.whatsappTrigger === "always").length;
-  const press1Count = campaigns.length - onAnswerCount - alwaysCount;
+  const neverCount = campaigns.filter((c) => c.whatsappTrigger === "never").length;
+  const press1Count = campaigns.length - onAnswerCount - alwaysCount - neverCount;
   const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
 
   const needle = q.trim().toLowerCase();
@@ -138,30 +164,26 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
         </Card>
       ) : (
         <>
-          <Tiles>
+          {/* One summary row: how many campaigns, how they send WhatsApp (one
+              breakdown instead of four look-alike tiles), and caller ID. */}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2.4fr)_minmax(0,1fr)]">
             <Tile label="Campaigns" value={campaigns.length} sub={`${audios.length} audio${audios.length === 1 ? "" : "s"} available`} />
-            <Tile
-              label="Message on answer"
-              value={onAnswerCount}
-              sub="everyone who picks up gets it"
+            <WhatsappMix
+              total={campaigns.length}
+              parts={[
+                { label: "When they pick up", value: onAnswerCount, dot: "bg-ok" },
+                { label: "Everyone, on dial", value: alwaysCount, dot: "bg-brand" },
+                { label: "Only if they press 1", value: press1Count, dot: "bg-warn" },
+                { label: "Don’t send", value: neverCount, dot: "bg-muted" },
+              ]}
             />
             <Tile
-              label="Message everyone"
-              value={alwaysCount}
-              sub="sent when the call is placed"
+              label="Caller ID"
+              value={noFromCount ? `${noFromCount} of ${campaigns.length}` : "All set"}
+              sub={noFromCount ? "use the account default number" : "every campaign has its own number"}
+              tone={noFromCount ? "warn" : "ok"}
             />
-            <Tile
-              label="Only on press 1"
-              value={press1Count}
-              sub={press1Count ? "nothing sent unless they press" : "none"}
-              tone={press1Count ? "warn" : "muted"}
-            />
-            {/* Only worth a tile when it needs attention; a fifth "0 — all fine"
-                tile sat alone on its own row. */}
-            {noFromCount > 0 && (
-              <Tile label="No caller ID set" value={noFromCount} sub="using the account default" tone="warn" />
-            )}
-          </Tiles>
+          </div>
 
           <DataPanel
             title="Your campaigns"
@@ -224,6 +246,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                           <Badge tone="ok" className="whitespace-nowrap">Everyone, on dial</Badge>
                         ) : trigger === "answer" ? (
                           <Badge tone="ok" className="whitespace-nowrap">When they pick up</Badge>
+                        ) : trigger === "never" ? (
+                          <Badge tone="muted" className="whitespace-nowrap">Don&apos;t send</Badge>
                         ) : (
                           <Badge tone="warn" className="whitespace-nowrap">Only if they press 1</Badge>
                         )}
@@ -520,10 +544,13 @@ function CampaignEditor({
             <option value="answer">As soon as they pick up</option>
             <option value="press1">Only if they press 1</option>
             <option value="always">Everyone, when the call is placed (no conditions)</option>
+            <option value="never">Don&apos;t send — calls only</option>
           </Select>
           <div className="text-xs text-muted mt-1">
             {whatsappTrigger === "always"
-              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed, DND or low balance alike. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed or low balance alike. Numbers on your Do Not Disturb list are never messaged. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+              : whatsappTrigger === "never"
+              ? "This campaign only places calls. No WhatsApp is sent — not on pickup, not on press 1. Press 1 is still counted in reports."
               : whatsappTrigger === "answer"
               ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
               : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}

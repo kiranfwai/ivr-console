@@ -167,6 +167,16 @@ async function bootstrap(): Promise<void> {
     CREATE INDEX IF NOT EXISTS bulk_job_gated ON bulk_job (paused_reason)
       WHERE status='paused' AND paused_reason='low_balance';
 
+    -- The upload's idempotency key, stored ON the job. The unique index is what
+    -- makes a retried upload return the job it already created: the old check
+    -- lived in kv behind .catch(() => null), so when the database was refusing
+    -- connections it read as "no job yet" and each retry minted another one
+    -- (the 22 Aug 2026 duplicate WhatsApp blast). Now two racing retries cannot
+    -- both insert, and if the database is down no job is created at all.
+    ALTER TABLE bulk_job ADD COLUMN IF NOT EXISTS idem_key text;
+    CREATE UNIQUE INDEX IF NOT EXISTS bulk_job_idem ON bulk_job ((coalesce(client_id, '')), idem_key)
+      WHERE idem_key IS NOT NULL;
+
     -- Client logins. The admin is env-based (ADMIN_EMAIL / ADMIN_PASSWORD); every
     -- other login is a row here. perms is the JSON array of feature-tab ids the
     -- admin has granted this client (e.g. dial, bulk, reports).
@@ -479,7 +489,7 @@ async function bootstrap(): Promise<void> {
       call_uuid   text,                        -- our internal call id, null when no call was placed
       webhook_url text NOT NULL,
       payload     jsonb NOT NULL,
-      status      text NOT NULL DEFAULT 'pending', -- pending | sending | sent | failed | unknown
+      status      text NOT NULL DEFAULT 'pending', -- pending | sending | sent | failed | unknown | skipped (DND)
       http_status int,
       error       text,
       attempts    int NOT NULL DEFAULT 0,

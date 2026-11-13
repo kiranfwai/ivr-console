@@ -125,7 +125,8 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
         attemptedAt: new Date().toISOString(),
       });
     }
-    await notify("dnd", null);
+    // No WhatsApp / email either: DND means "do not contact", not just "do not
+    // call". "always" campaigns used to queue a message for DND numbers here.
     throw new DndSkipError(to);
   }
 
@@ -182,6 +183,7 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
     bulkJobId: bulkJobId || undefined,
     ...(callerName ? { name: callerName } : {}),
     ...(sendOnPlace ? { notifyOnPlace: true } : {}),
+    ...(triggerOf(campaign) === "never" ? { noWhatsapp: true } : {}),
   };
   await recordCall(record);
   await notify(result.ok ? "placed" : "call_failed", internalId, record.from);

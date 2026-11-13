@@ -3,7 +3,6 @@ import { createBulkJob, getJobWithCounts, listBulkJobs } from "@/lib/bulk";
 import { getCampaign } from "@/lib/campaigns";
 import { startWorker } from "@/lib/worker";
 import { createLimiter, BusyError } from "@/lib/limiter";
-import { redis } from "@/lib/redis";
 import { currentClientId } from "@/lib/tenant";
 import { canDial } from "@/lib/wallet";
 
@@ -84,16 +83,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Idempotency: a retried upload (same key, after a 503/504/network blip) must
-  // not create a duplicate job. If we already minted one for this key, return it.
-  if (idempotencyKey) {
-    const existing = await redis().get<string>(`bulkidem:${idempotencyKey}`).catch(() => null);
-    if (existing) {
-      const job = await getJobWithCounts(existing).catch(() => null);
-      if (job) return NextResponse.json({ job, idempotent: true });
-    }
-  }
-
   try {
     const job = await uploadLimiter(() =>
       createBulkJob({
@@ -104,11 +93,16 @@ export async function POST(req: NextRequest) {
         delayMs: typeof delayMs === "number" ? delayMs : 0,
         jitterPct: typeof jitterPct === "number" ? jitterPct : undefined,
         concurrency: typeof concurrency === "number" ? concurrency : undefined,
+        // A retried upload (same key, after a 503/504/network blip) gets the job
+        // it already created back. Enforced by a unique index in the database,
+        // so it holds under concurrent retries and fails closed if the DB is down.
+        idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
       }),
     );
 
-    if (idempotencyKey) {
-      await redis().set(`bulkidem:${idempotencyKey}`, job.id, { ex: 2 * 60 * 60 }).catch(() => {});
+    if (job.idempotent) {
+      const existing = await getJobWithCounts(job.id);
+      return NextResponse.json({ job: existing ?? job, idempotent: true });
     }
     // Ensure the backend worker is running even if the boot hook didn't fire.
     if (kind === "call") await startWorker().catch(() => {});
