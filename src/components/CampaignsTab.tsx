@@ -20,11 +20,11 @@ import {
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
 
-type WaTrigger = "answer" | "press1" | "always";
+type WaTrigger = "answer" | "press1" | "always" | "never";
 
 /** Anything unrecognised (or unset, on old campaigns) is the original press-1 behaviour. */
 function toTrigger(v: unknown): WaTrigger {
-  return v === "answer" || v === "always" ? v : "press1";
+  return v === "answer" || v === "always" || v === "never" ? v : "press1";
 }
 
 function isValidHttpsUrl(v: string) {
@@ -77,7 +77,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   // Search + paging: one live account has 107 campaigns in a single long table.
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
-  const PER_PAGE = 25;
+  const PER_PAGE = 10;
   const [confirmDelete, setConfirmDelete] = useState<Campaign | null>(null);
   const [testFor, setTestFor] = useState<Campaign | null>(null);
 
@@ -103,7 +103,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   const editorOpen = creating || !!editing || !!clone;
   const onAnswerCount = campaigns.filter((c) => c.whatsappTrigger === "answer").length;
   const alwaysCount = campaigns.filter((c) => c.whatsappTrigger === "always").length;
-  const press1Count = campaigns.length - onAnswerCount - alwaysCount;
+  const neverCount = campaigns.filter((c) => c.whatsappTrigger === "never").length;
+  const press1Count = campaigns.length - onAnswerCount - alwaysCount - neverCount;
   const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
 
   const needle = q.trim().toLowerCase();
@@ -156,6 +157,9 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
               sub={press1Count ? "nothing sent unless they press" : "none"}
               tone={press1Count ? "warn" : "muted"}
             />
+            {neverCount > 0 && (
+              <Tile label="No WhatsApp" value={neverCount} sub="calls only, nothing sent" tone="muted" />
+            )}
             {/* Only worth a tile when it needs attention; a fifth "0 — all fine"
                 tile sat alone on its own row. */}
             {noFromCount > 0 && (
@@ -224,6 +228,8 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                           <Badge tone="ok" className="whitespace-nowrap">Everyone, on dial</Badge>
                         ) : trigger === "answer" ? (
                           <Badge tone="ok" className="whitespace-nowrap">When they pick up</Badge>
+                        ) : trigger === "never" ? (
+                          <Badge tone="muted" className="whitespace-nowrap">Don&apos;t send</Badge>
                         ) : (
                           <Badge tone="warn" className="whitespace-nowrap">Only if they press 1</Badge>
                         )}
@@ -520,10 +526,13 @@ function CampaignEditor({
             <option value="answer">As soon as they pick up</option>
             <option value="press1">Only if they press 1</option>
             <option value="always">Everyone, when the call is placed (no conditions)</option>
+            <option value="never">Don&apos;t send — calls only</option>
           </Select>
           <div className="text-xs text-muted mt-1">
             {whatsappTrigger === "always"
-              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed, DND or low balance alike. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed or low balance alike. Numbers on your Do Not Disturb list are never messaged. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+              : whatsappTrigger === "never"
+              ? "This campaign only places calls. No WhatsApp is sent — not on pickup, not on press 1. Press 1 is still counted in reports."
               : whatsappTrigger === "answer"
               ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
               : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}

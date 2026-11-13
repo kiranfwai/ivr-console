@@ -126,6 +126,7 @@ export async function fireOne(
     bulkJobId: jobId,
     ...(row.name ? { name: row.name } : {}),
     ...(sendOnPlace ? { notifyOnPlace: true } : {}),
+    ...(triggerOf(campaign) === "never" ? { noWhatsapp: true } : {}),
   });
   await notify(result.ok ? "placed" : "call_failed", internalId, fromNumber);
 

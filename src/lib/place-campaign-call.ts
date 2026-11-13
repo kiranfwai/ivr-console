@@ -183,6 +183,7 @@ export async function placeCampaignCall(input: PlaceCampaignCallInput): Promise<
     bulkJobId: bulkJobId || undefined,
     ...(callerName ? { name: callerName } : {}),
     ...(sendOnPlace ? { notifyOnPlace: true } : {}),
+    ...(triggerOf(campaign) === "never" ? { noWhatsapp: true } : {}),
   };
   await recordCall(record);
   await notify(result.ok ? "placed" : "call_failed", internalId, record.from);
