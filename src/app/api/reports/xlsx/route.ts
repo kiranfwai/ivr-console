@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import ExcelJS from "exceljs";
-import { listCalls } from "@/lib/calls";
+import { listCallsForCampaigns } from "@/lib/report-export";
+import { parseCampaignIds } from "@/lib/report-format";
 import { deriveOutcome } from "@/lib/outcome";
 import { injectCharts, type ChartSpec } from "@/lib/xlsx-charts";
 
@@ -42,14 +43,15 @@ export async function GET(req: NextRequest) {
   const day = url.searchParams.get("day") || undefined;
   const from = url.searchParams.get("from") || undefined;
   const to = url.searchParams.get("to") || undefined;
-  const campaignId = url.searchParams.get("campaign") || undefined;
+  const campaignIds = parseCampaignIds(url.searchParams);
+  const campaignId = campaignIds.length ? campaignIds.join(", ") : undefined;
 
   // Row-level export must materialize records (unlike the counter-based KPIs).
   // Cap to keep the function within memory/time limits; narrow the range for more.
   const EXPORT_CAP = 50000;
   let calls;
   try {
-    calls = await listCalls({ limit: EXPORT_CAP, day, from, to, campaignId });
+    calls = await listCallsForCampaigns({ limit: EXPORT_CAP, day, from, to, campaignIds });
   } catch (e) {
     console.error("[reports/xlsx] export failed:", e);
     return new Response("Export failed — the database is busy. Try a narrower range.", { status: 503 });

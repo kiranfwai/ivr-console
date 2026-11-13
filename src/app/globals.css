@@ -2,49 +2,102 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   Theme tokens. RGB channels so Tailwind opacity modifiers work
+   (`bg-brand/10`). Light is the default; <html data-theme="dark">
+   switches. The theme is set before first paint by a small script in
+   layout.tsx, so there is no flash of the wrong theme.
+   ------------------------------------------------------------------ */
 :root {
-  /* The whole app is dark. Without this the browser draws native pop-ups —
-     <select> option lists, date pickers — as white light-mode panels, and the
-     light option text (inherited from the dark UI) becomes unreadable on them. */
+  color-scheme: light;
+  --c-bg: 244 245 248;
+  --c-panel: 255 255 255;
+  --c-elev: 248 249 251;
+  --c-line: 220 224 231;
+  --c-line2: 196 203 214;
+  --c-ink: 14 21 37;
+  --c-ink2: 52 64 84;
+  --c-muted: 102 112 133;
+  --c-brand: 27 43 107;      /* FWAI navy */
+  --c-onbrand: 255 255 255;
+  --c-accent: 27 43 107;
+  --c-brand2: 14 159 142;    /* FWAI teal */
+  --c-ok: 6 118 71;
+  --c-ok2: 23 178 106;
+  --c-warn: 181 71 8;
+  --c-warn2: 247 144 9;
+  --c-danger: 180 35 24;
+  --c-danger2: 240 68 56;
+  --c-info: 105 65 198;
+  --c-scrim: 14 21 37;
+
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow-card: 0 1px 3px rgb(16 24 40 / 0.07), 0 1px 2px rgb(16 24 40 / 0.04);
+  --shadow-pop: 0 20px 40px -12px rgb(16 24 40 / 0.22), 0 0 0 1px rgb(16 24 40 / 0.04);
+  --canvas-glow: none;
+}
+
+:root[data-theme="dark"] {
   color-scheme: dark;
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --c-bg: 10 13 20;
+  --c-panel: 16 20 29;
+  --c-elev: 22 27 38;
+  --c-line: 34 40 53;
+  --c-line2: 48 56 74;
+  --c-ink: 236 238 242;
+  --c-ink2: 182 189 201;
+  --c-muted: 130 139 155;
+  --c-brand: 236 238 242;    /* off-white primary action */
+  --c-onbrand: 10 13 20;
+  --c-accent: 124 140 248;   /* soft indigo */
+  --c-brand2: 44 197 176;
+  --c-ok: 98 214 160;
+  --c-ok2: 63 207 142;
+  --c-warn: 242 184 101;
+  --c-warn2: 240 163 58;
+  --c-danger: 245 139 139;
+  --c-danger2: 239 91 91;
+  --c-info: 124 140 248;
+  --c-scrim: 3 5 9;
+
+  --shadow-xs: none;
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.045);
+  --shadow-pop: 0 30px 70px -15px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.07);
+  --canvas-glow: radial-gradient(1100px 380px at 55% -140px, rgb(124 140 248 / 0.09), transparent 70%);
 }
 
 html, body {
-  background: #0a0c10;
-  color: #e8ecf3;
-  font-feature-settings: "cv11", "ss01", "ss03";
+  background: rgb(var(--c-bg));
+  color: rgb(var(--c-ink));
+  font-feature-settings: "cv11", "ss01";
 }
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-geist-sans), Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: -0.003em;
 }
-
-select option, select optgroup { background: #12161d; color: #e8ecf3; }
-
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1f2531; border-radius: 8px; border: 2px solid #0a0c10; }
-::-webkit-scrollbar-thumb:hover { background: #2a3142; }
-
-/* Subtle radial gradient on the body — adds depth without being noisy */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(94,234,212,0.06), transparent 50%),
-    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(99,102,241,0.04), transparent 50%);
+  background: var(--canvas-glow);
   pointer-events: none;
   z-index: -1;
 }
 
-input, textarea, select, button { font: inherit; }
+select option, select optgroup { background: rgb(var(--c-panel)); color: rgb(var(--c-ink)); }
 
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
-  cursor: pointer;
-}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--c-line)); border-radius: 8px; border: 2px solid rgb(var(--c-bg)); }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-line2)); }
+
+input, textarea, select, button { font: inherit; }
+.tabular-nums, .num { font-variant-numeric: tabular-nums; }
+
+:root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+:root[data-theme="dark"] input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+:root[data-theme="dark"] input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.75); }
+input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
 
 input[type="range"] {
   -webkit-appearance: none;
@@ -53,7 +106,7 @@ input[type="range"] {
 }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
-  background: #1f2531;
+  background: rgb(var(--c-line));
   border-radius: 9999px;
 }
 input[type="range"]::-webkit-slider-thumb {
@@ -62,19 +115,31 @@ input[type="range"]::-webkit-slider-thumb {
   height: 16px;
   width: 16px;
   border-radius: 9999px;
-  background: #5eead4;
+  background: rgb(var(--c-accent));
   margin-top: -6px;
-  box-shadow: 0 0 0 4px rgba(94,234,212,0.15);
+  box-shadow: 0 0 0 4px rgb(var(--c-accent) / 0.15);
   cursor: pointer;
 }
-input[type="range"]:focus {
-  outline: none;
-}
+input[type="range"]:focus { outline: none; }
 
-/* Number-input arrows look ugly in dark mode — hide them */
 input[type=number]::-webkit-outer-spin-button,
 input[type=number]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 input[type=number] { -moz-appearance: textfield; }
+
+/* Smooth theme switch without animating every layout change. */
+.theme-anim, .theme-anim * { transition: background-color .2s ease, border-color .2s ease, color .2s ease !important; }
+
+@keyframes ivr-live { 0% { box-shadow: 0 0 0 0 rgb(var(--c-ok2) / .45) } 70% { box-shadow: 0 0 0 6px rgb(var(--c-ok2) / 0) } 100% { box-shadow: 0 0 0 0 rgb(var(--c-ok2) / 0) } }
+.live-dot { animation: ivr-live 2s infinite; }
+
+/* ---- app shell ---- */
+:root { --c-side: 250 251 252; --top-bg: rgb(255 255 255 / 0.82); }
+:root[data-theme="dark"] { --c-side: 8 11 17; --top-bg: rgb(10 13 20 / 0.72); }
+.ivr-side { background: rgb(var(--c-side)); }
+.ivr-top { background: var(--top-bg); backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); }
+.ivr-nav-on { background: rgb(var(--c-panel)); box-shadow: 0 1px 3px rgb(16 24 40 / .08), 0 0 0 1px rgb(var(--c-line)); }
+.ivr-nav-on::before { content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--c-accent)); }
+:root[data-theme="dark"] .ivr-nav-on { background: rgb(255 255 255 / 0.06); box-shadow: none; }

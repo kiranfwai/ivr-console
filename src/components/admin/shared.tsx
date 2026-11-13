@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Calendar } from "lucide-react";
 import { api } from "../useData";
 import { istToday, istDaysAgo } from "./money";
+import { Seg } from "../AdminTabKit";
 
 /** One client's volumes + cost over the selected range (from /api/admin/analytics). */
 export interface AnalyticsRow {
@@ -76,17 +77,20 @@ export function viewAsClient(id: string, tab = "reports") {
   window.location.href = `/?tab=${tab}`;
 }
 
-const PRESETS: { label: string; from: () => string; days: number }[] = [
-  { label: "Today", from: () => istToday(), days: 0 },
-  { label: "7d", from: () => istDaysAgo(6), days: 6 },
-  { label: "30d", from: () => istDaysAgo(29), days: 29 },
-  { label: "90d", from: () => istDaysAgo(89), days: 89 },
+const PRESETS: { id: string; label: string; from: () => string }[] = [
+  { id: "today", label: "Today", from: () => istToday() },
+  { id: "7", label: "7 days", from: () => istDaysAgo(6) },
+  { id: "30", label: "30 days", from: () => istDaysAgo(29) },
+  { id: "90", label: "90 days", from: () => istDaysAgo(89) },
   // "All" reaches back ~2 years — within readRange's 800-day cap — so historical
   // (pre-clients) data surfaces without a migration.
-  { label: "All", from: () => istDaysAgo(729), days: 729 },
+  { id: "all", label: "All", from: () => istDaysAgo(729) },
 ];
 
-/** From/To date inputs with quick presets. Controlled by the parent view. */
+const DATE_CLS =
+  "h-[30px] rounded-lg border border-line bg-panel px-2 text-[12.5px] text-ink shadow-xs outline-none hover:border-line2 focus:border-accent focus:shadow-glow";
+
+/** Preset segmented control + From/To dates. Controlled by the parent view. */
 export function RangeControl({
   from,
   to,
@@ -97,44 +101,38 @@ export function RangeControl({
   onChange: (from: string, to: string) => void;
 }) {
   const today = istToday();
+  const active = PRESETS.find((p) => from === p.from() && to === today)?.id ?? "";
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="flex items-center gap-1.5 text-muted">
-        <Calendar size={14} />
-      </div>
-      <input
-        type="date"
-        value={from}
-        max={to}
-        onChange={(e) => onChange(e.target.value, to)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+      <Seg
+        value={active}
+        size="sm"
+        options={PRESETS.map((p) => ({ id: p.id, label: p.label }))}
+        onChange={(id) => {
+          const p = PRESETS.find((x) => x.id === id);
+          if (p) onChange(p.from(), today);
+        }}
       />
-      <span className="text-muted text-xs">→</span>
-      <input
-        type="date"
-        value={to}
-        min={from}
-        max={today}
-        onChange={(e) => onChange(from, e.target.value)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
-      />
-      <div className="flex items-center gap-1 ml-1">
-        {PRESETS.map((p) => {
-          const active = from === p.from() && to === today;
-          return (
-            <button
-              key={p.label}
-              onClick={() => onChange(p.from(), today)}
-              className={`px-2 py-1 rounded-md text-xs border transition-colors ${
-                active
-                  ? "bg-brand/10 text-brand border-brand/25"
-                  : "text-ink2 border-line hover:bg-elev/60"
-              }`}
-            >
-              {p.label}
-            </button>
-          );
-        })}
+      <div className="flex items-center gap-1.5">
+        <Calendar size={14} className="text-muted" aria-hidden="true" />
+        <input
+          type="date"
+          value={from}
+          max={to}
+          onChange={(e) => onChange(e.target.value, to)}
+          className={DATE_CLS}
+          aria-label="From date"
+        />
+        <span className="text-xs text-muted">–</span>
+        <input
+          type="date"
+          value={to}
+          min={from}
+          max={today}
+          onChange={(e) => onChange(from, e.target.value)}
+          className={DATE_CLS}
+          aria-label="To date"
+        />
       </div>
     </div>
   );

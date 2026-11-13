@@ -12,10 +12,11 @@ import {
   AlertCircle,
   Power,
   Plus,
-  ChevronDown,
-  ChevronUp,
   Edit2,
   BarChart3,
+  ExternalLink,
+  X,
+  Search,
 } from "lucide-react";
 import {
   Button,
@@ -28,10 +29,22 @@ import {
   Spinner,
   EmptyState,
   Loading,
+  DataPanel,
+  DataTable,
+  TH,
+  TD,
+  Kebab,
+  ConfirmDialog,
+  IconButton,
   toast,
 } from "@/components/ui";
 import { api } from "@/components/useData";
 import type { GSheetConn, GSheetLead, LeadStatus, CallOutcome } from "@/lib/gsheets";
+import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
+import { fmtDateTime } from "@/lib/format";
+import { formatPhone } from "@/lib/phone";
+import SheetReportPanel from "./SheetReportPanel";
+import { CheckBox } from "./ReportsTabUi";
 
 /** Reply from /api/gsheets/preview — what one tab holds, before anything is saved. */
 interface SheetPreview {
@@ -45,32 +58,31 @@ interface SheetPreview {
   header: string[];
   error: string | null;
 }
-import { describeTab, extractSheetTarget } from "@/lib/gsheet-tab";
-import { fmtDateTime } from "@/lib/format";
-import { formatPhone } from "@/lib/phone";
-import SheetReportPanel from "./SheetReportPanel";
 
 type Campaign = { id: string; name: string };
+type Tone = "ok" | "accent" | "warn" | "danger" | "muted" | "info";
 
-const STATUS_META: Record<LeadStatus, { label: string; tone: "ok" | "accent" | "warn" | "danger" | "muted" }> = {
-  queued:  { label: "Queued",  tone: "accent" },
-  calling: { label: "Calling", tone: "warn"   },
+const STATUS_META: Record<LeadStatus, { label: string; tone: Tone }> = {
+  queued:  { label: "Queued",  tone: "muted"  },
+  calling: { label: "Calling", tone: "accent" },
   called:  { label: "Called",  tone: "ok"     },
   failed:  { label: "Failed",  tone: "danger" },
 };
 
-const OUTCOME_META: Record<CallOutcome, { label: string; tone: "ok" | "accent" | "warn" | "danger" | "muted" }> = {
-  connected:  { label: "Answered",     tone: "ok"     },
-  press1:     { label: "Pressed 1",    tone: "accent" },
-  busy:       { label: "Busy",         tone: "warn"   },
-  "no-answer":{ label: "No Answer",    tone: "muted"  },
-  rejected:   { label: "Invalid No.",  tone: "danger" },
-  error:      { label: "Error",        tone: "danger" },
-  failed:     { label: "Failed",       tone: "danger" },
+const OUTCOME_META: Record<CallOutcome, { label: string; tone: Tone }> = {
+  connected:  { label: "Answered",       tone: "ok"     },
+  press1:     { label: "Pressed 1",      tone: "ok"     },
+  busy:       { label: "Busy",           tone: "warn"   },
+  "no-answer":{ label: "No answer",      tone: "muted"  },
+  rejected:   { label: "Invalid number", tone: "danger" },
+  error:      { label: "Error",          tone: "danger" },
+  failed:     { label: "Failed",         tone: "danger" },
 };
 
+type StatusFilter = "all" | LeadStatus;
+
 function fmtHour(h: number) {
-  const ampm = h >= 12 ? "PM" : "AM";
+  const ampm = h >= 12 ? "pm" : "am";
   const h12  = h % 12 || 12;
   return `${h12}:00 ${ampm}`;
 }
@@ -78,6 +90,25 @@ function fmtHour(h: number) {
 function fmtTime(iso: string | null) {
   return fmtDateTime(iso, { short: true });
 }
+
+/** "just now", "4 min ago", "3 h ago", else the date. */
+function ago(iso: string | null): string {
+  if (!iso) return "Never";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "—";
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return "Just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h ago`;
+  return fmtTime(iso);
+}
+
+function sheetHref(conn: GSheetConn) {
+  return `https://docs.google.com/spreadsheets/d/${conn.sheetId}${conn.gid ? `/edit#gid=${conn.gid}` : ""}`;
+}
+
+type PollReply = { ok: boolean; newRows: number; called: number; queued: number; flushed: number; error?: string };
 
 // ---------------------------------------------------------------------------
 // Main tab component
@@ -90,11 +121,17 @@ export default function GSheetsTab() {
   // response and an empty list after one mean opposite things to the reader.
   const [leadsLoaded, setLeadsLoaded]  = useState(false);
   const [campaigns, setCampaigns]     = useState<Campaign[]>([]);
-  const [showConnectForm, setShowConnectForm] = useState(false);
+  // The connect / edit drawer: null = closed, "new" = connect, else the connection being edited.
+  const [drawer, setDrawer]           = useState<GSheetConn | "new" | null>(null);
   const [polling, setPolling]         = useState(false);
   const [clearing, setClearing]       = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [deletingSelected, setDeletingSelected] = useState(false);
+  const [callingSelected, setCallingSelected] = useState(false);
+  const [confirmCallSelected, setConfirmCallSelected] = useState(false);
+  const [reportFor, setReportFor]     = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const loadConnections = useCallback(async () => {
     try {
@@ -139,29 +176,31 @@ export default function GSheetsTab() {
     return () => clearInterval(interval);
   }, [loadLeads]);
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadConnections(), loadLeads()]);
+  }, [loadConnections, loadLeads]);
+
   async function pollAll() {
     setPolling(true);
     try {
-      const r = await api<{ ok: boolean; newRows: number; called: number; queued: number; flushed: number; error?: string }>(
-        "/api/gsheets/poll", { method: "POST" },
-      );
+      const r = await api<PollReply>("/api/gsheets/poll", { method: "POST" });
       if (r.error) toast(`Poll warning: ${r.error}`, "danger");
-      else toast(`Polled — ${r.newRows} new row(s), ${r.called} called, ${r.queued} queued, ${r.flushed} flushed.`, "ok");
-      await Promise.all([loadConnections(), loadLeads()]);
+      else toast(`Checked — ${r.newRows} new row(s), ${r.called} called, ${r.queued} queued, ${r.flushed} flushed.`, "ok");
+      await refreshAll();
     } catch (e: any) {
-      toast(e.message || "Poll failed", "danger");
+      toast(e.message || "Check failed", "danger");
     }
     setPolling(false);
   }
 
   async function clearAll() {
-    if (!window.confirm("Clear ALL leads across all connections? This cannot be undone.\n\nRow-progress pointers are kept so no rows will be re-dialled.")) return;
     setClearing(true);
     try {
       await api("/api/gsheets/leads", { method: "DELETE" });
       toast("All leads cleared.", "info");
       setLeads([]);
       setSelectedIds(new Set());
+      setConfirmClear(false);
     } catch (e: any) {
       toast(e.message || "Could not clear", "danger");
     }
@@ -222,22 +261,47 @@ export default function GSheetsTab() {
     setDeletingSelected(false);
   }
 
-  // Search + paging over the loaded queue (the server returns the newest 300).
+  // Selected leads that can be called now (same rule as the per-row button).
+  const callableSelected = leads.filter(
+    (l) => selectedIds.has(l.id) && (l.status === "queued" || l.status === "failed"),
+  );
+
+  async function callSelected() {
+    setCallingSelected(true);
+    let ok = 0;
+    let bad = 0;
+    for (const l of callableSelected) {
+      try {
+        const r = await api<{ ok: boolean; error?: string }>(`/api/gsheets/leads/${l.id}/call`, { method: "POST" });
+        if (r.ok) ok++;
+        else bad++;
+      } catch {
+        bad++;
+      }
+    }
+    toast(bad ? `${ok} call(s) triggered, ${bad} failed.` : `${ok} call(s) triggered.`, bad ? "danger" : "ok");
+    setSelectedIds(new Set());
+    setConfirmCallSelected(false);
+    setCallingSelected(false);
+    await loadLeads();
+  }
+
+  // Search + status + paging over the loaded queue (the server returns the newest 300).
   const [leadQuery, setLeadQuery] = useState("");
   const [leadPage, setLeadPage] = useState(0);
   const LEAD_PAGE = 50;
   const filteredLeads = useMemo(() => {
     const q = leadQuery.trim().toLowerCase();
-    if (!q) return leads;
+    const byStatus = statusFilter === "all" ? leads : leads.filter((l) => l.status === statusFilter);
+    if (!q) return byStatus;
     const qd = q.replace(/\D+/g, "");
-    return leads.filter((l) =>
+    return byStatus.filter((l) =>
       (l.name || "").toLowerCase().includes(q) ||
       (qd && l.phone.replace(/\D+/g, "").includes(qd)));
-  }, [leads, leadQuery]);
+  }, [leads, leadQuery, statusFilter]);
   const pageCount = Math.max(1, Math.ceil(filteredLeads.length / LEAD_PAGE));
   const page = Math.min(leadPage, pageCount - 1);
   const pageLeads = filteredLeads.slice(page * LEAD_PAGE, (page + 1) * LEAD_PAGE);
-  // A sheet without a name column gave every row "—"; drop the column then.
   const showNames = leads.some((l) => !!l.name);
 
   if (connections === undefined) {
@@ -248,117 +312,119 @@ export default function GSheetsTab() {
     );
   }
 
-
   const counts = leads.reduce<Record<string, number>>((acc, l) => {
     acc[l.status] = (acc[l.status] ?? 0) + 1;
     return acc;
   }, {});
 
   const connMap = new Map(connections.map((c) => [c.id, c]));
+  const campaignName = (id: string) => campaigns.find((c) => c.id === id)?.name ?? id;
+  const reportConn = reportFor ? connMap.get(reportFor) : undefined;
+  const someSelected = selectedIds.size > 0;
 
   return (
     <Section>
-      {/* Connection cards */}
-      {connections.length === 0 && !showConnectForm ? (
-        <Card
-          title={
-            <span className="flex items-center gap-2">
-              <FileSpreadsheet size={16} className="text-brand" /> Sheet Auto-Dial
-            </span>
-          }
-          description="Connect a Google Sheet to automatically dial leads within a calling window."
-        >
-          <Button
-            leftIcon={<Plus size={14} />}
-            onClick={() => setShowConnectForm(true)}
-          >
-            Connect a Google Sheet
+      {/* Screen actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[13px] text-muted">
+          {connections.length
+            ? `${connections.length} sheet${connections.length === 1 ? "" : "s"} connected · checked every 5 minutes`
+            : "No sheets connected yet"}
+        </span>
+        <span className="flex-1" />
+        {connections.length > 0 && (
+          <Button variant="ghost" leftIcon={!polling && <RefreshCw size={14} />} onClick={pollAll} loading={polling}>
+            Check now
           </Button>
+        )}
+        <Button leftIcon={<Plus size={14} />} onClick={() => setDrawer("new")}>
+          Connect a sheet
+        </Button>
+      </div>
+
+      {/* Connection cards */}
+      {connections.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<FileSpreadsheet size={20} />}
+            title="Connect your first Google Sheet"
+            description="New rows in the sheet get called automatically, inside your calling window."
+            action={
+              <Button leftIcon={<Plus size={14} />} onClick={() => setDrawer("new")}>
+                Connect a sheet
+              </Button>
+            }
+          />
         </Card>
       ) : (
-        <>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {connections.map((conn) => (
             <SheetConnectionCard
               key={conn.id}
               conn={conn}
-              campaigns={campaigns}
-              onRefresh={async () => {
-                await Promise.all([loadConnections(), loadLeads()]);
-              }}
+              campaignName={campaignName(conn.campaignId)}
+              queued={leads.filter((l) => l.connId === conn.id && l.status === "queued").length}
+              reporting={reportFor === conn.id}
+              onReport={() => setReportFor((r) => (r === conn.id ? null : conn.id))}
+              onEdit={() => setDrawer(conn)}
+              onRefresh={refreshAll}
             />
           ))}
-
-          {/* New connection form */}
-          {showConnectForm ? (
-            <ConnectSheetForm
-              campaigns={campaigns}
-              onSaved={async () => {
-                setShowConnectForm(false);
-                await Promise.all([loadConnections(), loadLeads()]);
-              }}
-              onCancel={() => setShowConnectForm(false)}
-            />
-          ) : (
-            <div className="flex">
-              <Button
-                variant="ghost"
-                size="sm"
-                leftIcon={<Plus size={14} />}
-                onClick={() => setShowConnectForm(true)}
-              >
-                Connect another sheet
-              </Button>
-            </div>
-          )}
-        </>
+        </div>
       )}
 
-      {/* Lead Queue — shown only when at least one connection exists */}
+      {reportConn && (
+        <SheetReportPanel
+          key={reportConn.id}
+          conn={reportConn}
+          campaignName={campaignName(reportConn.campaignId)}
+          onClose={() => setReportFor(null)}
+        />
+      )}
+
+      {/* Lead queue — shown only when at least one connection exists */}
       {connections.length > 0 && (
-        <Card
-          title={
-            <span className="flex items-center gap-2">
-              <Clock size={16} className="text-brand" /> Lead Queue
-            </span>
-          }
-          description="Rows picked up from all connected sheets — called automatically within each connection's window, queued outside it."
+        <DataPanel
+          title="Lead queue"
+          meta={`Every row your sheets sent, and what happened to it.${leads.length >= 300 ? " Showing the newest 300." : ""}`}
           action={
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge tone="muted">{leads.length >= 300 ? "newest 300" : `${leads.length} total`}</Badge>
-              {counts.queued  ? <Badge tone="accent">{counts.queued} queued</Badge>  : null}
-              {counts.called  ? <Badge tone="ok">{counts.called} called</Badge>      : null}
-              {counts.failed  ? <Badge tone="danger">{counts.failed} failed</Badge>  : null}
-              <Button
-                size="sm"
-                variant="ghost"
-                leftIcon={<RefreshCw size={13} />}
-                onClick={pollAll}
-                loading={polling}
-              >
-                Poll all
-              </Button>
-              {selectedIds.size > 0 && (
-                <Button
-                  size="sm"
-                  variant="danger"
-                  leftIcon={<Trash2 size={13} />}
-                  onClick={deleteSelected}
-                  loading={deletingSelected}
-                >
-                  Delete selected ({selectedIds.size})
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="danger"
-                leftIcon={<Trash2 size={13} />}
-                onClick={clearAll}
-                loading={clearing}
-                disabled={leads.length === 0}
-              >
+            <>
+              <div className="inline-flex flex-wrap gap-0.5 rounded-[10px] border border-line bg-ink/[0.04] p-[3px]">
+                {(["all", "queued", "calling", "called", "failed"] as StatusFilter[]).map((s) => {
+                  const n = s === "all" ? leads.length : counts[s] || 0;
+                  const on = statusFilter === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => { setStatusFilter(s); setLeadPage(0); }}
+                      className={`flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[13px] font-medium transition-colors ${
+                        on ? "bg-panel text-ink shadow-xs" : "text-muted hover:text-ink"
+                      }`}
+                    >
+                      {s === "all" ? "All" : STATUS_META[s].label}
+                      {n > 0 && <span className="text-[11.5px] tabular-nums text-muted">{n}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <Button size="sm" variant="subtle" leftIcon={<Trash2 size={13} />} disabled={!leads.length} onClick={() => setConfirmClear(true)}>
                 Clear all
               </Button>
-            </div>
+            </>
+          }
+          footer={
+            pageCount > 1 ? (
+              <div className="flex items-center justify-between">
+                <span>
+                  Showing <b className="font-medium text-ink">{page * LEAD_PAGE + 1}–{Math.min(filteredLeads.length, (page + 1) * LEAD_PAGE)}</b> of {filteredLeads.length}
+                </span>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setLeadPage(page - 1)}>Previous</Button>
+                  <Button size="sm" variant="ghost" disabled={page >= pageCount - 1} onClick={() => setLeadPage(page + 1)}>Next</Button>
+                </div>
+              </div>
+            ) : undefined
           }
         >
           {!leadsLoaded ? (
@@ -367,73 +433,130 @@ export default function GSheetsTab() {
             <EmptyState
               icon={<FileSpreadsheet size={20} />}
               title="No leads yet"
-              description="Click 'Poll all' or wait for the background sync to pick up new rows from your sheets."
+              description="Press “Check now” or wait for the background check to pick up new rows from your sheets."
             />
           ) : (
             <>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Input
-                value={leadQuery}
-                onChange={(e) => { setLeadQuery(e.target.value); setLeadPage(0); }}
-                placeholder={showNames ? "Search name or phone…" : "Search phone…"}
-                className="max-w-xs"
-              />
-              {leadQuery && <span className="text-xs text-muted">{filteredLeads.length} match{filteredLeads.length === 1 ? "" : "es"}</span>}
-            </div>
-            <div className="overflow-auto -mx-1">
-              <table className="w-full text-sm">
+              <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+                <div className="relative w-full max-w-xs">
+                  <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                  <Input
+                    value={leadQuery}
+                    onChange={(e) => { setLeadQuery(e.target.value); setLeadPage(0); }}
+                    placeholder={showNames ? "Search name or phone" : "Search phone"}
+                    className="pl-8"
+                  />
+                </div>
+                {(leadQuery || statusFilter !== "all") && (
+                  <span className="text-xs text-muted">{filteredLeads.length} match{filteredLeads.length === 1 ? "" : "es"}</span>
+                )}
+              </div>
+
+              {someSelected && (
+                <div className="flex flex-wrap items-center gap-2.5 border-y border-accent/20 bg-accent/[0.06] px-5 py-2.5 text-[13px] font-medium text-accent">
+                  <span>{selectedIds.size} selected</span>
+                  <button type="button" className="text-xs font-normal text-muted hover:text-ink" onClick={() => setSelectedIds(new Set())}>
+                    Clear selection
+                  </button>
+                  <span className="flex-1" />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leftIcon={<Phone size={13} />}
+                    disabled={!callableSelected.length || callingSelected}
+                    onClick={() => setConfirmCallSelected(true)}
+                  >
+                    Call now{callableSelected.length && callableSelected.length !== selectedIds.size ? ` (${callableSelected.length})` : ""}
+                  </Button>
+                  <Button size="sm" variant="danger" leftIcon={<Trash2 size={13} />} onClick={deleteSelected} loading={deletingSelected}>
+                    Remove
+                  </Button>
+                </div>
+              )}
+
+              <DataTable>
                 <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                    <th className="py-2 px-1 w-6">
-                      <input
-                        type="checkbox"
-                        checked={allQueuedSelected}
+                  <tr>
+                    <th className={`${TH} w-11 pr-0`}>
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllQueued}
                         disabled={queuedLeads.length === 0}
-                        onChange={toggleSelectAllQueued}
                         title="Select all queued"
-                        className="cursor-pointer accent-brand"
-                      />
+                        aria-label="Select all queued"
+                        className="disabled:opacity-40"
+                      >
+                        <CheckBox on={allQueuedSelected} part={!allQueuedSelected && someSelected} />
+                      </button>
                     </th>
-                    {showNames && <th className="font-medium py-2 px-1">Name</th>}
-                    <th className="font-medium px-1">Phone</th>
-                    <th className="font-medium px-1 hidden sm:table-cell">Connection</th>
-                    <th className="font-medium px-1 hidden sm:table-cell">Status</th>
-                    <th className="font-medium px-1">Call Result</th>
-                    <th className="font-medium px-1 hidden md:table-cell">Duration</th>
-                    <th className="font-medium px-1 hidden md:table-cell">Called at</th>
-                    <th className="font-medium px-1 text-right">Actions</th>
+                    <th className={TH}>Lead</th>
+                    <th className={`${TH} hidden sm:table-cell`}>Sheet</th>
+                    <th className={TH}>Status</th>
+                    <th className={`${TH} hidden md:table-cell`}>Result</th>
+                    <th className={`${TH} hidden md:table-cell`}>Called at</th>
+                    <th className={`${TH} w-[130px]`} />
                   </tr>
                 </thead>
                 <tbody>
                   {pageLeads.map((lead) => (
                     <LeadRow
                       key={lead.id}
-                      showName={showNames}
                       lead={lead}
                       conn={lead.connId ? connMap.get(lead.connId) : undefined}
-                      campaigns={campaigns}
                       selected={selectedIds.has(lead.id)}
                       onToggleSelect={() => toggleSelect(lead.id)}
                       onCall={() => callLead(lead.id)}
                       onRemove={() => removeLead(lead.id)}
                     />
                   ))}
+                  {!pageLeads.length && (
+                    <tr>
+                      <td colSpan={7} className="px-5 py-8 text-center text-sm text-muted">No leads match.</td>
+                    </tr>
+                  )}
                 </tbody>
-              </table>
-            </div>
-            {pageCount > 1 && (
-              <div className="mt-3 flex items-center justify-between text-xs text-muted">
-                <span>{page * LEAD_PAGE + 1}–{Math.min(filteredLeads.length, (page + 1) * LEAD_PAGE)} of {filteredLeads.length}</span>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" disabled={page === 0} onClick={() => setLeadPage(page - 1)}>Prev</Button>
-                  <Button size="sm" variant="ghost" disabled={page >= pageCount - 1} onClick={() => setLeadPage(page + 1)}>Next</Button>
-                </div>
-              </div>
-            )}
+              </DataTable>
             </>
           )}
-        </Card>
+        </DataPanel>
       )}
+
+      {drawer && (
+        <ConnectSheetDrawer
+          existing={drawer === "new" ? undefined : drawer}
+          campaigns={campaigns}
+          onSaved={async () => {
+            setDrawer(null);
+            await refreshAll();
+          }}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+
+      <ConfirmDialog
+        open={confirmClear}
+        title="Clear all leads?"
+        body={
+          <>
+            Every lead across all connections is removed from the queue. This cannot be undone.
+            <div className="mt-2 text-muted">Row-progress pointers are kept, so no rows will be re-dialled.</div>
+          </>
+        }
+        confirmLabel="Clear all"
+        busy={clearing}
+        onConfirm={clearAll}
+        onClose={() => setConfirmClear(false)}
+      />
+      <ConfirmDialog
+        open={confirmCallSelected}
+        title={`Call ${callableSelected.length} lead${callableSelected.length === 1 ? "" : "s"} now?`}
+        body="Each selected queued or failed lead is called right away, ahead of the queue. Numbers on your Do not disturb list are still skipped."
+        confirmLabel="Call now"
+        tone="primary"
+        busy={callingSelected}
+        onConfirm={callSelected}
+        onClose={() => setConfirmCallSelected(false)}
+      />
     </Section>
   );
 }
@@ -444,20 +567,25 @@ export default function GSheetsTab() {
 
 function SheetConnectionCard({
   conn,
-  campaigns,
+  campaignName,
+  queued,
+  reporting,
+  onReport,
+  onEdit,
   onRefresh,
 }: {
   conn: GSheetConn;
-  campaigns: Campaign[];
+  campaignName: string;
+  queued: number;
+  reporting: boolean;
+  onReport: () => void;
+  onEdit: () => void;
   onRefresh: () => Promise<void>;
 }) {
-  const [editing, setEditing]   = useState(false);
   const [toggling, setToggling] = useState(false);
   const [polling, setPolling]   = useState(false);
   const [busy, setBusy]         = useState(false);
-  const [reporting, setReporting] = useState(false);
-
-  const campaignName = campaigns.find((c) => c.id === conn.campaignId)?.name ?? conn.campaignId;
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
   async function toggleEnabled() {
     setToggling(true);
@@ -477,25 +605,25 @@ function SheetConnectionCard({
   async function pollNow() {
     setPolling(true);
     try {
-      const r = await api<{ ok: boolean; newRows: number; called: number; queued: number; flushed: number; error?: string }>(
+      const r = await api<PollReply>(
         "/api/gsheets/poll",
         { method: "POST", body: JSON.stringify({ connId: conn.id }) },
       );
       if (r.error) toast(`Poll warning: ${r.error}`, "danger");
-      else toast(`Polled — ${r.newRows} new row(s), ${r.called} called, ${r.queued} queued, ${r.flushed} flushed.`, "ok");
+      else toast(`Checked — ${r.newRows} new row(s), ${r.called} called, ${r.queued} queued, ${r.flushed} flushed.`, "ok");
       await onRefresh();
     } catch (e: any) {
-      toast(e.message || "Poll failed", "danger");
+      toast(e.message || "Check failed", "danger");
     }
     setPolling(false);
   }
 
   async function disconnect() {
-    if (!window.confirm("Disconnect this sheet? All its lead records will be deleted.")) return;
     setBusy(true);
     try {
       await api(`/api/gsheets/config/${conn.id}`, { method: "DELETE" });
       toast("Sheet disconnected.", "info");
+      setConfirmDisconnect(false);
       await onRefresh();
     } catch (e: any) {
       toast(e.message || "Could not disconnect", "danger");
@@ -503,123 +631,108 @@ function SheetConnectionCard({
     setBusy(false);
   }
 
-  if (editing) {
-    return (
-      <ConnectSheetForm
-        existing={conn}
-        campaigns={campaigns}
-        onSaved={async () => {
-          setEditing(false);
-          await onRefresh();
-        }}
-        onCancel={() => setEditing(false)}
-      />
-    );
-  }
+  const status = conn.lastError
+    ? <Badge tone="danger" dot>Not syncing</Badge>
+    : conn.enabled
+      ? <Badge tone="ok" dot>Active</Badge>
+      : <Badge tone="muted">Paused</Badge>;
 
   return (
-    <>
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          <CheckCircle2 size={16} className={conn.enabled ? "text-ok" : "text-muted"} />
-          <span>{conn.connName || "Sheet connected"}</span>
-          {conn.enabled ? (
-            <Badge tone="ok">Active</Badge>
-          ) : (
-            <Badge tone="muted">Paused</Badge>
-          )}
-        </span>
-      }
-      description={`Polls every 5 min · Window: ${fmtHour(conn.callStartHour)} – ${fmtHour(conn.callEndHour)}`}
-      action={
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<BarChart3 size={13} />}
-            onClick={() => setReporting((r) => !r)}
-          >
-            {reporting ? "Hide report" : "Report"}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<RefreshCw size={13} />}
-            onClick={pollNow}
-            loading={polling}
-            disabled={!conn.enabled}
-          >
-            Poll
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<Power size={13} />}
-            onClick={toggleEnabled}
-            loading={toggling}
-          >
-            {conn.enabled ? "Pause" : "Resume"}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            leftIcon={<Edit2 size={13} />}
-            onClick={() => setEditing(true)}
-          >
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            leftIcon={<Link2Off size={13} />}
-            onClick={disconnect}
-            disabled={busy}
-          >
-            Disconnect
-          </Button>
+    <div className={`flex flex-col rounded-xl border bg-panel px-5 py-[18px] shadow-card ${reporting ? "border-accent/40" : "border-line"}`}>
+      <div className="flex items-start gap-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] border border-ok/25 bg-ok/[0.09] text-ok">
+          <FileSpreadsheet size={18} />
         </div>
-      }
-    >
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-        <StatBox label="Tab" value={describeTab(conn)}
-                 href={`https://docs.google.com/spreadsheets/d/${conn.sheetId}${conn.gid ? `/edit#gid=${conn.gid}` : ""}`} />
-        <StatBox label="Campaign" value={campaignName} />
-        <StatBox label="Last synced" value={fmtTime(conn.lastSyncedAt)} />
-        <StatBox label="Rows processed" value={String(conn.lastRow)} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[15px] font-semibold tracking-[-0.01em]" title={conn.connName || undefined}>
+            {conn.connName || "Sheet connected"}
+          </div>
+          <div className="mt-0.5 truncate text-[12.5px] text-muted">Tab: {describeTab(conn)}</div>
+        </div>
+        {status}
       </div>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <Badge tone="accent"><span className="max-w-[200px] truncate">{campaignName}</span></Badge>
+        <Badge tone="muted">
+          <Clock size={11} />
+          {fmtHour(conn.callStartHour)}–{fmtHour(conn.callEndHour)}
+        </Badge>
+      </div>
+
       {conn.lastError && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          <span>{conn.lastError}</span>
+        <div className="mt-3 flex gap-2.5 rounded-[10px] border border-danger/25 bg-danger/[0.07] px-3 py-2.5 text-[13px] leading-snug text-danger">
+          <AlertCircle size={15} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 break-words">{conn.lastError}</span>
         </div>
       )}
-    </Card>
-    {reporting && (
-      <SheetReportPanel
-        conn={conn}
-        campaignName={campaignName}
-        onClose={() => setReporting(false)}
+
+      <div className="mt-3.5 grid grid-cols-3 gap-2">
+        <MiniTile label="Queued" value={String(queued)} />
+        <MiniTile label="Rows read" value={conn.lastRow.toLocaleString("en-IN")} />
+        <MiniTile label="Last check" value={ago(conn.lastSyncedAt)} small title={fmtTime(conn.lastSyncedAt)} />
+      </div>
+
+      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-3.5">
+        <a
+          href={sheetHref(conn)}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex h-[30px] items-center gap-1.5 rounded-[9px] border border-line bg-panel px-2.5 text-[12.5px] font-semibold text-ink shadow-xs transition-colors hover:border-line2 hover:bg-elev"
+        >
+          <ExternalLink size={13} /> Open sheet
+        </a>
+        <Button size="sm" variant="ghost" leftIcon={!polling && <RefreshCw size={13} />} onClick={pollNow} loading={polling} disabled={!conn.enabled}>
+          Check now
+        </Button>
+        <span className="flex-1" />
+        <Kebab
+          label="Sheet actions"
+          items={[
+            { label: reporting ? "Hide report" : "Sheet report", icon: <BarChart3 size={14} />, onClick: onReport },
+            { label: toggling ? "Working…" : conn.enabled ? "Pause" : "Resume", icon: <Power size={14} />, onClick: () => { if (!toggling) void toggleEnabled(); } },
+            { label: "Edit", icon: <Edit2 size={14} />, onClick: onEdit },
+            { label: "Disconnect", icon: <Link2Off size={14} />, danger: true, onClick: () => setConfirmDisconnect(true) },
+          ]}
+        />
+      </div>
+
+      <ConfirmDialog
+        open={confirmDisconnect}
+        title="Disconnect this sheet?"
+        body={<>“{conn.connName || describeTab(conn)}” stops being checked, and all its lead records are deleted.</>}
+        confirmLabel="Disconnect"
+        busy={busy}
+        onConfirm={disconnect}
+        onClose={() => setConfirmDisconnect(false)}
       />
-    )}
-    </>
+    </div>
+  );
+}
+
+function MiniTile({ label, value, small, title }: { label: string; value: string; small?: boolean; title?: string }) {
+  return (
+    <div className="min-w-0 rounded-[10px] border border-line bg-elev/60 px-3 py-2" title={title}>
+      <div className="text-xs text-muted">{label}</div>
+      <div className={`mt-0.5 truncate font-semibold tabular-nums ${small ? "pt-1 text-[13px]" : "text-[19px] tracking-[-0.02em]"}`}>{value}</div>
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Connect / Edit form
+// Connect / Edit drawer
 // ---------------------------------------------------------------------------
 
-function ConnectSheetForm({
+function ConnectSheetDrawer({
   existing,
   campaigns,
   onSaved,
-  onCancel,
+  onClose,
 }: {
   existing?: GSheetConn;
   campaigns: Campaign[];
   onSaved: () => Promise<void>;
-  onCancel: () => void;
+  onClose: () => void;
 }) {
   const [connName, setConnName]     = useState(existing?.connName ?? "");
   const [sheetUrl, setSheetUrl]     = useState(
@@ -657,6 +770,15 @@ function ConnectSheetForm({
     if (touchedMode) return;
     setTabMode(urlGid ? "gid" : "name");
   }, [urlGid, touchedMode]);
+
+  // Escape closes (unless a save is in flight).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
 
   function chooseMode(mode: "gid" | "name") {
     setTouchedMode(true);
@@ -723,191 +845,181 @@ function ConnectSheetForm({
   }
 
   return (
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          <FileSpreadsheet size={16} className="text-brand" />
-          {existing ? "Edit sheet connection" : "Connect a Google Sheet"}
-        </span>
-      }
-      description="Paste your Google Sheet URL. The sheet must be shared as 'Anyone with the link can view'."
-    >
-      <div className="space-y-4 max-w-xl">
-        {err && (
-          <div className="text-sm text-danger flex items-center gap-1.5">
-            <AlertCircle size={14} /> {err}
+    <div className="fixed inset-0 z-40 animate-fade-in" role="dialog" aria-modal="true" aria-label={existing ? "Edit sheet connection" : "Connect a Google Sheet"}>
+      <div className="absolute inset-0 bg-scrim/50 backdrop-blur-[3px]" onClick={() => !busy && onClose()} />
+      <div className="absolute bottom-2.5 right-2.5 top-2.5 flex w-[min(580px,calc(100vw-1.25rem))] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-pop animate-slide-up">
+        <div className="flex items-start gap-3 border-b border-line px-6 pb-[18px] pt-5">
+          <div className="min-w-0 flex-1">
+            <div className="text-[19px] font-semibold tracking-[-0.025em]">{existing ? "Edit sheet connection" : "Connect a Google Sheet"}</div>
+            <div className="mt-0.5 text-[13px] text-muted">New rows will be called inside your calling window.</div>
           </div>
-        )}
-
-        <div>
-          <Label hint="optional">Connection name</Label>
-          <Input
-            value={connName}
-            onChange={(e) => setConnName(e.target.value)}
-            placeholder="e.g. August Evening Leads, Hyderabad Campaign…"
-          />
-          <p className="mt-1 text-xs text-muted">A display name to identify this sheet connection (shown in the card header and call logs).</p>
+          <IconButton icon={<X size={16} />} onClick={onClose} disabled={busy} aria-label="Close" />
         </div>
 
-        <div>
-          <Label required>Google Sheet URL</Label>
-          <Input
-            value={sheetUrl}
-            onChange={(e) => { setSheetUrl(e.target.value); setPreview(null); }}
-            placeholder="https://docs.google.com/spreadsheets/d/…"
-          />
-          <p className="mt-1 text-xs text-muted">Paste the full URL — the Sheet ID is extracted automatically.</p>
-          <div className="mt-2 flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={checkSheet}
-              loading={checking}
-              disabled={!sheetUrl.trim()}
-              type="button"
-            >
-              Check this sheet
-            </Button>
-            <span className="text-xs text-muted">Counts what is in the tab. Calls nobody.</span>
-          </div>
-          {preview && (
-            <div className="mt-2 rounded-lg border border-line bg-elev/40 px-3 py-2 text-sm">
-              {preview.error ? (
-                <>
-                  <div className="text-danger">{preview.error}</div>
-                  {preview.header.length > 0 && (
-                    <div className="mt-1 text-xs text-muted">
-                      Columns found: {preview.header.filter((h) => h.trim()).join(", ") || "none"}. One of them
-                      must be named exactly <span className="font-mono">phone</span>, in the first row.
+        <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          {err && (
+            <div className="flex items-start gap-2 rounded-[10px] border border-danger/25 bg-danger/[0.07] px-3 py-2.5 text-[13px] text-danger">
+              <AlertCircle size={15} className="mt-0.5 shrink-0" /> {err}
+            </div>
+          )}
+
+          <div>
+            <Label required>Google Sheet link</Label>
+            <Input
+              value={sheetUrl}
+              onChange={(e) => { setSheetUrl(e.target.value); setPreview(null); }}
+              placeholder="https://docs.google.com/spreadsheets/d/…"
+              autoFocus
+            />
+            <p className="mt-1 text-xs text-muted">Share the sheet as “Anyone with the link can view”. Paste the full link — the sheet ID is read from it.</p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={checkSheet} loading={checking} disabled={!sheetUrl.trim()} type="button">
+                Check this sheet
+              </Button>
+              <span className="text-xs text-muted">Counts what is in the tab. Calls nobody.</span>
+            </div>
+            {preview && (
+              <div className={`mt-2.5 rounded-[10px] border px-3 py-2.5 text-[13px] ${preview.error ? "border-danger/25 bg-danger/[0.06]" : "border-ok/25 bg-ok/[0.06]"}`}>
+                {preview.error ? (
+                  <>
+                    <div className="text-danger">{preview.error}</div>
+                    {preview.header.length > 0 && (
+                      <div className="mt-1 text-xs text-muted">
+                        Columns found: {preview.header.filter((h) => h.trim()).join(", ") || "none"}. One of them
+                        must be named exactly <span className="font-mono">phone</span>, in the first row.
+                      </div>
+                    )}
+                    {preview.rows > 0 && (
+                      <div className="mt-1 text-xs text-muted">The tab has {preview.rows} row(s), so the tab itself is being read.</div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-1.5 text-ink">
+                      <CheckCircle2 size={14} className="text-ok" />
+                      {preview.rows} row(s), <span className="font-medium text-ok">{preview.usable} number(s) to call</span>
                     </div>
-                  )}
-                  {preview.rows > 0 && (
-                    <div className="mt-1 text-xs text-muted">The tab has {preview.rows} row(s), so the tab itself is being read.</div>
+                    {(preview.invalid > 0 || preview.blank > 0 || preview.duplicates > 0) && (
+                      <div className="mt-1 text-xs text-muted">
+                        {preview.invalid > 0 && <>{preview.invalid} with an unreadable phone. </>}
+                        {preview.blank > 0 && <>{preview.blank} with no phone at all. </>}
+                        {preview.duplicates > 0 && <>{preview.duplicates} duplicate number(s) — each person is called once.</>}
+                      </div>
+                    )}
+                    <div className="mt-1 text-xs text-muted">
+                      Reading {preview.tab.gid ? `the tab from your link (gid ${preview.tab.gid})` : `the tab named “${preview.tab.name}”`}
+                      {preview.header.length > 0 && <> · columns: {preview.header.filter((h) => h.trim()).join(", ")}</>}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <Label>Which tab to dial</Label>
+              <div className="inline-flex gap-0.5 rounded-[10px] border border-line bg-ink/[0.04] p-[3px]">
+                {([["gid", "From the link"], ["name", "By name"]] as const).map(([m, l]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => chooseMode(m)}
+                    disabled={m === "gid" && !urlGid}
+                    className={`h-7 rounded-[7px] px-2.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                      tabMode === m ? "bg-panel text-ink shadow-xs" : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {tabMode === "name" ? (
+                <>
+                  <Input
+                    className="mt-2"
+                    value={tabName}
+                    onChange={(e) => { setTabName(e.target.value); setPreview(null); }}
+                    placeholder="Sheet1"
+                  />
+                  <p className="mt-1 text-xs text-muted">
+                    Must match the tab name in Google exactly. Renaming the tab there breaks this connection.
+                  </p>
+                  {urlGid && (
+                    <p className="mt-1 text-xs text-warn">
+                      Your link points at a specific tab (gid {urlGid}), but this will read the tab named
+                      “{tabName.trim() || "Sheet1"}” instead.
+                    </p>
                   )}
                 </>
               ) : (
-                <>
-                  <div className="text-ink">
-                    {preview.rows} row(s), <span className="text-brand">{preview.usable} number(s) to call</span>
-                  </div>
-                  {(preview.invalid > 0 || preview.blank > 0 || preview.duplicates > 0) && (
-                    <div className="mt-1 text-xs text-muted">
-                      {preview.invalid > 0 && <>{preview.invalid} with an unreadable phone. </>}
-                      {preview.blank > 0 && <>{preview.blank} with no phone at all. </>}
-                      {preview.duplicates > 0 && <>{preview.duplicates} duplicate number(s) — each person is called once.</>}
-                    </div>
-                  )}
-                  <div className="mt-1 text-xs text-muted">
-                    Reading {preview.tab.gid ? `the tab from your link (gid ${preview.tab.gid})` : `the tab named “${preview.tab.name}”`}
-                    {preview.header.length > 0 && <> · columns: {preview.header.filter((h) => h.trim()).join(", ")}</>}
-                  </div>
-                </>
+                <p className="mt-2 text-xs text-muted">
+                  Reads the tab your link was open on (gid {urlGid}). Survives the tab being renamed.
+                </p>
+              )}
+              {!urlGid && (
+                <p className="mt-1 text-xs text-muted">
+                  To pick the tab from the link instead, open that tab in Google Sheets and copy the URL from
+                  the address bar — it ends in <span className="font-mono">#gid=…</span>
+                </p>
               )}
             </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>Which tab to dial</Label>
-            <div className="flex items-center gap-1.5 mt-1">
-              <Button
-                size="sm"
-                variant={tabMode === "gid" ? "primary" : "outline"}
-                onClick={() => chooseMode("gid")}
-                disabled={!urlGid}
-                type="button"
-              >
-                From the link
-              </Button>
-              <Button
-                size="sm"
-                variant={tabMode === "name" ? "primary" : "outline"}
-                onClick={() => chooseMode("name")}
-                type="button"
-              >
-                By name
-              </Button>
+            <div>
+              <Label hint="optional">Name</Label>
+              <Input
+                value={connName}
+                onChange={(e) => setConnName(e.target.value)}
+                placeholder="e.g. Evening leads"
+              />
+              <p className="mt-1 text-xs text-muted">Shown on the card and in call logs.</p>
             </div>
-            {tabMode === "name" ? (
-              <>
-                <Input
-                  className="mt-2"
-                  value={tabName}
-                  onChange={(e) => { setTabName(e.target.value); setPreview(null); }}
-                  placeholder="Sheet1"
-                />
-                <p className="mt-1 text-xs text-muted">
-                  Must match the tab name in Google exactly. Renaming the tab there breaks this connection.
-                </p>
-                {urlGid && (
-                  <p className="mt-1 text-xs text-warn">
-                    Your link points at a specific tab (gid {urlGid}), but this will read the tab named
-                    “{tabName.trim() || "Sheet1"}” instead.
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="mt-2 text-xs text-muted">
-                Reads the tab your link was open on (gid {urlGid}). Survives the tab being renamed.
-              </p>
-            )}
-            {!urlGid && (
-              <p className="mt-1 text-xs text-muted">
-                To pick the tab from the link instead, open that tab in Google Sheets and copy the URL from
-                the address bar — it ends in <span className="font-mono">#gid=…</span>
-              </p>
-            )}
           </div>
+
           <div>
-            <Label required>Campaign (IVR audio)</Label>
-            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+            <Label required>Campaign</Label>
+            <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)} invalid={!campaignId}>
               <option value="">Choose campaign…</option>
               {campaigns.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </Select>
             {campaigns.length === 0 && (
-              <p className="mt-1 text-xs text-warn">No campaigns yet — create one in the Campaigns tab first.</p>
+              <p className="mt-1 text-xs text-warn">No campaigns yet — create one in Campaigns first.</p>
             )}
           </div>
-        </div>
 
-        <div>
-          <Label>Calling window</Label>
-          <div className="flex items-center gap-3 mt-1">
-            <Select value={startHour} onChange={(e) => setStartHour(e.target.value)} className="w-32">
-              {HOURS.slice(0, 24).map((h) => (
-                <option key={h} value={h}>{fmtHour(h)}</option>
-              ))}
-            </Select>
-            <span className="text-muted text-sm">to</span>
-            <Select value={endHour} onChange={(e) => setEndHour(e.target.value)} className="w-32">
-              {HOURS.slice(1).map((h) => (
-                <option key={h} value={h}>{fmtHour(h)}</option>
-              ))}
-            </Select>
+          <div>
+            <Label>Calling window</Label>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+              <Select value={startHour} onChange={(e) => setStartHour(e.target.value)}>
+                {HOURS.slice(0, 24).map((h) => (
+                  <option key={h} value={h}>{fmtHour(h)}</option>
+                ))}
+              </Select>
+              <span className="text-sm text-muted">to</span>
+              <Select value={endHour} onChange={(e) => setEndHour(e.target.value)}>
+                {HOURS.slice(1).map((h) => (
+                  <option key={h} value={h}>{fmtHour(h)}</option>
+                ))}
+              </Select>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              Rows found inside this window are called right away. Outside it they are queued and called when the window opens.
+            </p>
           </div>
-          <p className="mt-1 text-xs text-muted">
-            Rows detected inside this window are called immediately. Outside it they are queued and called when the window opens.
-          </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={save}
-            loading={busy}
-            disabled={!sheetUrl.trim() || !campaignId}
-            leftIcon={<CheckCircle2 size={14} />}
-          >
-            {existing ? "Save changes" : "Connect sheet"}
-          </Button>
-          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+        <div className="flex items-center gap-2 border-t border-line bg-elev/60 px-6 py-3.5">
+          <span className="flex-1" />
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
+          </Button>
+          <Button onClick={save} loading={busy} disabled={!sheetUrl.trim() || !campaignId}>
+            {existing ? "Save changes" : "Connect sheet"}
           </Button>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -916,22 +1028,18 @@ function ConnectSheetForm({
 // ---------------------------------------------------------------------------
 
 function LeadRow({
-  showName = true,
   lead,
   conn,
-  campaigns,
   selected,
   onToggleSelect,
   onCall,
   onRemove,
 }: {
-  showName?: boolean;
   lead: GSheetLead;
   conn: GSheetConn | undefined;
-  campaigns: Campaign[];
   selected: boolean;
   onToggleSelect: () => void;
-  onCall: () => void;
+  onCall: () => Promise<void>;
   onRemove: () => void;
 }) {
   const [calling, setCalling] = useState(false);
@@ -950,95 +1058,71 @@ function LeadRow({
       ? lead.connId.replace(/^legacy-/, "")
       : "—";
 
+  const outcome = lead.callOutcome ? OUTCOME_META[lead.callOutcome] : null;
+
   return (
-    <tr className={`border-t border-line hover:bg-elev/40 ${selected ? "bg-brand/5" : ""}`}>
-      <td className="py-2 px-1 w-6">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
-          className="cursor-pointer accent-brand"
-        />
+    <tr className={`transition-colors ${selected ? "bg-accent/[0.05]" : "hover:bg-ink/[0.025]"}`}>
+      <td className={`${TD} w-11 pr-0`}>
+        <button type="button" onClick={onToggleSelect} aria-label={selected ? "Deselect lead" : "Select lead"} aria-pressed={selected}>
+          <CheckBox on={selected} />
+        </button>
       </td>
-      {showName && (
-        <td className="py-2 px-1 font-medium truncate max-w-[120px]" title={lead.name ?? ""}>
-          {lead.name || <span className="text-muted">—</span>}
-        </td>
-      )}
-      <td className="px-1 font-mono tabular-nums text-xs whitespace-nowrap">{formatPhone(lead.phone)}</td>
-      <td className="px-1 text-xs text-muted truncate max-w-[120px] hidden sm:table-cell" title={connLabel}>
-        {connLabel}
-      </td>
-      <td className="px-1 hidden sm:table-cell">
-        <div className="flex flex-col items-start gap-0.5">
-          <Badge tone={meta.tone}>{meta.label}</Badge>
-          {lead.error && (
-            <span className="text-[10px] text-danger truncate max-w-[120px]" title={lead.error}>
-              {lead.error}
-            </span>
-          )}
+      <td className={TD}>
+        <div className="max-w-[180px] truncate font-medium" title={lead.name ?? ""}>
+          {lead.name || <span className="font-normal tabular-nums">{formatPhone(lead.phone)}</span>}
         </div>
+        {lead.name && <div className="text-xs tabular-nums text-muted">{formatPhone(lead.phone)}</div>}
       </td>
-      <td className="px-1">
-        {lead.callOutcome ? (
-          // The carrier's code (USER_BUSY, NORMAL_CLEARING…) stays in the tooltip
-          // for support; the outcome label is what people read.
-          <span title={lead.hangupCause || undefined}>
-            <Badge tone={OUTCOME_META[lead.callOutcome]?.tone ?? "muted"}>
-              {OUTCOME_META[lead.callOutcome]?.label ?? lead.callOutcome}
-            </Badge>
-          </span>
-        ) : (
-          <span className="text-muted text-xs">—</span>
+      <td className={`${TD} hidden max-w-[200px] truncate text-muted sm:table-cell`} title={connLabel}>
+        {connLabel} · row {lead.rowIndex}
+      </td>
+      <td className={TD}>
+        <Badge tone={meta.tone} dot={lead.status === "calling"}>{meta.label}</Badge>
+        {lead.error && (
+          <div className="mt-0.5 max-w-[160px] truncate text-[11px] text-danger" title={lead.error}>
+            {lead.error}
+          </div>
         )}
       </td>
-      <td className="px-1 text-xs text-muted tabular-nums whitespace-nowrap hidden md:table-cell">
-        {lead.durationSec != null ? `${lead.durationSec}s` : "—"}
+      <td className={`${TD} hidden md:table-cell`}>
+        {outcome ? (
+          // The carrier's code (USER_BUSY, NORMAL_CLEARING…) stays in the tooltip
+          // for support; the outcome label is what people read.
+          <span title={lead.hangupCause || undefined} className="text-ink2">
+            {outcome.label}
+            {lead.durationSec != null && lead.durationSec > 0 && (
+              <span className="tabular-nums text-muted"> · {Math.floor(lead.durationSec / 60)}:{String(lead.durationSec % 60).padStart(2, "0")}</span>
+            )}
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
       </td>
-      <td className="px-1 text-xs text-muted tabular-nums whitespace-nowrap hidden md:table-cell">
+      <td className={`${TD} hidden whitespace-nowrap tabular-nums text-muted md:table-cell`}>
         {fmtTime(lead.calledAt)}
       </td>
-      <td className="px-1 text-right">
-        <div className="inline-flex items-center gap-1">
+      <td className={TD}>
+        <div className="flex items-center justify-end gap-1">
           {canCall && (
-            <button
-              onClick={handleCall}
-              disabled={calling}
-              className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-brand px-2 py-1 rounded-md hover:bg-elev disabled:opacity-50"
-              title="Trigger call now"
-            >
-              {calling ? <Spinner size={12} /> : <Phone size={12} />}
-              Call
-            </button>
+            <Button size="sm" variant="ghost" onClick={handleCall} loading={calling} leftIcon={!calling && <Phone size={12} />}>
+              Call now
+            </Button>
           )}
-          <button
-            onClick={onRemove}
-            className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-danger px-2 py-1 rounded-md hover:bg-elev"
-            title="Remove from queue"
-          >
-            <Trash2 size={12} />
-          </button>
+          {conn && (
+            <a
+              href={sheetHref(conn)}
+              target="_blank"
+              rel="noreferrer"
+              title="Open in sheet"
+              aria-label="Open in sheet"
+              className="inline-flex rounded-[9px] p-1.5 text-muted transition-colors hover:bg-ink/[0.05] hover:text-ink"
+            >
+              <ExternalLink size={14} />
+            </a>
+          )}
+          <IconButton size="sm" variant="danger" icon={<Trash2 size={14} />} onClick={onRemove} title="Remove from queue" />
         </div>
       </td>
     </tr>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-function StatBox({ label, value, href }: { label: string; value: string; href?: string }) {
-  return (
-    <div className="bg-bg/50 border border-line rounded-lg px-3 py-2 min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      {href ? (
-        <a href={href} target="_blank" rel="noreferrer" className="block text-sm font-medium text-ink truncate hover:text-brand" title="Open the sheet">
-          {value} ↗
-        </a>
-      ) : (
-        <div className="text-sm font-medium text-ink truncate">{value}</div>
-      )}
-    </div>
   );
 }

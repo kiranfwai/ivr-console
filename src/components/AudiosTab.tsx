@@ -1,49 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link as LinkIcon, Upload, Trash2, Music, X, Clock, Play, Pause } from "lucide-react";
+import { Link as LinkIcon, Upload, Trash2, Music, X, Clock, Plus } from "lucide-react";
 import {
-  Button, Card, Input, Label, Badge, EmptyState, Loading, Section, Modal,
-  Tiles, Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
+  Button, Card, Input, Label, EmptyState, Loading, Section, Modal,
+  Kebab, ConfirmDialog, toast,
 } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
+import { fmtDate } from "@/lib/format";
+import { PlayRound, Seg, SearchField, WaveBars, seedOf } from "./CampaignsKit";
 
 /* -------------------- helpers -------------------- */
 
-/**
- * A small dark play/pause button for the library rows. The browser's own
- * <audio controls> drew a white bar per row that read "0:00 / 0:00" until
- * played, on a dark page. One shared player: starting a row stops the last.
- */
-let sharedPlayer: HTMLAudioElement | null = null;
-const PLAY_EVENT = "ivr-audio-play";
-function PlayButton({ src, label }: { src: string; label: string }) {
-  const [playing, setPlaying] = useState(false);
-  useEffect(() => {
-    const other = (e: Event) => { if ((e as CustomEvent).detail !== src) setPlaying(false); };
-    window.addEventListener(PLAY_EVENT, other);
-    return () => window.removeEventListener(PLAY_EVENT, other);
-  }, [src]);
-  function toggle() {
-    if (playing) { sharedPlayer?.pause(); setPlaying(false); return; }
-    sharedPlayer?.pause();
-    sharedPlayer = new Audio(src);
-    sharedPlayer.onended = () => setPlaying(false);
-    sharedPlayer.onerror = () => { setPlaying(false); toast("Couldn't play this audio", "danger"); };
-    window.dispatchEvent(new CustomEvent(PLAY_EVENT, { detail: src }));
-    void sharedPlayer.play().catch(() => setPlaying(false));
-    setPlaying(true);
-  }
-  return (
-    <button type="button" onClick={toggle} aria-label={`${playing ? "Pause" : "Play"} ${label}`}
-      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
-        playing ? "border-brand/40 bg-brand/10 text-brand" : "border-line text-ink2 hover:text-ink hover:bg-elev/60"}`}>
-      {playing ? <Pause size={13} /> : <Play size={13} />}
-      {playing ? "Pause" : "Play"}
-    </button>
-  );
-}
 function fmtDuration(sec: number | null | undefined): string {
   if (sec == null || !isFinite(sec) || sec <= 0) return "";
   const s = Math.round(sec);
@@ -115,7 +84,9 @@ function drawWave(canvas: HTMLCanvasElement, audio: AudioBuffer) {
   const block = Math.floor(data.length / bars) || 1;
   const mid = H / 2;
   const barW = W / bars;
-  ctx.fillStyle = "#5eead4";
+  // Canvas can't resolve CSS variables, so read the theme token's value.
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--c-accent").trim() || "27 43 107";
+  ctx.fillStyle = `rgb(${accent.split(/\s+/).join(",")})`;
   for (let i = 0; i < bars; i++) {
     let peak = 0;
     for (let j = 0; j < block; j++) {
@@ -153,8 +124,8 @@ function Waveform({ file }: { file: File }) {
   }, [file]);
 
   return (
-    <div className="md:col-span-3 rounded-lg border border-line bg-bg/40 px-3 py-2.5">
-      <div className="text-xs font-medium text-ink2 uppercase tracking-wider mb-2">Waveform</div>
+    <div className="rounded-[10px] border border-line bg-elev px-3 py-2.5">
+      <div className="mb-2 text-xs font-medium text-muted">Waveform</div>
       <div className="relative h-16">
         <canvas ref={canvasRef} width={760} height={64} className="w-full h-16" />
         {status !== "ok" && (
@@ -193,8 +164,18 @@ function useAudioMeta(src: string | null) {
   return { duration, error };
 }
 
-/* -------------------- library row -------------------- */
-function AudioRow({
+/** "https://…/day-1%20voice.mp3?sig=…" → "day-1 voice.mp3" (the file name, for the card's sub-line). */
+function fileNameOf(url: string): string {
+  try {
+    const last = new URL(url).pathname.split("/").filter(Boolean).pop() || "";
+    return decodeURIComponent(last);
+  } catch {
+    return "";
+  }
+}
+
+/* -------------------- library card -------------------- */
+function AudioCard({
   a,
   usedBy,
   selected,
@@ -208,56 +189,64 @@ function AudioRow({
   onToggle: () => void;
   onRemove: () => void;
 }) {
-  // The length was measured and STORED when the audio was added, and the API
-  // returns it. The old row ignored that and mounted a hidden <audio
-  // preload="metadata"> per row instead, so opening this screen re-fetched a
-  // slice of every file, every time. Only probe when the stored value is
-  // missing (audios added before the field existed).
+  // The length was measured and STORED when the audio was added. Only probe
+  // the file when the stored value is missing (audios added before the field
+  // existed), so opening this screen doesn't re-fetch every file.
   const needsProbe = !(a.durationSec && a.durationSec > 0);
   const probed = useAudioMeta(needsProbe ? a.url : null);
   const duration = needsProbe ? probed.duration : a.durationSec!;
+  const file = fileNameOf(a.url);
+  const added = a.createdAt ? fmtDate(a.createdAt) : "";
 
   return (
-    <tr className="transition-colors hover:bg-white/[0.022]">
-      <td className={TD}>
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggle}
-          aria-label={`Select ${a.label}`}
-          className="w-4 h-4 accent-brand cursor-pointer"
-        />
-      </td>
-      <td className={TD}>
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.25)]">
-            <Music size={13} />
-          </span>
-          <span className="font-semibold truncate">{a.label}</span>
+    <div
+      className={`relative rounded-xl border bg-panel p-4 shadow-card transition-[border-color,box-shadow] ${
+        selected ? "border-accent shadow-[inset_0_0_0_1px_rgb(var(--c-accent))]" : "border-line hover:shadow-pop"
+      }`}
+    >
+      <div className="flex items-start gap-2.5">
+        <label className="group/sel relative grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[10px] bg-accent/10 text-accent">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            aria-label={`Select ${a.label}`}
+            className={`absolute inset-0 m-auto h-4 w-4 cursor-pointer accent-brand ${selected ? "" : "opacity-0 group-hover/sel:opacity-100 focus:opacity-100"}`}
+          />
+          <Music size={16} className={selected ? "invisible" : "group-hover/sel:invisible"} />
+        </label>
+        <div className="min-w-0 flex-1">
+          <b className="block truncate text-sm font-semibold text-ink" title={a.label}>{a.label}</b>
+          <div className="mt-px truncate text-[12.5px] text-muted" title={file}>
+            {a.source === "blob" ? "Uploaded" : "Link"}
+            {file && <> · {file}</>}
+          </div>
         </div>
-      </td>
-      <td className={`${TD} tabular-nums text-ink2`}>{fmtDuration(duration) || "—"}</td>
-      <td className={TD}>
-        <Badge tone={a.source === "blob" ? "accent" : "muted"}>
-          {a.source === "blob" ? "Uploaded" : "Link"}
-        </Badge>
-      </td>
-      <td className={TD}>
+        <Kebab items={[{ label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: onRemove }]} />
+      </div>
+
+      <div className="mt-3.5 flex items-center gap-2.5 rounded-[10px] border border-line bg-elev px-2.5 py-2">
+        <PlayRound src={a.url} label={a.label} />
+        <WaveBars seed={seedOf(a.id)} />
+        <span className="text-xs text-muted tabular-nums">{fmtDuration(duration) || "—"}</span>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-2 text-[12.5px] text-muted">
         {usedBy.length === 0 ? (
-          <Badge tone="warn">Not used</Badge>
+          <span className="inline-flex h-[22px] items-center rounded-full border border-warn/25 bg-warn/[0.09] px-2 text-xs font-medium text-warn">
+            Not used
+          </span>
         ) : (
-          <span className="text-ink2" title={usedBy.join(", ")}>
-            {usedBy.length} campaign{usedBy.length === 1 ? "" : "s"}
+          <span
+            title={usedBy.join(", ")}
+            className="inline-flex h-[22px] items-center rounded-full border border-ok/25 bg-ok/[0.09] px-2 text-xs font-medium text-ok"
+          >
+            Used by {usedBy.length} campaign{usedBy.length === 1 ? "" : "s"}
           </span>
         )}
-      </td>
-      <td className={TD}>
-        <PlayButton src={a.url} label={a.label} />
-      </td>
-      <td className={TD}>
-        <Kebab items={[{ label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: onRemove }]} />
-      </td>
-    </tr>
+        {added && <span className="truncate">Added {added}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -266,14 +255,22 @@ function Preview({ src, label }: { src: string | null; label: string }) {
   const { duration, error } = useAudioMeta(src);
   if (!src) return null;
   return (
-    <div className="md:col-span-3 rounded-lg border border-line bg-bg/40 px-3 py-2.5">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="text-xs font-medium text-ink2 uppercase tracking-wider">Preview</div>
-        <div className="text-xs text-muted tabular-nums flex items-center gap-2">
+    <div className="rounded-[10px] border border-line bg-elev px-3 py-2.5">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-medium text-muted">Preview</div>
+        <div className="flex items-center gap-2 text-xs text-muted tabular-nums">
           {error ? (
-            <span className="text-warn">Couldn’t read metadata</span>
+            <span className="text-warn">Couldn’t read the length</span>
           ) : (
-            <>{label}{duration != null && <span className="inline-flex items-center gap-1"><Clock size={11} />{fmtDuration(duration)}</span>}</>
+            <>
+              {label}
+              {duration != null && (
+                <span className="inline-flex items-center gap-1">
+                  <Clock size={11} />
+                  {fmtDuration(duration)}
+                </span>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -282,12 +279,12 @@ function Preview({ src, label }: { src: string | null; label: string }) {
   );
 }
 
+type UseFilter = "all" | "used" | "unused";
+
 export default function AudiosTab() {
   const { data, loading, reload } = useFetch<{ audios: Audio[] }>("/api/audios");
   const audios = data?.audios ?? [];
-  // Which campaigns point at each audio. Free — the campaigns list is already
-  // fetched on the next screen over, and it turns "campaigns using it will fall
-  // back to default" into a number you can see BEFORE you delete.
+  // Which campaigns point at each audio, so deleting shows its blast radius first.
   const { data: campData } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const usedByAudio = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -299,10 +296,10 @@ export default function AudiosTab() {
   }, [campData]);
   const [addOpen, setAddOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [onlyUnused, setOnlyUnused] = useState(false);
+  const [useFilter, setUseFilter] = useState<UseFilter>("all");
   const [confirmDel, setConfirmDel] = useState<Audio | null>(null);
   const [confirmBulk, setConfirmBulk] = useState(false);
-  const [mode, setMode] = useState<"url" | "upload">("url");
+  const [mode, setMode] = useState<"url" | "upload">("upload");
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -316,12 +313,11 @@ export default function AudiosTab() {
   const [fileObjUrl, setFileObjUrl] = useState<string | null>(null);
 
   // Detect playback duration in the browser so we can store it on the audio and
-  // later auto-fill a campaign's Call Ending Duration. Probes the current URL (URL
-  // mode) or the picked file's object URL (upload mode).
+  // later auto-fill a campaign's Call Ending Duration.
   const urlMeta = useAudioMeta(mode === "url" && url.trim() ? url.trim() : null);
   const fileMeta = useAudioMeta(mode === "upload" ? fileObjUrl : null);
 
-  // Validate then accept a picked/dropped file (FEATURE 5).
+  // Validate then accept a picked/dropped file.
   function pickFile(f: File | null | undefined) {
     if (!f) return;
     const err = validateAudioFile(f);
@@ -381,6 +377,7 @@ export default function AudiosTab() {
       setLabel("");
       reload();
       toast("Audio added", "ok");
+      setAddOpen(false);
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
     } finally {
@@ -430,6 +427,7 @@ export default function AudiosTab() {
         if (fileRef.current) fileRef.current.value = "";
         reload();
         toast("Audio uploaded", "ok");
+        setAddOpen(false);
       } else {
         toast(j?.error || `Upload failed (HTTP ${xhr.status})`, "danger");
       }
@@ -472,10 +470,11 @@ export default function AudiosTab() {
     else toast(`Deleted ${ids.length}`, "ok");
   }
 
-  // Search / Unused narrow the list; select-all must only ever pick what is
-  // on screen, or a bulk Delete would remove rows the filter is hiding.
+  // Filter + search narrow the list; select-all only ever picks what is on
+  // screen, so a bulk Delete never removes cards the filter is hiding.
+  const isUsed = (a: Audio) => !!usedByAudio.get(a.id)?.length;
   const visible = audios
-    .filter((a) => !onlyUnused || !(usedByAudio.get(a.id)?.length))
+    .filter((a) => useFilter === "all" || (useFilter === "used" ? isUsed(a) : !isUsed(a)))
     .filter((a) => !q.trim() || a.label.toLowerCase().includes(q.trim().toLowerCase()));
   const allSelected = visible.length > 0 && visible.every((a) => sel.has(a.id));
   function toggleAll() {
@@ -491,20 +490,37 @@ export default function AudiosTab() {
   }
 
   const totalSec = audios.reduce((n, a) => n + (a.durationSec || 0), 0);
-  const unusedCount = audios.filter((a) => !usedByAudio.get(a.id)?.length).length;
+  const unusedCount = audios.filter((a) => !isUsed(a)).length;
+  const usedCount = audios.length - unusedCount;
+
+  // Closing the dialog doesn't stop an upload in flight; it finishes and the
+  // library reloads, exactly as before.
+  function closeAdd() {
+    setAddOpen(false);
+  }
+
+  const strip = [
+    { label: "Audio files", value: audios.length, tone: "" },
+    { label: "Total length", value: fmtDuration(totalSec) || "0:00", tone: "" },
+    { label: "Used by campaigns", value: usedCount, tone: "" },
+    { label: "Not used", value: unusedCount, tone: unusedCount ? "text-warn" : "" },
+  ];
 
   return (
     <Section>
-      <Tiles>
-        <Tile label="Audio files" value={audios.length}
-              sub={`${audios.filter((a) => a.source === "blob").length} uploaded · ${audios.filter((a) => a.source !== "blob").length} linked`} />
-        <Tile label="Total length" value={fmtDuration(totalSec) || "0:00"}
-              sub={audios.length ? `longest ${fmtDuration(Math.max(...audios.map((a) => a.durationSec || 0))) || "—"}` : "nothing yet"} />
-        <Tile label="Used by campaigns" value={audios.length - unusedCount} sub="linked to at least one" />
-        <Tile label="Unused" value={unusedCount}
-              sub={unusedCount ? "not linked to any campaign" : "all in use"}
-              tone={unusedCount ? "warn" : "muted"} />
-      </Tiles>
+      <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-line bg-panel shadow-card lg:grid-cols-4">
+        {strip.map((s, i) => (
+          <div
+            key={s.label}
+            className={`px-5 py-4 ${i % 2 ? "border-l border-line" : ""} ${i >= 2 ? "border-t border-line lg:border-t-0" : ""} ${
+              i === 2 ? "lg:border-l" : ""
+            }`}
+          >
+            <div className="text-[13px] font-medium text-muted">{s.label}</div>
+            <div className={`mt-1.5 text-[26px] font-semibold leading-tight tracking-[-0.035em] tabular-nums ${s.tone}`}>{s.value}</div>
+          </div>
+        ))}
+      </div>
 
       {loading && !data ? (
         <Card>
@@ -516,54 +532,56 @@ export default function AudiosTab() {
             icon={<Music size={20} />}
             title="No audios yet"
             description="Add one, then link it to a campaign under Campaigns."
-            action={<Button leftIcon={<Upload size={14} />} onClick={() => setAddOpen(true)}>Add audio</Button>}
+            action={<Button leftIcon={<Plus size={14} />} onClick={() => setAddOpen(true)}>Add audio</Button>}
           />
         </Card>
       ) : (
-        <DataPanel
-          title="Audio library"
-          meta={`${audios.length} file${audios.length === 1 ? "" : "s"}`}
-          action={
-            <>
-              <Input value={q} onChange={(e) => { setQ(e.target.value); setSel(new Set()); }} placeholder="Search audios…" className="w-40 sm:w-48" />
-              <Button size="sm" variant={onlyUnused ? "primary" : "ghost"} onClick={() => { setOnlyUnused((v) => !v); setSel(new Set()); }}
-                      title="Show only audios no campaign uses">
-                Unused{unusedCount ? ` (${unusedCount})` : ""}
+        <>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Seg<UseFilter>
+              ariaLabel="Filter audios"
+              value={useFilter}
+              onChange={(v) => {
+                setUseFilter(v);
+                setSel(new Set());
+              }}
+              options={[
+                { value: "all", label: "All", count: audios.length },
+                { value: "used", label: "Used", count: usedCount },
+                { value: "unused", label: "Not used", count: unusedCount },
+              ]}
+            />
+            {visible.length > 0 && (
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] text-muted hover:text-ink">
+                <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4 cursor-pointer accent-brand" />
+                Select all
+              </label>
+            )}
+            {sel.size > 0 && (
+              <Button variant="danger" size="sm" leftIcon={<Trash2 size={13} />} onClick={() => setConfirmBulk(true)}>
+                Delete {sel.size}
               </Button>
-              {sel.size > 0 && (
-                <Button variant="danger" size="sm" leftIcon={<Trash2 size={13} />} onClick={() => setConfirmBulk(true)}>
-                  Delete {sel.size}
-                </Button>
-              )}
-              <Button size="sm" leftIcon={<Upload size={13} />} onClick={() => setAddOpen(true)}>
+            )}
+            <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <SearchField
+                value={q}
+                onChange={(v) => {
+                  setQ(v);
+                  setSel(new Set());
+                }}
+                placeholder="Search audios"
+                className="min-w-0 flex-1 sm:w-[240px] sm:flex-none"
+              />
+              <Button leftIcon={<Plus size={14} />} onClick={() => setAddOpen(true)}>
                 Add audio
               </Button>
-            </>
-          }
-        >
-          <DataTable>
-            <thead>
-              <tr>
-                <th className={`${TH} w-[44px]`}>
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleAll}
-                    aria-label="Select all"
-                    className="w-4 h-4 accent-brand cursor-pointer"
-                  />
-                </th>
-                <th className={TH}>Label</th>
-                <th className={TH}>Length</th>
-                <th className={TH}>Source</th>
-                <th className={TH}>Used by</th>
-                <th className={TH}>Preview</th>
-                <th className={`${TH} w-[52px]`} />
-              </tr>
-            </thead>
-            <tbody>
+            </div>
+          </div>
+
+          {visible.length ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visible.map((a) => (
-                <AudioRow
+                <AudioCard
                   key={a.id}
                   a={a}
                   usedBy={usedByAudio.get(a.id) ?? []}
@@ -572,49 +590,57 @@ export default function AudiosTab() {
                   onRemove={() => setConfirmDel(a)}
                 />
               ))}
-            </tbody>
-          </DataTable>
-        </DataPanel>
+            </div>
+          ) : (
+            <Card>
+              <EmptyState icon={<Music size={20} />} title="No audios match" description="Try another filter or search." />
+            </Card>
+          )}
+        </>
       )}
 
-      {/* Adding moved off the page and into a dialog. Same URL/upload switch,
-          same waveform, same progress bar — it just no longer occupies the top
-          half of the screen when you only came to find a file. */}
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add audio" maxWidth="max-w-3xl">
-      <Card
+      <Modal
+        open={addOpen}
+        onClose={closeAdd}
         title="Add audio"
-        description="Paste a public audio URL, or upload a file to S3."
-        action={
-          <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
-            <button
-              onClick={() => setMode("url")}
-              className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-                mode === "url" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
-              }`}
-            >
-              <LinkIcon size={12} />
-              Paste URL
-            </button>
-            <button
-              onClick={() => setMode("upload")}
-              className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-                mode === "upload" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
-              }`}
-            >
-              <Upload size={12} />
-              Upload
-            </button>
-          </div>
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={closeAdd}>
+              Cancel
+            </Button>
+            {mode === "url" ? (
+              <Button onClick={addUrl} disabled={!url.trim() || urlBlocked} loading={busy} leftIcon={<LinkIcon size={14} />}>
+                Add audio
+              </Button>
+            ) : (
+              <Button onClick={uploadFile} disabled={busy || !file} loading={busy} leftIcon={<Upload size={14} />}>
+                Add audio
+              </Button>
+            )}
+          </>
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-          <div>
-            <Label>Label</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Day-1 voice" />
-          </div>
+        <div className="mb-4 flex gap-5 border-b border-line">
+          {(["upload", "url"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              disabled={busy}
+              onClick={() => setMode(m)}
+              className={`-mb-px border-b-2 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+                mode === m ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink"
+              }`}
+            >
+              {m === "upload" ? "Upload a file" : "Paste a link"}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-3.5">
           {mode === "url" ? (
             <>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Public audio URL</Label>
                 <Input
                   value={url}
@@ -622,91 +648,79 @@ export default function AudiosTab() {
                   placeholder="https://.../day1.mp3"
                   error={urlBlocked ? urlError ?? undefined : undefined}
                   hint={!urlBlocked && urlError ? urlError : undefined}
+                  autoFocus
                 />
               </div>
-
               {url.trim() && !urlBlocked && <Preview src={url.trim()} label="" />}
-
-              <div className="md:col-span-3 flex justify-end">
-                <Button
-                  onClick={addUrl}
-                  disabled={!url.trim() || urlBlocked}
-                  loading={busy && mode === "url"}
-                  leftIcon={<LinkIcon size={14} />}
-                >
-                  Add
-                </Button>
-              </div>
             </>
           ) : (
             <>
-              <div className="md:col-span-2">
-                <Label hint="MP3 or WAV · max 10 MB">Audio file</Label>
-                <label
-                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOver(false);
-                    pickFile(e.dataTransfer.files?.[0]);
-                  }}
-                  className={`flex items-center gap-3 px-3 py-3 border rounded-lg cursor-pointer transition-colors ${
-                    dragOver ? "bg-brand/10 border-brand/40" : "bg-bg/60 border-line hover:border-line2"
-                  }`}
-                >
-                  <Upload size={14} className="text-muted shrink-0" />
-                  <span className="text-sm text-ink2 flex-1 min-w-0 truncate">
-                    {file ? `${file.name} · ${fmtBytes(file.size)}` : dragOver ? "Drop the audio file here" : "Drag & drop, or click to choose an MP3/WAV"}
-                  </span>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
-                    onChange={(e) => pickFile(e.target.files?.[0])}
-                    className="hidden"
-                  />
-                </label>
-              </div>
+              <label
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  pickFile(e.dataTransfer.files?.[0]);
+                }}
+                className={`block cursor-pointer rounded-xl border-[1.5px] border-dashed p-[22px] text-center transition-colors ${
+                  dragOver ? "border-accent bg-accent/[0.06]" : "border-line2 bg-elev hover:border-accent hover:bg-accent/[0.04]"
+                }`}
+              >
+                <span className="mx-auto mb-2.5 grid h-[42px] w-[42px] place-items-center rounded-[11px] border border-line bg-panel text-muted shadow-xs">
+                  <Upload size={18} />
+                </span>
+                {file ? (
+                  <div className="text-sm">
+                    <b className="font-semibold text-ink">{file.name}</b>
+                    <div className="mt-0.5 text-xs text-muted">{fmtBytes(file.size)} · click to choose another</div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-ink2">
+                    <b className="font-semibold text-accent">Click to upload</b> or drag and drop
+                    <div className="mt-1 text-xs text-muted">MP3 or WAV · up to 10 MB</div>
+                  </div>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
+                  onChange={(e) => pickFile(e.target.files?.[0])}
+                  className="hidden"
+                />
+              </label>
 
               {file && <Waveform file={file} />}
               {fileObjUrl && <Preview src={fileObjUrl} label={file ? fmtBytes(file.size) : ""} />}
 
-              {busy && mode === "upload" && (
-                <div className="md:col-span-3">
-                  <div className="flex items-center justify-between text-xs text-ink2 mb-1.5">
+              {busy && (
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-xs text-ink2">
                     <span>{progress == null ? "Processing on server…" : `Uploading… ${progress}%`}</span>
-                    <button onClick={cancelUpload} className="text-muted hover:text-danger inline-flex items-center gap-1">
-                      <X size={11} /> Cancel
+                    <button onClick={cancelUpload} className="inline-flex items-center gap-1 text-muted hover:text-danger">
+                      <X size={11} /> Cancel upload
                     </button>
                   </div>
-                  <div className="h-1.5 w-full rounded-full bg-elev overflow-hidden">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink/[0.08]">
                     {progress == null ? (
-                      <div className="h-full w-1/3 bg-brand/70 rounded-full animate-pulse" />
+                      <div className="h-full w-1/3 animate-pulse rounded-full bg-accent/70" />
                     ) : (
-                      <div className="h-full bg-brand rounded-full transition-all duration-150" style={{ width: `${progress}%` }} />
+                      <div className="h-full rounded-full bg-brand transition-all duration-150" style={{ width: `${progress}%` }} />
                     )}
                   </div>
                 </div>
               )}
-
-              <div className="md:col-span-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="text-xs text-muted">
-                  Goes to S3 (requires <code className="text-brand">S3_BUCKET</code> + AWS credentials).
-                </div>
-                <Button
-                  onClick={uploadFile}
-                  disabled={busy || !file}
-                  loading={busy && mode === "upload"}
-                  leftIcon={<Upload size={14} />}
-                >
-                  Upload
-                </Button>
-              </div>
             </>
           )}
-        </div>
-      </Card>
 
+          <div>
+            <Label>Name</Label>
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Day-1 voice" />
+          </div>
+        </div>
       </Modal>
 
       <ConfirmDialog

@@ -1,23 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Plus, Trash2, Search, ShieldX, ChevronLeft, ChevronRight } from "lucide-react";
+import { Ban, Plus, Trash2, Search } from "lucide-react";
 import {
   Button,
+  IconButton,
   Section,
   Textarea,
-  Input,
   Label,
-  Badge,
+  KPI,
   EmptyState,
   CsvFilePicker,
-  Spinner,
+  Loading,
   Modal,
   ConfirmDialog,
-  DataPanel,
+  DataTable,
+  TH,
+  TD,
   toast,
 } from "@/components/ui";
 import { api } from "@/components/useData";
+import { formatPhone } from "@/lib/phone";
+import { Pager, SearchField } from "./CampaignsKit";
 
 interface DndPage {
   numbers: string[];
@@ -123,123 +127,109 @@ export default function DndTab() {
 
   return (
     <Section>
-      <DataPanel
-        title={
-          <span className="flex items-center gap-2">
-            <Ban size={15} className="text-danger" /> Blocked numbers
-          </span>
-        }
-        meta="never called or messaged — no call, bulk, sheet, trigger API or WhatsApp"
-        action={
-          <>
-            <Badge tone="danger">{total.toLocaleString()} on list</Badge>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KPI
+          label="On the list"
+          value={page ? total.toLocaleString() : "—"}
+          sub="never called or messaged"
+          icon={<Ban size={17} />}
+          tone="danger"
+        />
+        {searching && (
+          <KPI
+            label="Match your search"
+            value={matched.toLocaleString()}
+            sub={`for “${debouncedQ.trim()}”`}
+            icon={<Search size={17} />}
+            tone="accent"
+          />
+        )}
+      </div>
+
+      <div className="relative overflow-hidden rounded-xl border border-line bg-panel shadow-card">
+        <div className="flex flex-wrap items-center gap-2.5 px-5 py-4">
+          <SearchField
+            value={q}
+            onChange={onSearch}
+            placeholder="Search the whole list…"
+            className="min-w-0 flex-1 sm:w-[320px] sm:flex-none"
+          />
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {total > 0 && (
-              <Button
-                variant="danger"
-                size="sm"
-                leftIcon={<ShieldX size={13} />}
-                onClick={() => setConfirmClear(true)}
-              >
+              <Button variant="ghost" leftIcon={<Trash2 size={14} />} onClick={() => setConfirmClear(true)}>
                 Clear all
               </Button>
             )}
-            <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
+            <Button leftIcon={<Plus size={14} />} onClick={() => setAddOpen(true)}>
               Add numbers
             </Button>
-          </>
-        }
-        footer={
-          matched > 0 ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <span>
-                Showing {from.toLocaleString()}–{to.toLocaleString()} of {matched.toLocaleString()}
-                {searching && <> matching “{debouncedQ}” (of {total.toLocaleString()} total)</>}
-              </span>
-              {lastPage > 0 && (
-                <div className="ml-auto flex items-center gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={pageNo === 0 || loading}
-                    onClick={() => setOffset(Math.max(0, offset - PAGE))}
-                    leftIcon={<ChevronLeft size={13} />}
-                  >
-                    Prev
-                  </Button>
-                  <span className="px-1 tabular-nums">
-                    {pageNo + 1} / {lastPage + 1}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={pageNo >= lastPage || loading}
-                    onClick={() => setOffset(offset + PAGE)}
-                    rightIcon={<ChevronRight size={13} />}
-                  >
-                    Next
-                  </Button>
-                </div>
-              )}
-            </div>
-          ) : undefined
-        }
-      >
-        <div className="px-4 pt-4">
-          <div className="relative max-w-xs">
-            <Search size={14} className="pointer-events-none absolute left-3 top-2.5 z-10 text-muted" />
-            <Input
-              value={q}
-              onChange={(e) => onSearch(e.target.value)}
-              placeholder="Search the whole list…"
-              className="pl-9"
-            />
           </div>
         </div>
 
         {loading && !page ? (
-          <div className="flex justify-center py-14 text-muted">
-            <Spinner size={18} />
-          </div>
+          <Loading py="py-14" />
         ) : err ? (
-          <div className="py-10 text-center text-sm text-danger">
-            Couldn’t load the DND list.{" "}
-            <button onClick={() => load(offset, debouncedQ)} className="text-brand underline">
+          <div className="border-t border-line py-10 text-center text-sm text-danger">
+            Couldn’t load the Do not disturb list.{" "}
+            <button onClick={() => load(offset, debouncedQ)} className="text-accent underline">
               Retry
             </button>
           </div>
         ) : total === 0 ? (
-          <div className="p-4">
+          <div className="border-t border-line">
             <EmptyState
               icon={<Ban size={20} />}
-              title="No numbers on the DND list"
-              description="Add numbers and they will never be called or sent a WhatsApp by this client — however they were typed."
+              title="No numbers on the list"
+              description="Add numbers and they will never be called or sent a WhatsApp — however they were typed."
+              action={<Button leftIcon={<Plus size={14} />} onClick={() => setAddOpen(true)}>Add numbers</Button>}
             />
           </div>
         ) : shown.length === 0 ? (
-          <div className="py-12 text-center text-sm text-muted">
-            No numbers match “{debouncedQ}”.
-          </div>
+          <div className="border-t border-line py-12 text-center text-sm text-muted">No numbers match “{debouncedQ}”.</div>
         ) : (
-          <div className="grid grid-cols-1 gap-1.5 p-4 sm:grid-cols-2 lg:grid-cols-3">
-            {shown.map((num) => (
-              <div
-                key={num}
-                className="group flex items-center justify-between gap-2 rounded-lg border border-line bg-white/[0.022] px-3 py-1.5"
-              >
-                <span className="truncate font-mono text-sm tabular-nums">{num}</span>
-                <button
-                  onClick={() => removeOne(num)}
-                  title="Remove from DND"
-                  aria-label={`Remove ${num}`}
-                  className="shrink-0 text-muted opacity-60 transition-colors hover:text-danger group-hover:opacity-100"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Number</th>
+                <th className={`${TH} hidden sm:table-cell`}>Stored as</th>
+                <th className={`${TH} w-[60px]`} />
+              </tr>
+            </thead>
+            <tbody className={loading ? "opacity-60 transition-opacity" : ""}>
+              {shown.map((num) => (
+                <tr key={num} className="group transition-colors hover:bg-ink/[0.022]">
+                  <td className={`${TD} whitespace-nowrap font-medium text-ink tabular-nums`}>{formatPhone(num)}</td>
+                  <td className={`${TD} hidden font-mono text-[12.5px] text-muted sm:table-cell`}>{num}</td>
+                  <td className={`${TD} text-right`}>
+                    <IconButton
+                      size="sm"
+                      variant="danger"
+                      icon={<Trash2 size={14} />}
+                      title="Remove from Do not disturb"
+                      aria-label={`Remove ${num}`}
+                      onClick={() => removeOne(num)}
+                      className="transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
         )}
-      </DataPanel>
+
+        {matched > 0 && !err && (
+          <Pager
+            page={pageNo}
+            pages={lastPage + 1}
+            from={from}
+            to={to}
+            total={matched}
+            disabled={loading}
+            onPage={(p) => setOffset(p * PAGE)}
+            extra={searching ? <> matching “{debouncedQ}” (of {total.toLocaleString()} on the list)</> : undefined}
+          />
+        )}
+      </div>
 
       <AddNumbersModal
         open={addOpen}
@@ -253,7 +243,7 @@ export default function DndTab() {
 
       <ConfirmDialog
         open={confirmClear}
-        title="Clear the whole DND list"
+        title="Clear the whole Do not disturb list"
         busy={busy}
         confirmLabel="Clear the list"
         typeToConfirm={String(total)}
@@ -322,21 +312,22 @@ function AddNumbersModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Add numbers to DND"
+      title="Add numbers to Do not disturb"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={add} loading={busy} disabled={!input.trim()} leftIcon={<Plus size={14} />}>
-            Add {preview > 0 ? `${preview} number${preview === 1 ? "" : "s"}` : "to DND"}
+            Add {preview > 0 ? `${preview} number${preview === 1 ? "" : "s"}` : "numbers"}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
+        <p className="text-sm text-ink2">These numbers will never be called or messaged.</p>
         <div>
-          <Label hint="One per line, or comma separated">Numbers</Label>
+          <Label hint="one per line, or comma separated">Numbers</Label>
           <Textarea
             rows={7}
             value={input}
@@ -345,13 +336,14 @@ function AddNumbersModal({
             autoFocus
           />
         </div>
-        <div className="rounded-lg border border-brand/25 bg-brand/[0.06] px-3 py-2 text-xs text-[#a9f2e8]">
+        <div className="text-xs text-muted">
+          {preview > 0 ? `${preview} number${preview === 1 ? "" : "s"} found · ` : ""}
           Spaces inside a number are fine — <span className="font-mono">+91 88255 74083</span> is read as one
-          number, not three. Put each number on its own line, or separate them with commas.
+          number, not three.
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CsvFilePicker onLoad={(text) => setInput((prev) => (prev ? prev + "\n" : "") + text)} />
-          <span className="text-xs text-muted">CSV: the whole file is scanned for phone numbers.</span>
+          <span className="text-xs text-muted">Or upload a CSV — the whole file is scanned for phone numbers.</span>
         </div>
       </div>
     </Modal>

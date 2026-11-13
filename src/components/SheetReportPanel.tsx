@@ -1,15 +1,13 @@
 "use client";
 import { fmtDayKey, fmtDateTime } from "@/lib/format";
 
-import { useMemo, useState } from "react";
-import {
-  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-} from "recharts";
-import { Download, PhoneCall, PhoneIncoming, Clock, Hash, X } from "lucide-react";
-import { Button, Card, KPI, Badge, Select, EmptyState, Skeleton } from "./ui";
+import { ReactNode, useMemo, useState } from "react";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { Download, PhoneCall, PhoneIncoming, Clock, MousePointerClick, AlertTriangle, X } from "lucide-react";
+import { Button, Card, KPI, Badge, Select, EmptyState, Skeleton, DataPanel, DataTable, TH, TD } from "./ui";
 import { useFetch } from "./useData";
 import {
-  OUTCOME_LABEL, OUTCOME_ORDER, OUTCOME_COLOR, OUTCOME_TONE,
+  OUTCOME_LABEL, OUTCOME_ORDER, OUTCOME_TONE,
   istToday, istDayOffset, fmtDuration,
 } from "@/lib/gsheet-report-format";
 import type { GSheetConn } from "@/lib/gsheets";
@@ -71,24 +69,37 @@ function presetRange(p: Preset): { from?: string; to?: string } {
   return { from: istDayOffset(p === "7d" ? 6 : 29), to: istToday() };
 }
 
+/** Theme-token colours for each outcome (work in light and dark). */
+const OUTCOME_FILL: Record<string, string> = {
+  press1: "rgb(var(--c-ok))",
+  connected: "rgb(var(--c-accent))",
+  busy: "rgb(var(--c-warn))",
+  "no-answer": "rgb(var(--c-warn2))",
+  rejected: "rgb(var(--c-danger))",
+  error: "rgb(var(--c-danger2))",
+  failed: "rgb(var(--c-danger))",
+  "in-progress": "rgb(var(--c-muted))",
+};
+
 const PAGE = 25;
 
 /**
- * What one sheet connection actually did.  Lives inside the Sheet Auto-Dial tab
- * next to the connection it describes, because that is where the sheet is
- * managed — the campaign Reports tab still shows these calls, but merged in with
- * every other call on the same campaign.
+ * What one sheet connection actually did. Shown two ways: as the Sheet reports
+ * page (no `onClose`) and as a panel under a connection in Sheet auto-dial.
  */
 export default function SheetReportPanel({
   conn,
   campaignName,
   onClose,
+  toolbarLead,
 }: {
   conn: GSheetConn;
   campaignName: string;
   /** Omitted when the report IS the page (the Sheet reports screen) rather than
    *  an expandable panel inside Sheet Auto-Dial — then there is nothing to close. */
   onClose?: () => void;
+  /** Extra controls shown first in the toolbar (the page puts its sheet picker here). */
+  toolbarLead?: ReactNode;
 }) {
   // A sheet that hasn't synced in the last week has nothing in "Last 7 days";
   // open it on all time instead of an empty report.
@@ -116,8 +127,9 @@ export default function SheetReportPanel({
   }
 
   const s = data?.summary;
+  const embedded = !!onClose;
 
-  const pieData = useMemo(
+  const bars = useMemo(
     () =>
       s
         ? OUTCOME_ORDER.filter((k) => (s.outcomes[k] || 0) > 0).map((k) => ({
@@ -136,206 +148,228 @@ export default function SheetReportPanel({
 
   const rows = data?.rows ?? [];
   const shown = rows.slice(0, visible);
+  const couldnt = s ? (s.outcomes.rejected || 0) + (s.outcomes.error || 0) + (s.outcomes.failed || 0) : 0;
 
-  return (
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          <PhoneCall size={16} className="text-brand" />
-          <span>Report — {conn.connName || conn.tabName}</span>
-        </span>
-      }
-      description={`Calls this sheet placed through “${campaignName}”. Queued rows that were never dialled are not counted.`}
-      action={
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" variant="ghost" leftIcon={<Download size={13} />} onClick={() => download("csv")} disabled={!s?.dialled}>
-            CSV
-          </Button>
-          <Button size="sm" variant="ghost" leftIcon={<Download size={13} />} onClick={() => download("xlsx")} disabled={!s?.dialled}>
-            Excel
-          </Button>
-          {onClose && (
-            <Button size="sm" variant="ghost" leftIcon={<X size={13} />} onClick={onClose}>
-              Close
-            </Button>
-          )}
-        </div>
-      }
-    >
-      {/* range presets + outcome filter */}
-      <div className="flex items-center gap-2 flex-wrap mb-4">
+  const toolbar = (
+    <div className="flex flex-wrap items-center gap-2">
+      {toolbarLead}
+      <div className="inline-flex gap-0.5 rounded-[10px] border border-line bg-ink/[0.04] p-[3px]">
         {PRESETS.map((p) => (
           <button
             key={p.key}
+            type="button"
             onClick={() => { setPreset(p.key); setVisible(PAGE); }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-              preset === p.key
-                ? "bg-brand/10 border-brand/40 text-brand"
-                : "bg-elev border-line text-muted hover:text-ink"
+            className={`h-7 rounded-[7px] px-2.5 text-[13px] font-medium transition-colors ${
+              preset === p.key ? "bg-panel text-ink shadow-xs" : "text-muted hover:text-ink"
             }`}
           >
             {p.label}
           </button>
         ))}
-        <div className="ml-auto w-48">
-          <Select
-            value={outcome}
-            onChange={(e) => { setOutcome(e.target.value); setVisible(PAGE); }}
-          >
-            <option value="">All outcomes</option>
-            <option value="lifted">Lifted (any)</option>
-            {OUTCOME_ORDER.map((k) => (
-              <option key={k} value={k}>{OUTCOME_LABEL[k]}</option>
-            ))}
-          </Select>
-        </div>
       </div>
+      <div className="w-44">
+        <Select
+          value={outcome}
+          onChange={(e) => { setOutcome(e.target.value); setVisible(PAGE); }}
+          className="h-9 py-1.5"
+        >
+          <option value="">All outcomes</option>
+          <option value="lifted">Answered (any)</option>
+          {OUTCOME_ORDER.map((k) => (
+            <option key={k} value={k}>{OUTCOME_LABEL[k]}</option>
+          ))}
+        </Select>
+      </div>
+      <span className="flex-1" />
+      <Button
+        variant="ghost"
+        size={embedded ? "sm" : "md"}
+        leftIcon={<Download size={13} />}
+        onClick={() => download("xlsx")}
+        disabled={!s?.dialled}
+      >
+        Excel
+      </Button>
+      <Button
+        variant={embedded ? "ghost" : "primary"}
+        size={embedded ? "sm" : "md"}
+        leftIcon={<Download size={13} />}
+        onClick={() => download("csv")}
+        disabled={!s?.dialled}
+      >
+        Download CSV
+      </Button>
+      {onClose && (
+        <Button size="sm" variant="subtle" leftIcon={<X size={13} />} onClick={onClose}>
+          Close
+        </Button>
+      )}
+    </div>
+  );
+
+  const body = (
+    <div className="space-y-4">
+      {toolbar}
 
       {err && (
-        <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+        <div className="rounded-[10px] border border-danger/30 bg-danger/[0.06] px-3 py-2.5 text-[13px] text-danger">
           Could not load the report: {err}
         </div>
       )}
 
       {loading && !s && (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[104px] w-full rounded-xl" />)}
         </div>
       )}
 
       {s && s.dialled === 0 && (
-        <EmptyState
-          icon={<PhoneCall size={20} />}
-          title="No calls in this range"
-          description={
-            preset === "all"
-              ? "This sheet has not dialled anyone yet. Leads still sitting in the queue are not counted here."
-              : "Nothing was dialled in this range — try a wider one."
-          }
-        />
+        <Card>
+          <EmptyState
+            icon={<PhoneCall size={20} />}
+            title="No calls in this range"
+            description={
+              preset === "all"
+                ? "This sheet has not dialled anyone yet. Leads still sitting in the queue are not counted here."
+                : "Nothing was dialled in this range — try a wider one."
+            }
+          />
+        </Card>
       )}
 
       {s && s.dialled > 0 && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <KPI label="Calls placed" value={s.dialled} icon={<PhoneCall size={18} />} tone="accent"
-                 sub={s.uniqueNumbers !== s.dialled ? `${s.uniqueNumbers} unique numbers` : undefined} />
-            <KPI label="Lifted" value={s.lifted} icon={<PhoneIncoming size={18} />} tone="ok"
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            <KPI label="Calls placed" value={s.dialled.toLocaleString("en-IN")} icon={<PhoneCall size={18} />} tone="accent"
+                 sub={s.uniqueNumbers !== s.dialled ? `${s.uniqueNumbers} unique numbers` : "from this sheet"} />
+            <KPI label="Answered" value={s.lifted.toLocaleString("en-IN")} icon={<PhoneIncoming size={18} />} tone="ok"
                  sub={`${s.liftRate}% of calls`} />
-            <KPI label="Pressed 1" value={s.outcomes.press1 || 0} icon={<Hash size={18} />} tone="ok"
+            <KPI label="Pressed 1" value={(s.outcomes.press1 || 0).toLocaleString("en-IN")} icon={<MousePointerClick size={18} />} tone="info"
                  sub={`${s.press1Rate}% of calls`} />
-            <KPI label="Avg duration" value={fmtDuration(s.avgDurationSec)} icon={<Clock size={18} />} tone="muted"
-                 sub="across lifted calls" />
-            <KPI label="Talk time" value={fmtDuration(s.talkTimeSec)} icon={<Clock size={18} />} tone="muted"
-                 sub={s.lastCallAt ? `last call ${fmtDateTime(s.lastCallAt, { short: true })}` : undefined} />
+            <KPI label="Avg talk time" value={fmtDuration(s.avgDurationSec)} icon={<Clock size={18} />}
+                 sub={`${fmtDuration(s.talkTimeSec)} in total`} />
+            <KPI label="Couldn’t connect" value={couldnt.toLocaleString("en-IN")} icon={<AlertTriangle size={18} />} tone="warn"
+                 sub="invalid number or network error" />
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-4 mt-4">
-            <Card title="Outcome breakdown">
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={80} paddingAngle={2}>
-                      {pieData.map((d) => <Cell key={d.key} fill={OUTCOME_COLOR[d.key] || "#7A8597"} />)}
-                    </Pie>
-                    <Tooltip contentStyle={TOOLTIP} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {pieData.map((d) => (
-                  <button
-                    key={d.key}
-                    onClick={() => { setOutcome(outcome === d.key ? "" : d.key); setVisible(PAGE); }}
-                    className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border transition-colors ${
-                      outcome === d.key ? "border-brand/40 bg-brand/10" : "border-line hover:border-line2"
-                    }`}
-                  >
-                    <span className="w-2 h-2 rounded-full" style={{ background: OUTCOME_COLOR[d.key] }} />
-                    <span className="text-ink2">{d.name}</span>
-                    <span className="tabular-nums text-muted">{d.value}</span>
-                  </button>
-                ))}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card title="Outcomes" description="Click one to filter the rows below.">
+              <div className="space-y-0.5">
+                {bars.map((d) => {
+                  const on = outcome === d.key;
+                  return (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => { setOutcome(on ? "" : d.key); setVisible(PAGE); }}
+                      className={`grid w-full grid-cols-[120px_1fr_76px] items-center gap-3 rounded-[8px] px-1.5 py-2 text-left text-[13px] transition-colors hover:bg-ink/[0.04] ${
+                        on ? "bg-accent/[0.07]" : ""
+                      }`}
+                    >
+                      <span className="truncate text-ink2">{d.name}</span>
+                      <span className="h-2 overflow-hidden rounded-full bg-line">
+                        <span className="block h-full rounded-full" style={{ width: `${(d.value / s.dialled) * 100}%`, background: OUTCOME_FILL[d.key] || "rgb(var(--c-muted))" }} />
+                      </span>
+                      <span className="text-right tabular-nums text-ink2">
+                        {d.value.toLocaleString("en-IN")} · {Math.round((d.value / s.dialled) * 100)}%
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </Card>
 
-            <Card title="Calls by day (IST)">
-              <div className="h-56">
+            <Card title="Calls by day" description="India time (IST).">
+              <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dayData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" vertical={false} />
-                    <XAxis dataKey="day" stroke="#7A8597" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#7A8597" fontSize={11} tickLine={false} allowDecimals={false} />
-                    <Tooltip contentStyle={TOOLTIP} cursor={{ fill: "#ffffff08" }} />
-                    <Bar dataKey="dialled" name="Placed" fill="#5EEAD4" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="lifted" name="Lifted" fill="#22C55E" radius={[3, 3, 0, 0]} />
+                  <BarChart data={dayData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                    <CartesianGrid stroke="rgb(var(--c-line))" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 11, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 11, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip contentStyle={TOOLTIP} cursor={{ fill: "rgb(var(--c-ink) / 0.03)" }} />
+                    <Bar dataKey="dialled" name="Placed" fill="rgb(var(--c-accent))" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="lifted" name="Answered" fill="rgb(var(--c-ok2))" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Card>
           </div>
 
-          {/* lead-level table */}
-          <div className="mt-4 overflow-x-auto">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm text-ink2">
-                {outcome ? `${rows.length} ${OUTCOME_LABEL[outcome] ?? outcome} call(s)` : `${rows.length} call(s)`}
+          <DataPanel
+            title="Rows"
+            meta={
+              <>
+                {outcome ? `${rows.length} ${(OUTCOME_LABEL[outcome] ?? outcome).toLowerCase()} call${rows.length === 1 ? "" : "s"}` : `${rows.length} call${rows.length === 1 ? "" : "s"}`}
+                {" "}through “{campaignName}”
                 {data?.capped && <span className="text-warn"> · showing the first {rows.length}, narrow the range for the rest</span>}
-              </div>
-            </div>
-            <table className="w-full text-sm">
+              </>
+            }
+          >
+            <DataTable>
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wider text-muted border-b border-line">
-                  <th className="py-2 pr-3 font-medium">Called (IST)</th>
-                  <th className="py-2 pr-3 font-medium">Row</th>
-                  <th className="py-2 pr-3 font-medium">Name</th>
-                  <th className="py-2 pr-3 font-medium">Phone</th>
-                  <th className="py-2 pr-3 font-medium">Outcome</th>
-                  <th className="py-2 pr-3 font-medium text-right">Duration</th>
-                  <th className="py-2 pr-3 font-medium">Detail</th>
+                <tr>
+                  <th className={TH}>Row</th>
+                  <th className={TH}>Lead</th>
+                  <th className={`${TH} hidden sm:table-cell`}>Called (IST)</th>
+                  <th className={TH}>Outcome</th>
+                  <th className={`${TH} text-right`}>Duration</th>
+                  <th className={`${TH} hidden md:table-cell`}>Detail</th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <tr key={r.leadId} className="border-b border-line/60 hover:bg-elev/50">
-                    <td className="py-2 pr-3 whitespace-nowrap tabular-nums text-ink2">{fmtDateTime(r.calledAt, { short: true })}</td>
-                    <td className="py-2 pr-3 tabular-nums text-muted">{r.rowIndex}</td>
-                    <td className="py-2 pr-3 truncate max-w-[14rem]">
-                      {r.name || <span className="text-muted">—</span>}
-                      {r.removedFromQueue && (
-                        <span className="ml-1.5 text-[10px] text-muted" title="Cleared from the queue after this call">cleared</span>
-                      )}
+                  <tr key={r.leadId} className="transition-colors hover:bg-ink/[0.025]">
+                    <td className={`${TD} tabular-nums text-muted`}>#{r.rowIndex}</td>
+                    <td className={TD}>
+                      <div className="max-w-[14rem] truncate font-medium">
+                        {r.name || <span className="font-normal text-muted">No name</span>}
+                        {r.removedFromQueue && (
+                          <span className="ml-1.5 text-[11px] font-normal text-muted" title="Cleared from the queue after this call">cleared</span>
+                        )}
+                      </div>
+                      <div className="text-xs tabular-nums text-muted">{r.phone}</div>
                     </td>
-                    <td className="py-2 pr-3 tabular-nums whitespace-nowrap">{r.phone}</td>
-                    <td className="py-2 pr-3">
+                    <td className={`${TD} hidden whitespace-nowrap tabular-nums text-muted sm:table-cell`}>{fmtDateTime(r.calledAt, { short: true })}</td>
+                    <td className={TD}>
                       <Badge tone={OUTCOME_TONE[r.outcome] ?? "muted"}>{OUTCOME_LABEL[r.outcome] ?? r.outcome}</Badge>
                     </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-ink2">{fmtDuration(r.durationSec)}</td>
-                    <td className="py-2 pr-3 text-xs text-muted truncate max-w-[16rem]">
+                    <td className={`${TD} text-right tabular-nums`}>{fmtDuration(r.durationSec)}</td>
+                    <td className={`${TD} hidden max-w-[16rem] truncate text-xs text-muted md:table-cell`} title={r.error || r.hangupCause || ""}>
                       {r.error || r.hangupCause || "—"}
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </DataTable>
             {visible < rows.length && (
-              <div className="mt-3 text-center">
+              <div className="flex justify-center py-3">
                 <Button size="sm" variant="ghost" onClick={() => setVisible((v) => v + PAGE)}>
                   Show {Math.min(PAGE, rows.length - visible)} more
                 </Button>
               </div>
             )}
-          </div>
+          </DataPanel>
         </>
       )}
+    </div>
+  );
+
+  if (!embedded) return body;
+
+  return (
+    <Card
+      title={`Report — ${conn.connName || conn.tabName}`}
+      description={`Calls this sheet placed through “${campaignName}”. Queued rows that were never dialled are not counted.`}
+    >
+      {body}
     </Card>
   );
 }
 
 const TOOLTIP = {
-  background: "#12161F",
-  border: "1px solid #1E2430",
+  background: "rgb(var(--c-panel))",
+  border: "1px solid rgb(var(--c-line))",
   borderRadius: 10,
   fontSize: 12,
-  color: "#E8ECF3",
+  color: "rgb(var(--c-ink))",
 };

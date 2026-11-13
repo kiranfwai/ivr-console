@@ -1,20 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Wallet, Phone, Clock, SlidersHorizontal, ExternalLink, Plus } from "lucide-react";
+import { Wallet, Phone, Clock, SlidersHorizontal, Plus, Coins } from "lucide-react";
 import {
-  Card,
   Section,
   Button,
   Input,
   Label,
   Badge,
-  KPI,
   Modal,
   Spinner,
   EmptyState,
+  Loading,
+  DataTable,
+  TH,
+  TD,
+  Kebab,
   toast,
 } from "../ui";
+import { Avatar, KpiCard, Panel } from "../AdminTabKit";
 import { api } from "../useData";
 import { fmtMoney, currencySymbol, istToday, istDaysAgo } from "./money";
 import { useAnalytics, RangeControl, viewAsClient, type AnalyticsRow, type Pricing } from "./shared";
@@ -28,10 +32,12 @@ export default function FinancialsView() {
   const [funding, setFunding] = useState<AnalyticsRow | null>(null);
 
   const currency = data?.currency || "INR";
+  const walletTotal = data ? data.rows.reduce((n, r) => n + (r.balance || 0), 0) : 0;
+  const clientCount = data?.rows.length ?? 0;
 
   return (
     <Section>
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex flex-wrap items-center gap-3">
         <RangeControl
           from={from}
           to={to}
@@ -46,36 +52,43 @@ export default function FinancialsView() {
       {err && <div className="text-sm text-danger">{err}</div>}
 
       {/* Totals */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <KPI
-          label="Total cost"
-          value={fmtMoney(data?.totals.cost ?? 0, currency)}
-          sub="estimated usage · all clients"
-          icon={<Wallet size={18} />}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          icon={<Wallet size={15} />}
           tone="accent"
+          label="Wallet balances"
+          value={data ? fmtMoney(walletTotal, currency) : "—"}
+          foot={`live · across ${clientCount} client${clientCount === 1 ? "" : "s"}`}
         />
-        <KPI
+        <KpiCard
+          icon={<Coins size={15} />}
+          tone="ok"
+          label="Client spend"
+          value={data ? fmtMoney(data.totals.cost, currency) : "—"}
+          foot="estimated usage in range"
+        />
+        <KpiCard
+          icon={<Phone size={15} />}
+          tone="warn"
           label="Calls placed"
-          value={(data?.totals.total ?? 0).toLocaleString()}
-          sub={`${(data?.totals.connected ?? 0).toLocaleString()} connected`}
-          icon={<Phone size={18} />}
+          value={data ? data.totals.total.toLocaleString("en-IN") : "—"}
+          foot={`${(data?.totals.connected ?? 0).toLocaleString("en-IN")} connected`}
         />
-        <KPI
+        <KpiCard
+          icon={<Clock size={15} />}
+          tone="info"
           label="Connected minutes"
-          value={(data?.totals.minutes ?? 0).toLocaleString()}
-          sub="billed talk time"
-          icon={<Clock size={18} />}
+          value={data ? data.totals.minutes.toLocaleString("en-IN") : "—"}
+          foot="billed talk time"
         />
       </div>
 
-      <Card
-        title="Cost & wallets by client"
-        description="Cost = estimated usage (connected calls × rate) for the range — not necessarily debited. Balance is the live wallet (actual top-ups minus charges). Each client is shown separately."
+      <Panel
+        title="Cost and wallets by client"
+        sub="Spend is the estimated usage for the range (connected calls × rate). Wallet is the live balance."
       >
         {!data ? (
-          <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
-            <Spinner size={16} /> Loading…
-          </div>
+          <Loading label="Loading financials…" />
         ) : data.rows.length === 0 ? (
           <EmptyState
             icon={<Wallet size={20} />}
@@ -83,81 +96,79 @@ export default function FinancialsView() {
             description="Create client logins, or run calls, to see costs here."
           />
         ) : (
-          <div className="overflow-auto -mx-1">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                  <th className="font-medium py-2 px-2">Client</th>
-                  <th className="font-medium px-2 text-right">Calls</th>
-                  <th className="font-medium px-2 text-right">Connected</th>
-                  <th className="font-medium px-2 text-right">Rate/call</th>
-                  <th className="font-medium px-2 text-right">Cost</th>
-                  <th className="font-medium px-2 text-right">Wallet</th>
-                  <th className="font-medium px-2 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map((r) => (
-                  <tr key={r.id} className="border-t border-line hover:bg-elev/40">
-                    <td className="py-2.5 px-2">
-                      <div className="font-medium text-ink flex items-center gap-2">
-                        {r.name || r.email}
-                        {!r.active && <Badge tone="muted">Disabled</Badge>}
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Client</th>
+                <th className={`${TH} text-right`}>Wallet</th>
+                <th className={`${TH} hidden text-right sm:table-cell`}>Calls</th>
+                <th className={`${TH} hidden text-right md:table-cell`}>Connected</th>
+                <th className={`${TH} hidden text-right md:table-cell`}>Rate / call</th>
+                <th className={`${TH} text-right`}>Spend</th>
+                <th className={`${TH} w-[120px]`}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.id} className="transition-colors hover:bg-elev">
+                  <td className={TD}>
+                    <div className="flex items-center gap-3">
+                      <Avatar name={r.name || r.email} size={30} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 font-semibold tracking-[-0.01em] text-ink">
+                          <span className="truncate">{r.name || r.email}</span>
+                          {!r.active && <Badge tone="muted">Disabled</Badge>}
+                        </div>
+                        <div className="truncate text-[12.5px] text-muted">{r.email}</div>
                       </div>
-                      <div className="text-xs text-muted">{r.email}</div>
-                    </td>
-                    <td className="px-2 text-right tabular-nums">{r.total.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">{r.connected.toLocaleString()}</td>
-                    <td className="px-2 text-right tabular-nums">
-                      <RateCell value={r.effPerConnectedCall} overridden={r.perConnectedCallOverride != null} currency={currency} />
-                    </td>
-                    <td className="px-2 text-right tabular-nums font-medium text-ink">
-                      {fmtMoney(r.cost, currency)}
-                    </td>
-                    <td className={`px-2 text-right tabular-nums font-medium ${r.balance <= 0 ? "text-danger" : "text-ink"}`}>
-                      {fmtMoney(r.balance, currency)}
-                    </td>
-                    <td className="px-2 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => setFunding(r)}
-                        className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
-                        title="Add funds / adjust wallet"
-                      >
-                        <Plus size={12} /> Funds
-                      </button>
-                      <button
-                        onClick={() => setEditing(r)}
-                        className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
-                        title="Set per-client rate override"
-                      >
-                        <SlidersHorizontal size={12} /> Rate
-                      </button>
-                      <button
-                        onClick={() => viewAsClient(r.id, "billing")}
-                        className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 px-2 py-1 rounded-md hover:bg-brand/10"
-                        title="Open this client's console"
-                      >
-                        <ExternalLink size={12} /> Open
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-line2 font-medium text-ink">
-                  <td className="py-2.5 px-2">Total</td>
-                  <td className="px-2 text-right tabular-nums">{data.totals.total.toLocaleString()}</td>
-                  <td className="px-2 text-right tabular-nums">{data.totals.connected.toLocaleString()}</td>
-                  <td />
-                  <td className="px-2 text-right tabular-nums">{fmtMoney(data.totals.cost, currency)}</td>
-                  <td />
-                  <td />
+                    </div>
+                  </td>
+                  <td
+                    className={`${TD} whitespace-nowrap text-right font-semibold tabular-nums ${
+                      r.balance <= 0 ? "text-danger" : "text-ink"
+                    }`}
+                  >
+                    {fmtMoney(r.balance, currency)}
+                  </td>
+                  <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{r.total.toLocaleString("en-IN")}</td>
+                  <td className={`${TD} hidden text-right tabular-nums md:table-cell`}>{r.connected.toLocaleString("en-IN")}</td>
+                  <td className={`${TD} hidden text-right tabular-nums md:table-cell`}>
+                    <RateCell value={r.effPerConnectedCall} overridden={r.perConnectedCallOverride != null} currency={currency} />
+                  </td>
+                  <td className={`${TD} whitespace-nowrap text-right font-semibold tabular-nums text-ok`}>
+                    {fmtMoney(r.cost, currency)}
+                  </td>
+                  <td className={TD}>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => viewAsClient(r.id, "billing")} title="Open this client's console">
+                        Open
+                      </Button>
+                      <Kebab
+                        label={`Actions for ${r.name || r.email}`}
+                        items={[
+                          { label: "Add or remove funds", icon: <Plus size={14} />, onClick: () => setFunding(r) },
+                          { label: "Set client rate", icon: <SlidersHorizontal size={14} />, onClick: () => setEditing(r) },
+                        ]}
+                      />
+                    </div>
+                  </td>
                 </tr>
-              </tfoot>
-            </table>
-          </div>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-elev font-semibold text-ink">
+                <td className={TD}>Total</td>
+                <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>{fmtMoney(walletTotal, currency)}</td>
+                <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{data.totals.total.toLocaleString("en-IN")}</td>
+                <td className={`${TD} hidden text-right tabular-nums md:table-cell`}>{data.totals.connected.toLocaleString("en-IN")}</td>
+                <td className={`${TD} hidden md:table-cell`} />
+                <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>{fmtMoney(data.totals.cost, currency)}</td>
+                <td className={TD} />
+              </tr>
+            </tfoot>
+          </DataTable>
         )}
-      </Card>
+      </Panel>
 
       <RateOverrideModal
         row={editing}
@@ -187,11 +198,11 @@ export default function FinancialsView() {
 
 function RateCell({ value, overridden, currency }: { value: number; overridden: boolean; currency: string }) {
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex items-center gap-1.5">
       {fmtMoney(value, currency)}
       {overridden && (
-        <span className="text-[9px] uppercase tracking-wider text-brand" title="Client-specific override">
-          •
+        <span className="rounded-full border border-accent/25 bg-accent/10 px-1.5 text-[11px] font-medium text-accent" title="Client-specific rate">
+          custom
         </span>
       )}
     </span>
@@ -250,7 +261,7 @@ function RateOverrideModal({
       size="sm"
       footer={
         <>
-          <Button variant="subtle" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={save} loading={busy}>
@@ -260,7 +271,7 @@ function RateOverrideModal({
       }
     >
       <div className="space-y-4">
-        <p className="text-xs text-muted">
+        <p className="m-0 text-[13px] text-muted">
           Charged per connected (answered) call. Leave blank to use the global default.
         </p>
         <div>
@@ -336,7 +347,7 @@ function AddFundsModal({
       size="sm"
       footer={
         <>
-          <Button variant="subtle" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="ghost" onClick={() => submit("debit")} loading={busy}>
@@ -349,7 +360,7 @@ function AddFundsModal({
       }
     >
       <div className="space-y-4">
-        <p className="text-xs text-muted">
+        <p className="m-0 text-[13px] text-muted">
           Current balance: <span className="text-ink font-medium">{fmtMoney(row?.balance ?? 0, currency)}</span>.
           Credit adds funds (e.g. cash/bank received); Debit removes them (correction).
         </p>

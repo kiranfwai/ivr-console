@@ -102,7 +102,7 @@ export default function RequestAccess() {
   }
 
   return (
-    <div className="relative min-h-screen bg-bg text-ink">
+    <div className="lp-scope relative min-h-screen bg-bg text-ink">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="lp-grid" style={{ WebkitMaskImage: "radial-gradient(ellipse 95% 85% at 20% 26%, #000 18%, transparent 76%)", maskImage: "radial-gradient(ellipse 95% 85% at 20% 26%, #000 18%, transparent 76%)" }} />
         <div className="lp-glow left-[8%] top-[-320px] h-[860px] w-[1040px] -translate-x-[40%]" />

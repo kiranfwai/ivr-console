@@ -199,7 +199,7 @@ export default function Landing() {
   }, []);
 
   return (
-    <div className="bg-bg text-ink">
+    <div className="lp-scope bg-bg text-ink">
       {/* ------------------------------------------------ nav */}
       <nav className="fixed inset-x-0 top-0 z-50 h-[66px] border-b border-line bg-bg/80 backdrop-blur-xl">
         <div className="mx-auto flex h-[66px] max-w-[1360px] items-center justify-between px-[clamp(22px,3.6vw,54px)]">

@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarClock, Play, Pause, Trash2, Plus, AlertCircle } from "lucide-react";
-import { Card, Button, Input, Label, Select, Badge, EmptyState, Spinner, Modal, toast } from "./ui";
+import { CalendarClock, Play, Pause, Trash2, Plus, AlertCircle, MessageCircle, Phone } from "lucide-react";
+import {
+  Button, Input, Label, Select, Badge, EmptyState, Spinner, Modal, IconButton, ConfirmDialog,
+  DataPanel, DataTable, TH, TD, toast,
+} from "./ui";
 import { api } from "./useData";
 
 export interface ScheduleSpec {
@@ -65,9 +68,113 @@ function defaultStartAt(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/* ------------------------------------------------------------------
+   Schedule form — shared by the "New schedule" modal and the inline
+   "When → Schedule" step on Bulk calls.
+   ------------------------------------------------------------------ */
+
+export interface ScheduleDraft {
+  name: string;
+  repeat: "once" | "daily" | "weekly";
+  startAt: string;
+  atTime: string;
+  days: number[];
+}
+
+export function newScheduleDraft(): ScheduleDraft {
+  return { name: "", repeat: "once", startAt: defaultStartAt(), atTime: "19:00", days: [new Date().getDay()] };
+}
+
+/** Saves a schedule. Throws on failure (callers show the toast). */
+export async function saveSchedule(kind: "call" | "whatsapp", draft: ScheduleDraft, spec: ScheduleSpec) {
+  const { name, repeat, startAt, atTime, days } = draft;
+  await api("/api/schedules", {
+    method: "POST",
+    body: JSON.stringify({
+      name: name.trim() || (kind === "call" ? "Scheduled campaign" : "Scheduled WhatsApp send"),
+      kind,
+      repeat,
+      // The picker is the browser's local clock; the server stores the instant.
+      startAt: repeat === "once" ? new Date(startAt).toISOString() : undefined,
+      atTime: repeat === "once" ? undefined : atTime,
+      days: repeat === "weekly" ? days : undefined,
+      spec,
+    }),
+  });
+}
+
+export function ScheduleFields({
+  kind,
+  draft,
+  onChange,
+}: {
+  kind: "call" | "whatsapp";
+  draft: ScheduleDraft;
+  onChange: (d: ScheduleDraft) => void;
+}) {
+  const set = (patch: Partial<ScheduleDraft>) => onChange({ ...draft, ...patch });
+  return (
+    <div className="grid gap-3.5">
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+        {draft.repeat === "once" ? (
+          <div>
+            <Label>Date &amp; time</Label>
+            <Input type="datetime-local" value={draft.startAt} onChange={(e) => set({ startAt: e.target.value })} />
+          </div>
+        ) : (
+          <div>
+            <Label hint="IST">Time of day</Label>
+            <Input type="time" value={draft.atTime} onChange={(e) => set({ atTime: e.target.value })} />
+          </div>
+        )}
+        <div>
+          <Label>Repeat</Label>
+          <Select value={draft.repeat} onChange={(e) => set({ repeat: e.target.value as ScheduleDraft["repeat"] })}>
+            <option value="once">Once, at a set time</option>
+            <option value="daily">Every day</option>
+            <option value="weekly">Every week</option>
+          </Select>
+        </div>
+      </div>
+
+      {draft.repeat === "weekly" && (
+        <div>
+          <Label>Which days</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {DAY_LABEL.map((d, i) => {
+              const on = draft.days.includes(i);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => set({ days: on ? draft.days.filter((x) => x !== i) : [...draft.days, i].sort() })}
+                  className={`h-[30px] rounded-[8px] border px-2.5 text-[12.5px] font-medium transition-colors ${
+                    on ? "border-accent/40 bg-accent/10 text-accent" : "border-line bg-panel text-ink2 hover:text-ink"
+                  }`}
+                >
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <Label hint="optional">Name</Label>
+        <Input
+          value={draft.name}
+          onChange={(e) => set({ name: e.target.value })}
+          placeholder={kind === "call" ? "Webinar reminder calls" : "Wednesday reminder"}
+        />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Runs that start by themselves — used by both the bulk-call and bulk-WhatsApp
- * tabs. The parent owns the recipients and settings and hands them over through
+ * screens. The parent owns the recipients and settings and hands them over through
  * `buildSpec` at the moment the schedule is saved, so what gets scheduled is
  * exactly what pressing "send now" would have sent.
  */
@@ -77,26 +184,43 @@ export default function ScheduleCard({
   recipientCount,
   title,
   description,
+  hideNew,
+  emptyHint,
+  reloadKey,
+  onCount,
 }: {
   kind: "call" | "whatsapp";
   buildSpec: () => ScheduleSpec | null;
   recipientCount: number;
   title?: string;
   description?: string;
+  /** Hide "New schedule" when the parent offers its own way to schedule. */
+  hideNew?: boolean;
+  /** Empty-state line when there are no recipients yet. */
+  emptyHint?: string;
+  /** Bump to reload the list after the parent saved a schedule itself. */
+  reloadKey?: number;
+  /** Told how many schedules there are, after every load. */
+  onCount?: (n: number) => void;
 }) {
   const [items, setItems] = useState<ScheduleApi[] | null>(null);
   const [open, setOpen] = useState(false);
+  const [toDelete, setToDelete] = useState<ScheduleApi | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const r = await api<{ schedules: ScheduleApi[] }>("/api/schedules");
-      setItems(r.schedules.filter((s) => s.kind === kind));
+      const mine = r.schedules.filter((s) => s.kind === kind);
+      setItems(mine);
+      onCount?.(mine.length);
     } catch (e: any) {
       toast(e?.message || "Could not load schedules", "danger");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, reloadKey]);
 
   async function toggle(s: ScheduleApi) {
     try {
@@ -107,85 +231,142 @@ export default function ScheduleCard({
     }
   }
 
-  async function remove(s: ScheduleApi) {
-    if (!window.confirm(`Delete the schedule "${s.name}"? Runs already started are not affected.`)) return;
+  async function remove() {
+    if (!toDelete) return;
+    setDeleting(true);
     try {
-      await api(`/api/schedules/${s.id}`, { method: "DELETE" });
+      await api(`/api/schedules/${toDelete.id}`, { method: "DELETE" });
+      setToDelete(null);
       await load();
     } catch (e: any) {
       toast(e?.message || "Could not delete", "danger");
+    } finally {
+      setDeleting(false);
     }
   }
 
+  const KindIcon = kind === "call" ? Phone : MessageCircle;
+
   return (
     <>
-      <Card
-        title={<span className="flex items-center gap-2"><CalendarClock size={16} className="text-brand" /> {title || "Scheduled runs"}</span>}
-        description={description || "Starts by itself at the time you choose — nothing needs to be open"}
+      <DataPanel
+        title={title || "Scheduled runs"}
+        meta={description || "Starts by itself at the time you choose — nothing needs to be open."}
         action={
-          <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setOpen(true)} disabled={!recipientCount}>
-            New schedule
-          </Button>
+          !hideNew && (
+            <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setOpen(true)} disabled={!recipientCount}>
+              New schedule
+            </Button>
+          )
         }
       >
         {items === null ? (
-          <div className="flex justify-center py-6"><Spinner /></div>
+          <div className="flex justify-center border-t border-line py-8"><Spinner /></div>
         ) : items.length === 0 ? (
-          <EmptyState
-            icon={<CalendarClock size={20} />}
-            title="Nothing scheduled"
-            description={
-              recipientCount
-                ? "Set a date and time and this list will go out on its own."
-                : "Add your recipients above, then create a schedule."
-            }
-          />
-        ) : (
-          <div className="grid gap-2">
-            {items.map((s) => {
-              // Same rule as the Scheduled page: a one-off that has run and has
-              // nothing left to fire is finished, not paused — and has nothing to resume.
-              const finished = !s.nextRunAt && !s.enabled && s.runs > 0;
-              return (
-              <div key={s.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-ink truncate">{s.name}</span>
-                    {finished
-                      ? <Badge tone="muted">Finished</Badge>
-                      : s.enabled
-                        ? <Badge tone="ok">Armed</Badge>
-                        : <Badge tone="warn">Paused</Badge>}
-                    {s.runs > 0 && <span className="text-xs text-muted">ran {s.runs}×</span>}
-                  </div>
-                  <div className="text-xs text-muted mt-0.5">
-                    {describe(s)} · {s.recipientCount.toLocaleString()} recipient{s.recipientCount === 1 ? "" : "s"}
-                    {s.nextRunAt && s.enabled && <> · next {istWhen(s.nextRunAt)} IST</>}
-                    {finished && s.lastRunAt && <> · ran {istWhen(s.lastRunAt)} IST</>}
-                  </div>
-                  {s.lastError && (
-                    <div className="text-xs text-danger mt-1 flex items-center gap-1">
-                      <AlertCircle size={12} /> {s.lastError}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {!finished && (
-                    <Button size="sm" variant="ghost" leftIcon={s.enabled ? <Pause size={13} /> : <Play size={13} />}
-                            onClick={() => toggle(s)}>
-                      {s.enabled ? "Pause" : "Resume"}
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" leftIcon={<Trash2 size={13} />} onClick={() => remove(s)}>
-                    Delete
-                  </Button>
-                </div>
-              </div>
-              );
-            })}
+          <div className="border-t border-line">
+            <EmptyState
+              icon={<CalendarClock size={20} />}
+              title="Nothing scheduled"
+              description={
+                recipientCount
+                  ? "Set a date and time and this list will go out on its own."
+                  : emptyHint || "Add your recipients first, then create a schedule."
+              }
+            />
           </div>
+        ) : (
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Name</th>
+                <th className={`${TH} hidden sm:table-cell`}>Recipients</th>
+                <th className={TH}>Next run</th>
+                <th className={`${TH} hidden md:table-cell`}>Repeats</th>
+                <th className={TH}>Status</th>
+                <th className={`${TH} w-[110px]`} />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((s) => {
+                // Same rule as the Scheduled page: a one-off that has run and has
+                // nothing left to fire is finished, not paused — and has nothing to resume.
+                const finished = !s.nextRunAt && !s.enabled && s.runs > 0;
+                return (
+                  <tr key={s.id} className="hover:bg-ink/[0.02]">
+                    <td className={TD}>
+                      <div className="flex items-center gap-2.5">
+                        <div className="grid h-8 w-8 flex-none place-items-center rounded-[8px] bg-accent/10 text-accent">
+                          <KindIcon size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-ink">{s.name}</div>
+                          {s.lastError && (
+                            <div className="mt-0.5 flex items-center gap-1 text-xs text-danger">
+                              <AlertCircle size={12} className="shrink-0" /> <span className="truncate">{s.lastError}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className={`${TD} hidden tabular-nums sm:table-cell`}>
+                      {s.recipientCount.toLocaleString()}
+                    </td>
+                    <td className={TD}>
+                      {s.nextRunAt && s.enabled ? (
+                        <>
+                          <div className="whitespace-nowrap">{istWhen(s.nextRunAt)}</div>
+                          <div className="text-xs text-muted">IST</div>
+                        </>
+                      ) : finished && s.lastRunAt ? (
+                        <>
+                          <div className="whitespace-nowrap text-muted">Ran {istWhen(s.lastRunAt)}</div>
+                          <div className="text-xs text-muted">IST</div>
+                        </>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td className={`${TD} hidden md:table-cell`}>{describe(s)}</td>
+                    <td className={TD}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {finished
+                          ? <Badge tone="muted">Finished</Badge>
+                          : s.enabled
+                            ? <Badge tone="ok">Armed</Badge>
+                            : <Badge tone="warn">Paused</Badge>}
+                        {s.runs > 0 && <span className="text-xs text-muted">ran {s.runs}×</span>}
+                      </div>
+                    </td>
+                    <td className={TD}>
+                      <div className="flex justify-end gap-0.5">
+                        {!finished && (
+                          <IconButton
+                            size="sm"
+                            title={s.enabled ? "Pause" : "Resume"}
+                            icon={s.enabled ? <Pause size={15} /> : <Play size={15} />}
+                            onClick={() => toggle(s)}
+                          />
+                        )}
+                        <IconButton size="sm" variant="danger" title="Delete" icon={<Trash2 size={15} />} onClick={() => setToDelete(s)} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </DataTable>
         )}
-      </Card>
+      </DataPanel>
+
+      <ConfirmDialog
+        open={!!toDelete}
+        title="Delete this schedule?"
+        body={<>The schedule &ldquo;{toDelete?.name}&rdquo; will be removed. Runs already started are not affected.</>}
+        confirmLabel="Yes, delete"
+        busy={deleting}
+        onConfirm={remove}
+        onClose={() => !deleting && setToDelete(null)}
+      />
 
       <NewScheduleModal
         open={open}
@@ -209,15 +390,11 @@ function NewScheduleModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [repeat, setRepeat] = useState<"once" | "daily" | "weekly">("once");
-  const [startAt, setStartAt] = useState(defaultStartAt());
-  const [atTime, setAtTime] = useState("19:00");
-  const [days, setDays] = useState<number[]>([new Date().getDay()]);
+  const [draft, setDraft] = useState<ScheduleDraft>(newScheduleDraft);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) { setName(""); setRepeat("once"); setStartAt(defaultStartAt()); setAtTime("19:00"); }
+    if (open) setDraft(newScheduleDraft());
   }, [open]);
 
   async function save() {
@@ -225,19 +402,7 @@ function NewScheduleModal({
     if (!spec) return;
     setSaving(true);
     try {
-      await api("/api/schedules", {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim() || (kind === "call" ? "Scheduled campaign" : "Scheduled WhatsApp send"),
-          kind,
-          repeat,
-          // The picker is the browser's local clock; the server stores the instant.
-          startAt: repeat === "once" ? new Date(startAt).toISOString() : undefined,
-          atTime: repeat === "once" ? undefined : atTime,
-          days: repeat === "weekly" ? days : undefined,
-          spec,
-        }),
-      });
+      await saveSchedule(kind, draft, spec);
       toast("Scheduled.", "ok");
       onSaved();
     } catch (e: any) {
@@ -248,67 +413,25 @@ function NewScheduleModal({
 
   if (!open) return null;
   return (
-    <Modal open={open} onClose={onClose} title="Schedule this run">
-      <div className="grid gap-3">
-        <div className="text-xs text-muted">
-          {recipientCount.toLocaleString()} recipient{recipientCount === 1 ? "" : "s"} will be saved with this
-          schedule and used every time it runs. Times are IST.
-        </div>
-
-        <div>
-          <Label>Name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)}
-                 placeholder={kind === "call" ? "Webinar reminder calls" : "Wednesday reminder"} />
-        </div>
-
-        <div>
-          <Label>How often</Label>
-          <Select value={repeat} onChange={(e) => setRepeat(e.target.value as any)}>
-            <option value="once">Once, at a set time</option>
-            <option value="daily">Every day</option>
-            <option value="weekly">Every week</option>
-          </Select>
-        </div>
-
-        {repeat === "once" ? (
-          <div>
-            <Label>When</Label>
-            <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
-          </div>
-        ) : (
-          <div>
-            <Label hint="IST">Time of day</Label>
-            <Input type="time" value={atTime} onChange={(e) => setAtTime(e.target.value)} />
-          </div>
-        )}
-
-        {repeat === "weekly" && (
-          <div>
-            <Label>Which days</Label>
-            <div className="flex flex-wrap gap-1.5">
-              {DAY_LABEL.map((d, i) => {
-                const on = days.includes(i);
-                return (
-                  <button
-                    key={d}
-                    onClick={() => setDays(on ? days.filter((x) => x !== i) : [...days, i].sort())}
-                    className={`px-2.5 py-1 rounded-lg text-xs border transition-colors ${
-                      on ? "bg-brand/15 border-brand/40 text-brand" : "border-line text-ink2 hover:text-ink"
-                    }`}
-                  >
-                    {d}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Schedule this run"
+      maxWidth="max-w-[460px]"
+      footer={
+        <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} loading={saving} disabled={!recipientCount}>Schedule it</Button>
-        </div>
-      </div>
+          <Button onClick={save} loading={saving} disabled={!recipientCount} leftIcon={<CalendarClock size={14} />}>
+            Schedule it
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-4 text-[13px] text-muted">
+        {recipientCount.toLocaleString()} recipient{recipientCount === 1 ? "" : "s"} will be saved with this
+        schedule and used every time it runs. Times are IST.
+      </p>
+      <ScheduleFields kind={kind} draft={draft} onChange={setDraft} />
     </Modal>
   );
 }

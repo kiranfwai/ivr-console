@@ -1,24 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listCalls } from "@/lib/calls";
 import { listCampaigns } from "@/lib/campaigns";
 import { deriveOutcome } from "@/lib/outcome";
 import { readRange } from "@/lib/stats";
 import { resolveConnNamesByCallUuids } from "@/lib/gsheets";
+import {
+  campaignsInRange,
+  chargesByCallId,
+  istToday,
+  listCallsForCampaigns,
+  readRangeForCampaigns,
+  spentInRange,
+} from "@/lib/report-export";
+import { parseCampaignIds } from "@/lib/report-format";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Call report data for a date range and zero (= all), one or many campaigns.
+ * GET ?from=&to=&campaigns=id1,id2   (the older `campaign=<id>` and `day=` still work)
+ */
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const day = url.searchParams.get("day") || undefined;
   const fromDay = day || url.searchParams.get("from") || undefined;
   const toDay = day || url.searchParams.get("to") || fromDay;
-  const campaignId = url.searchParams.get("campaign") || undefined;
+  const campaignIds = parseCampaignIds(url.searchParams);
 
   // ----- aggregates: read rolled-up counters (O(days), not O(calls)) -----
   // Default to "today" (IST) if no range is supplied.
-  const today = new Date(Date.now() + (5 * 60 + 30) * 60 * 1000).toISOString().slice(0, 10);
-  const agg = await readRange(fromDay || today, toDay || today, campaignId);
+  const today = istToday();
+  const rangeFrom = fromDay || today;
+  const rangeTo = toDay || today;
 
+  // Unfiltered counters drive the campaign picker (every campaign that ran in
+  // the range); the filtered ones drive the KPIs.
+  const allAgg = await readRange(rangeFrom, rangeTo);
+  const { agg, perCampaign } = campaignIds.length
+    ? await readRangeForCampaigns(rangeFrom, rangeTo, campaignIds)
+    : { agg: allAgg, perCampaign: new Map() };
 
   const total = agg.total;
   const answered = agg.answered;
@@ -39,11 +58,9 @@ export async function GET(req: NextRequest) {
     byCampaign[label] = (byCampaign[label] || 0) + count;
   }
 
-  // Per-campaign breakdown table (FEATURE 3). Read each active campaign's rolled-up
+  // Per-campaign breakdown table. Read each active campaign's rolled-up
   // aggregate over the same range (O(days) each). Capped at 50 campaigns so a long
   // campaign list can't fan out into an unbounded number of reads.
-  const rangeFrom = fromDay || today;
-  const rangeTo = toDay || today;
   const activeCids = Object.entries(agg.byCampaignId)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 50)
@@ -51,7 +68,7 @@ export async function GET(req: NextRequest) {
   const campaignTable = (
     await Promise.all(
       activeCids.map(async (cid) => {
-        const a = await readRange(rangeFrom, rangeTo, cid);
+        const a = perCampaign.get(cid) ?? (await readRange(rangeFrom, rangeTo, cid));
         const lifted = a.outcomes.press1 + a.outcomes.connected;
         const busy = a.outcomes.busy;
         // Everything settled that isn't lifted or busy (no-answer + rejected +
@@ -61,6 +78,7 @@ export async function GET(req: NextRequest) {
           campaignId: cid,
           name: cid === "none" ? "(none)" : nameById.get(cid) || cid,
           total: a.total,
+          answered: a.answered,
           lifted,
           press1: a.press1,
           busy,
@@ -74,17 +92,28 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.total - a.total);
 
   // ----- recent table: only the latest rows are needed, fetched directly -----
-  const recentCalls = await listCalls({ limit: 50, day, from: fromDay, to: toDay, campaignId });
+  const recentCalls = await listCallsForCampaigns({ limit: 50, day, from: fromDay, to: toDay, campaignIds });
 
   // Resolve which recent calls originated from a Sheet Auto-Dial lead so we can
   // show the sheet's display name in the call log.  Non-fatal: a failure here
   // must not break the entire reports endpoint.
   let sheetNameByUuid = new Map<string, string>();
+  const uuids = recentCalls.map((c) => c.callUuid).filter(Boolean);
   try {
-    const uuids = recentCalls.map((c) => c.callUuid).filter(Boolean);
     sheetNameByUuid = await resolveConnNamesByCallUuids(uuids);
   } catch {
     // non-fatal — sheet name column will just be empty
+  }
+  // What each recent call cost the wallet, and the range total. Non-fatal too.
+  let charges = new Map<string, number>();
+  let spent: number | null = null;
+  try {
+    [charges, spent] = await Promise.all([
+      chargesByCallId(uuids),
+      spentInRange(rangeFrom, rangeTo, campaignIds),
+    ]);
+  } catch (e) {
+    console.error("[reports] wallet lookup failed:", e);
   }
 
   const recent = recentCalls.map((c) => ({
@@ -94,12 +123,10 @@ export async function GET(req: NextRequest) {
         ? deriveOutcome(c.hangupCause, c.digit, !!c.answeredAt)
         : null,
     gsheetConnName: sheetNameByUuid.get(c.callUuid) ?? null,
+    cost: charges.has(c.callUuid) ? charges.get(c.callUuid)! : null,
   }));
 
   // ----- why calls ended: from this range's own latest calls -----
-  // Used to come from Plivo's account-wide call history (a remote API, ~1 s
-  // per page, and not even limited to the selected range). The calls listed
-  // above already carry the carrier's hangup cause.
   const hangupCauseCounts: Record<string, number> = {};
   for (const c of recentCalls) {
     if (!c.hangupCause) continue;
@@ -118,11 +145,16 @@ export async function GET(req: NextRequest) {
       lifted,
       notLifted,
       liftRate: total ? Math.round((lifted / total) * 100) : 0,
+      spent,
     },
     outcomes,
     byHour: agg.byHour,
     byCampaign,
     campaignTable,
+    // Every campaign that had calls in the range (ignores the campaign filter),
+    // for the campaign picker.
+    campaignsInRange: await campaignsInRange(rangeFrom, rangeTo, allAgg),
+    selectedCampaigns: campaignIds,
     range: { from: rangeFrom, to: rangeTo },
     hangupCauseCounts,
     recent,

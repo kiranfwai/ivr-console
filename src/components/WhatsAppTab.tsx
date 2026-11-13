@@ -1,39 +1,43 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Send, Play, Square, RotateCw, MessageCircle, Zap, CheckCircle2, AlertCircle } from "lucide-react";
-import { Button, Card, Input, Label, Textarea, Badge, EmptyState, Section, CsvFilePicker, ConfirmDialog, toast } from "./ui";
+import { useEffect, useMemo, useState } from "react";
+import { Send, Play, Square, MessageCircle, X } from "lucide-react";
+import {
+  Button, Card, Input, Label, Textarea, Badge, Section, CsvFilePicker, DataPanel, DataTable, TH, TD, toast,
+} from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts } from "@/lib/contacts";
+import { fmtDateTime } from "@/lib/format";
 import ScheduleCard from "./ScheduleCard";
+import {
+  Seg, StepsLayout, Step, SummaryCard, SumRow, SumTotal, FileChip, Chips, Callout,
+  StatTiles, StatTile, Prog, ConfirmSendModal, ModalActions,
+} from "./BulkTabParts";
 import type { BulkJobWithCounts } from "@/lib/models";
 
-type Mode = "single" | "bulk";
+type Mode = "single" | "bulk" | "sched";
 
 export default function WhatsAppTab() {
   const [mode, setMode] = useState<Mode>("single");
+  // Count for the "Scheduled" segment. ScheduleCard reports it after each load;
+  // this first fetch fills it before that view has been opened.
+  const { data: sdata } = useFetch<{ schedules: { kind: string }[] }>("/api/schedules");
+  const [schedCount, setSchedCount] = useState<number | null>(null);
+  const shownCount = schedCount ?? sdata?.schedules.filter((s) => s.kind === "whatsapp").length;
+
   return (
     <Section>
-      <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
-        <ModeBtn active={mode === "single"} onClick={() => setMode("single")} icon={<Send size={12} />} label="Single" />
-        <ModeBtn active={mode === "bulk"} onClick={() => setMode("bulk")} icon={<Zap size={12} />} label="Bulk" />
-      </div>
-      {mode === "single" ? <SingleSend /> : <BulkSend />}
+      <Seg<Mode>
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: "single", label: "Single" },
+          { value: "bulk", label: "Bulk send" },
+          { value: "sched", label: "Scheduled", count: shownCount ?? undefined },
+        ]}
+      />
+      {mode === "single" ? <SingleSend /> : <BulkSend view={mode} onSchedCount={setSchedCount} />}
     </Section>
-  );
-}
-
-function ModeBtn({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-        active ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 
@@ -74,65 +78,72 @@ function SingleSend() {
   }
 
   return (
-    <>
-      <Card title="Send a single WhatsApp" description="Sends one message now, to one number — no call is placed.">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <Label>Phone</Label>
-            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="9876543210" />
+    <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+      <div className="space-y-4">
+        <Card noPadding>
+          <div className="border-b border-line px-5 py-4">
+            <div className="text-[15px] font-semibold tracking-[-0.015em]">Send one WhatsApp</div>
+            <div className="mt-0.5 text-[13px] text-muted">Goes out now to one number. No call is placed.</div>
           </div>
-          <div>
-            <Label hint="optional">Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Their first name" />
-          </div>
-          <div className="md:col-span-2">
+          <div className="p-5">
+            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+              <div>
+                <Label>Phone</Label>
+                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="98765 43210" inputMode="tel" />
+              </div>
+              <div>
+                <Label hint="optional">Name</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Their first name" />
+              </div>
+            </div>
             {/* Both fields below are optional and fall back to the account
-                default. They were sitting in the middle of the form looking as
-                important as the phone number. Collapsed, not removed. */}
-            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
-              <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
-                <b className="font-semibold text-ink">Advanced</b>
-                <span className="ml-auto text-right text-[11px] leading-tight text-muted">
-                  webhook URL &middot; extra JSON
-                  <br />
-                  leave blank and your account default is used
-                </span>
+                default. Collapsed, not removed. */}
+            <details className="group mt-3.5 rounded-[10px] border border-dashed border-line2 px-3 py-2.5">
+              <summary className="cursor-pointer list-none text-[13.5px] font-medium text-ink marker:content-['']">
+                <span className="mr-1.5 inline-block text-muted transition-transform group-open:rotate-90">&#9656;</span>
+                Advanced <span className="font-normal text-muted">· webhook URL, extra fields</span>
               </summary>
-              <div className="mt-4 space-y-4">
+              <div className="mt-3 space-y-3.5">
                 <div>
                   <Label hint="optional">Webhook URL</Label>
                   <Input
                     value={webhookUrl}
                     onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://connect.pabbly.com/webhook-listener/..."
+                    placeholder="Leave blank to use your account default"
                   />
                 </div>
                 <div>
-                  <Label hint="optional · merged into payload">Extra JSON</Label>
+                  <Label hint="optional · merged into the payload">Extra fields (JSON)</Label>
                   <Textarea rows={3} value={extra} onChange={(e) => setExtra(e.target.value)} placeholder='{"campaign": "day1"}' />
                 </div>
               </div>
             </details>
-          </div>
-          <div className="md:col-span-2 flex justify-end">
-            <Button onClick={send} disabled={!phone} loading={busy} leftIcon={<Send size={14} />}>
+            <Button onClick={send} disabled={!phone} loading={busy} leftIcon={<Send size={15} />} size="lg" className="mt-[18px]">
               Send WhatsApp
             </Button>
           </div>
+        </Card>
+
+        {last && (
+          <Card
+            title="Last response"
+            action={<Badge tone={last.ok ? "ok" : "danger"}>{last.ok ? `${last.status} · ${last.ms} ms` : "Failed"}</Badge>}
+          >
+            <pre className="max-h-64 overflow-auto rounded-[9px] border border-line bg-elev p-3 font-mono text-xs">
+              {JSON.stringify(last, null, 2)}
+            </pre>
+          </Card>
+        )}
+      </div>
+
+      <Card noPadding>
+        <div className="border-b border-line px-5 py-4 text-[15px] font-semibold tracking-[-0.015em]">Good to know</div>
+        <div className="grid gap-2.5 p-5">
+          <Callout tone="info">Numbers on your Do Not Disturb list are never messaged, even here.</Callout>
+          <Callout tone="warn">Each send uses your WhatsApp template credits with your provider.</Callout>
         </div>
       </Card>
-
-      {last && (
-        <Card title="Last response" action={
-          <Badge tone={last.ok ? "ok" : "danger"}>{last.ok ? `${last.status} · ${last.ms}ms` : "failed"}</Badge>
-        }>
-          <pre className="text-xs font-mono bg-bg/60 border border-line p-3 rounded-md overflow-auto max-h-64">
-            {JSON.stringify(last, null, 2)}
-          </pre>
-        </Card>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -145,19 +156,14 @@ const BATCH_SIZE = 20;
 // Recommended safe ceiling; above this we warn (provider limits — see explainer).
 const SAFE_MAX_RATE = 600;
 
-/** Time budget (ms) for one batch so the running average hits `ratePerMin`. */
-function batchBudgetMs(ratePerMin: number, batch: number, jitterPct: number): number {
-  const baseMs = (batch / Math.max(1, ratePerMin)) * 60000;
-  const jitter = baseMs * (jitterPct / 100);
-  return Math.round(baseMs - jitter + Math.random() * jitter * 2);
-}
+const EMPTY_CSV = "phone,name,email\n";
 
-function BulkSend() {
+function BulkSend({ view, onSchedCount }: { view: "bulk" | "sched"; onSchedCount: (n: number) => void }) {
   const { data: jdata, reload: reloadJobs } = useFetch<{ jobs: BulkJobWithCounts[] }>("/api/bulk");
   const jobs = (jdata?.jobs ?? []).filter((j) => j.kind === "whatsapp");
 
   // Persisted across tab switches + refresh (BUG 1) — recipients and settings survive.
-  const [csv, setCsv] = usePersistentState<string>("ivr.wa.csv", "phone,name,email\n");
+  const [csv, setCsv] = usePersistentState<string>("ivr.wa.csv", EMPTY_CSV);
   const [webhookUrl, setWebhookUrl] = usePersistentState("ivr.wa.webhookUrl", "");
   // Messages per minute. New key (not the old "ivr.wa.rate", which capped at ~60)
   // so existing users pick up the faster default. 300/min ≈ 18k/hour.
@@ -167,14 +173,14 @@ function BulkSend() {
   const [activeJob, setActiveJob] = useState<BulkJobWithCounts | null>(null);
   // Reflects the job on the server, not a loop in this tab.
   const running = activeJob?.status === "running";
-  // A send reaches real people, so Start only opens a confirmation; `starting`
-  // locks the button while the request is in flight so a double click can't
-  // queue the same list twice.
+  // A send reaches real people, so "Review & send" only opens a confirmation;
+  // `starting` locks the button while the request is in flight so a double
+  // click can't queue the same list twice.
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [starting, setStarting] = useState(false);
-  // Reflects the job on the server, not a loop in this tab.
+  const [showPaste, setShowPaste] = useState(false);
 
-  // Keep the "Recent WA jobs" list fresh without a manual refresh: poll the jobs
+  // Keep the recent-sends list fresh without a manual refresh: poll the jobs
   // list (fast while a send is running, slow when idle).
   useEffect(() => {
     const h = setInterval(() => reloadJobs(), running ? 3000 : 10000);
@@ -193,6 +199,10 @@ function BulkSend() {
     const h = setInterval(fn, running ? 1500 : 5000);
     return () => clearInterval(h);
   }, [activeJobId, running]);
+
+  const parsed = useMemo(() => parseContacts(csv), [csv]);
+  const previewCount = parsed.rows.length;
+  const estimatedMin = previewCount > 0 ? Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))) : 0;
 
   async function start() {
     const rows = parsed.rows;
@@ -216,7 +226,7 @@ function BulkSend() {
       reloadJobs();
       // Clear the list once it is queued. It used to stay saved in the browser,
       // so the next visit showed "Start · N sends" for people already messaged.
-      setCsv("phone,name,email\n");
+      setCsv(EMPTY_CSV);
       toast(`Queued ${rows.length.toLocaleString()} WhatsApp sends — you can close this tab`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed", "danger");
@@ -254,282 +264,333 @@ function BulkSend() {
   }
 
   const counts = activeJob ? tally(activeJob) : null;
-  const parsed = useMemo(() => parseContacts(csv), [csv]);
-  const previewCount = parsed.rows.length;
-  const estimatedMin = previewCount > 0 ? Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))) : 0;
+  const { stats } = parsed;
+  const pl = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+  const scheduleCard = (
+    <ScheduleCard
+      kind="whatsapp"
+      recipientCount={previewCount}
+      title="Scheduled sends"
+      description="Goes out on its own at the time you pick. The tab does not need to be open."
+      emptyHint="Load recipients under Bulk send first, then schedule them here."
+      onCount={onSchedCount}
+      buildSpec={() => {
+        if (!parsed.rows.length) {
+          toast("Add recipients first.", "danger");
+          return null;
+        }
+        return {
+          webhookUrl: webhookUrl || undefined,
+          recipients: parsed.rows,
+          delayMs: Math.round(60000 / Math.max(1, ratePerMin)),
+          jitterPct,
+          concurrency: BATCH_SIZE,
+        };
+      }}
+    />
+  );
+
+  if (view === "sched") {
+    return (
+      <>
+        {previewCount > 0 && (
+          <Callout tone="info">
+            {pl(previewCount, "recipient", "recipients")} from Bulk send will be saved with a new schedule.
+          </Callout>
+        )}
+        {scheduleCard}
+      </>
+    );
+  }
 
   return (
     <>
-      <Card title="Bulk WhatsApp" description="Sent by the server, at the rate you choose. Safe to close this tab.">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="md:col-span-2">
-            {/* Both fields below are optional and fall back to the account
-                default. They were sitting in the middle of the form looking as
-                important as the phone number. Collapsed, not removed. */}
-            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
-              <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
-                <b className="font-semibold text-ink">Advanced</b>
-                <span className="ml-auto text-right text-[11px] leading-tight text-muted">
-                  webhook URL
-                  <br />
-                  leave blank and your account default is used
-                </span>
-              </summary>
-              <div className="mt-4 space-y-4">
-                <div>
-                  <Label hint="optional">Webhook URL</Label>
-                  <Input
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://connect.pabbly.com/webhook-listener/..."
+      <StepsLayout
+        steps={
+          <>
+            <Step
+              n={1}
+              done={previewCount > 0}
+              title="Recipients"
+              description={
+                <>A CSV with a <span className="font-mono text-ink2">phone</span> column. <span className="font-mono text-ink2">name</span> and{" "}
+                <span className="font-mono text-ink2">email</span> are optional.</>
+              }
+            >
+              <FileChip
+                title={previewCount > 0 ? "Your list" : "No list yet"}
+                sub={
+                  previewCount > 0
+                    ? `${pl(stats.totalRows, "row", "rows")} · checked just now`
+                    : "Choose a CSV file, or paste the list below."
+                }
+                action={
+                  <>
+                    <CsvFilePicker onLoad={setCsv} />
+                    {previewCount > 0 && (
+                      <Button size="sm" variant="subtle" leftIcon={<X size={13} />} onClick={() => setCsv(EMPTY_CSV)}>
+                        Clear
+                      </Button>
+                    )}
+                  </>
+                }
+              />
+              {previewCount > 0 && (
+                <Chips>
+                  <Badge tone="ok">{pl(previewCount, "ready", "ready")}</Badge>
+                  {stats.duplicates > 0 && <Badge tone="muted">{pl(stats.duplicates, "duplicate removed", "duplicates removed")}</Badge>}
+                  {stats.noPhone > 0 && <Badge tone="warn">{pl(stats.noPhone, "row without a phone · skipped", "rows without a phone · skipped")}</Badge>}
+                </Chips>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowPaste((v) => !v)}
+                className="mt-3 text-[13px] font-medium text-accent hover:underline"
+              >
+                {showPaste ? "Hide the list" : "Paste or edit the list"}
+              </button>
+              {showPaste && (
+                <div className="mt-2">
+                  <Textarea
+                    rows={6}
+                    value={csv}
+                    onChange={(e) => setCsv(e.target.value)}
+                    placeholder={"phone,name,email\n9876543210,Test,test@example.com\n9123456789,Test,"}
                   />
                 </div>
-              </div>
-            </details>
-          </div>
-
-          <div>
-            <Label hint="messages / minute">Rate</Label>
-            <Input
-              type="number"
-              min={10}
-              max={1200}
-              step={10}
-              value={ratePerMin}
-              onChange={(e) => setRatePerMin(Math.max(1, Number(e.target.value) || 0))}
-            />
-            <div className="text-xs mt-1 text-muted">
-              {ratePerMin > SAFE_MAX_RATE ? (
-                <span className="text-warn">
-                  Above {SAFE_MAX_RATE}/min — only go this high if your WhatsApp provider allows it.
-                </span>
-              ) : (
-                <>Recommended 300–600/min. ~{Math.ceil(20000 / Math.max(1, ratePerMin))}m for 20k.</>
               )}
-            </div>
-          </div>
-          <div>
-            <Label hint={`±${jitterPct}%`}>Jitter</Label>
-            <input
-              type="range"
-              min={0}
-              max={80}
-              value={jitterPct}
-              onChange={(e) => setJitterPct(Number(e.target.value))}
-              className="w-full"
-            />
-            <div className="text-xs mt-1 text-muted">Randomizes spacing so sends don&apos;t look robotic.</div>
-          </div>
-        </div>
+            </Step>
 
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-1.5">
-            <Label>Recipients · CSV with headers phone, name, email</Label>
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <span className="tabular-nums">
-                {previewCount}
-                {previewCount > 0 && ` · ~${estimatedMin}m`}
-              </span>
-              <CsvFilePicker onLoad={setCsv} />
-              <button
-                onClick={() => setCsv("phone,name,email\n")}
-                className="px-2 py-1 rounded-md bg-elev/60 hover:bg-elev text-ink2 hover:text-ink border border-line transition-colors"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-          <Textarea
-            rows={6}
-            value={csv}
-            onChange={(e) => setCsv(e.target.value)}
-            placeholder={"phone,name,email\n9876543210,Priya,priya@example.com\n9123456789,Test,"}
-          />
-          {previewCount > 0 && (
-            <div className="mt-2 flex items-start gap-2 text-xs bg-ok/5 border border-ok/20 rounded-lg px-3 py-2">
-              <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
-              <span className="text-ink2">
-                <span className="text-ok font-semibold">✓ {previewCount.toLocaleString()} contacts loaded</span>
-                {parsed.stats.duplicates > 0 && (
-                  <> · {parsed.stats.duplicates.toLocaleString()} duplicate{parsed.stats.duplicates === 1 ? "" : "s"} removed</>
-                )}
-                {parsed.stats.noPhone > 0 && (
-                  <> · <span className="text-warn">{parsed.stats.noPhone.toLocaleString()} row{parsed.stats.noPhone === 1 ? "" : "s"} skipped — no phone</span></>
-                )}
-              </span>
-            </div>
-          )}
-        </div>
+            <Step n={2} done title="Message" description="The WhatsApp flow that sends your template.">
+              <Label hint="optional">Webhook URL</Label>
+              <Input
+                value={webhookUrl}
+                onChange={(e) => setWebhookUrl(e.target.value)}
+                placeholder="Leave blank to use your account default flow"
+              />
+            </Step>
 
-        <div className="mt-4 flex justify-end">
-          <Button onClick={() => setConfirmOpen(true)} disabled={!previewCount || running || starting} loading={running || starting} leftIcon={<Play size={14} />} size="lg">
-            {running ? "Sending…" : `Start · ${previewCount.toLocaleString()} sends`}
-          </Button>
-        </div>
-      </Card>
-
-      <ConfirmDialog
-        open={confirmOpen}
-        tone="primary"
-        title="Send WhatsApp messages?"
-        confirmLabel={`Send to ${previewCount.toLocaleString()} ${previewCount === 1 ? "person" : "people"}`}
-        busy={starting}
-        body={
-          <>
-            This will message <span className="font-medium text-ink">{previewCount.toLocaleString()}</span>{" "}
-            {previewCount === 1 ? "person" : "people"} — about{" "}
-            {Math.max(1, Math.ceil(previewCount / Math.max(1, ratePerMin))).toLocaleString()} min at{" "}
-            {ratePerMin.toLocaleString()}/min. Numbers on your Do Not Disturb list are skipped. Messages cannot be
-            recalled once sent; the list is cleared after it is queued.
+            <Step n={3} title="Pace" description="Slower sending looks more natural to WhatsApp.">
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <div>
+                  <Label>Messages per minute</Label>
+                  <Input
+                    type="number"
+                    min={10}
+                    max={1200}
+                    step={10}
+                    value={ratePerMin}
+                    onChange={(e) => setRatePerMin(Math.max(1, Number(e.target.value) || 0))}
+                    className="tabular-nums"
+                  />
+                  <div className="mt-1 text-xs text-muted">
+                    {ratePerMin > SAFE_MAX_RATE ? (
+                      <span className="text-warn">
+                        Above {SAFE_MAX_RATE}/min — only go this high if your WhatsApp provider allows it.
+                      </span>
+                    ) : (
+                      <>Recommended 300–600/min. About {Math.ceil(20000 / Math.max(1, ratePerMin))} min for 20,000.</>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <Label hint={`± ${jitterPct}%`}>Randomise timing</Label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={80}
+                    value={jitterPct}
+                    onChange={(e) => setJitterPct(Number(e.target.value))}
+                    className="mt-2.5 w-full accent-accent"
+                    aria-label="Randomise timing"
+                  />
+                  <div className="mt-1 text-xs text-muted">Varies the spacing so sends don&apos;t look robotic.</div>
+                </div>
+              </div>
+            </Step>
           </>
         }
-        onConfirm={start}
+        summary={
+          <SummaryCard>
+            <SumRow label="Rows in file" value={stats.totalRows.toLocaleString()} />
+            {stats.duplicates > 0 && <SumRow label="Duplicates" value={`− ${stats.duplicates.toLocaleString()}`} tone="muted" />}
+            {stats.noPhone > 0 && <SumRow label="No phone number" value={`− ${stats.noPhone.toLocaleString()}`} tone="warn" />}
+            <SumRow label="Takes about" value={previewCount > 0 ? `${estimatedMin.toLocaleString()} min` : "—"} />
+            <SumTotal label="Will be messaged" value={previewCount.toLocaleString()} />
+            <Button
+              size="lg"
+              className="mt-3.5 w-full"
+              onClick={() => setConfirmOpen(true)}
+              disabled={!previewCount || running || starting}
+              loading={starting}
+              leftIcon={<Send size={15} />}
+            >
+              {running ? "Sending…" : "Review & send"}
+            </Button>
+            <div className="mt-1.5 text-center text-xs text-muted">
+              {running
+                ? "Wait for the current send to finish, or stop it."
+                : "You’ll confirm before anything is sent. Numbers on your DND list are skipped."}
+            </div>
+          </SummaryCard>
+        }
+      />
+
+      <ConfirmSendModal
+        open={confirmOpen}
+        icon={<Send size={20} />}
+        title={`Send to ${pl(previewCount, "person", "people")}?`}
+        body="Messages can’t be recalled once sent. The list is cleared after it’s queued, so it can’t go out twice."
+        facts={[
+          ["Recipients", previewCount.toLocaleString()],
+          ...(stats.duplicates + stats.noPhone > 0
+            ? ([[
+                "Left out",
+                [
+                  stats.duplicates > 0 ? pl(stats.duplicates, "duplicate", "duplicates") : "",
+                  stats.noPhone > 0 ? `${stats.noPhone.toLocaleString()} without a phone` : "",
+                ].filter(Boolean).join(" · "),
+              ]] as [string, string][])
+            : []),
+          ["Do Not Disturb", "Numbers on the list are skipped"],
+          ["Pace", `${ratePerMin.toLocaleString()} / min · about ${estimatedMin.toLocaleString()} min`],
+          ["Flow", webhookUrl ? "Custom webhook" : "Account default"],
+        ]}
         onClose={() => !starting && setConfirmOpen(false)}
+        actions={
+          <ModalActions>
+            <Button variant="ghost" size="lg" onClick={() => setConfirmOpen(false)} disabled={starting}>Cancel</Button>
+            <Button size="lg" onClick={start} loading={starting}>
+              Send to {pl(previewCount, "person", "people")}
+            </Button>
+          </ModalActions>
+        }
       />
 
       {activeJob && counts && (
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <span>Active WA job</span>
-              <Badge tone={running ? "warn" : counts.pending > 0 ? "warn" : "ok"} dot={running}>
-                {running ? "running" : counts.pending > 0 ? "paused" : "complete"}
-              </Badge>
+        <Card noPadding>
+          <div className="flex flex-wrap items-start gap-3 p-5 pb-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2 text-[15px] font-semibold tracking-[-0.015em]">
+                {running ? "Sending now" : counts.pending > 0 ? "Paused" : "Last send"}
+                <JobBadge job={activeJob} pending={counts.pending} />
+              </div>
+              <div className="mt-0.5 text-[13px] text-muted">
+                Started {fmtDateTime(activeJob.createdAt)} · {Math.round(counts.donePct)}% done
+              </div>
             </div>
-          }
-          description={<span className="font-mono">{activeJob.id}</span>}
-          action={
-            <div className="flex gap-2">
-              {running ? (
-                <Button variant="danger" leftIcon={<Square size={12} />} onClick={stop}>Stop</Button>
-              ) : counts.pending > 0 ? (
-                <Button leftIcon={<Play size={12} />} onClick={() => resume(activeJob.id)}>Resume</Button>
-              ) : null}
+            {running ? (
+              <Button size="sm" variant="danger" leftIcon={<Square size={12} />} onClick={stop}>Stop</Button>
+            ) : counts.pending > 0 ? (
+              <Button size="sm" leftIcon={<Play size={12} />} onClick={() => resume(activeJob.id)}>Resume</Button>
+            ) : null}
+          </div>
+          <div className="px-5 pb-5">
+            <Prog
+              height="h-2.5"
+              total={counts.total}
+              title="Sent · skipped (DND) · failed"
+              parts={[
+                { value: counts.ok, cls: "bg-ok" },
+                // DND skips are finished rows too — without them a job that skipped one
+                // number sat at "67% complete" forever.
+                { value: counts.dnd, cls: "bg-muted/60" },
+                { value: counts.failedAll, cls: "bg-danger" },
+              ]}
+            />
+            <div className="mt-3.5">
+              <StatTiles>
+                <StatTile label="Total" value={counts.total} />
+                <StatTile label="Sent" value={counts.ok} tone="ok" />
+                <StatTile label="Pending" value={counts.pending} />
+                <StatTile label="Failed" value={counts.failedAll} tone="danger" />
+                <StatTile label="Skipped · DND" value={counts.dnd} tone="warn" />
+              </StatTiles>
             </div>
-          }
-        >
-          <ProgressBar counts={counts} />
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2">
-            <Stat label="Sent" value={counts.ok} tone="ok" />
-            <Stat label="Failed" value={counts.failedAll} tone="danger" />
-            <Stat label="Skipped · DND" value={counts.dnd} tone="warn" />
-            <Stat label="Pending" value={counts.pending} tone="muted" />
-            <Stat label="Total" value={counts.total} tone="muted" />
           </div>
         </Card>
       )}
 
-       <ScheduleCard
-        kind="whatsapp"
-        recipientCount={parsed.rows.length}
-        title="Scheduled sends"
-        description="Goes out on its own at the time you pick. The tab does not need to be open."
-        buildSpec={() => {
-          if (!parsed.rows.length) {
-            toast("Add recipients first.", "danger");
-            return null;
-          }
-          return {
-            webhookUrl: webhookUrl || undefined,
-            recipients: parsed.rows,
-            delayMs: Math.round(60000 / Math.max(1, ratePerMin)),
-            jitterPct,
-            concurrency: BATCH_SIZE,
-          };
-        }}
-       />
-
       {!!jobs.length && (
-        <Card title="Recent WA jobs">
-          <div className="space-y-1">
-            {jobs.slice(0, 8).map((j) => {
-              const c = tally(j);
-              const isActive = activeJobId === j.id;
-              return (
-                <button
-                  key={j.id}
-                  onClick={() => {
-                    setActiveJobId(j.id);
-                    setActiveJob(j);
-                  }}
-                  className={`w-full text-left rounded-lg px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
-                    isActive ? "bg-brand/10 border border-brand/25" : "hover:bg-elev/60 border border-transparent"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <MessageCircle size={14} className="text-muted shrink-0" />
-                    <div className="min-w-0">
-                      <div className="font-mono text-xs truncate">{j.id}</div>
-                      <div className="text-xs text-muted">
-                        {new Date(j.createdAt).toLocaleString()}
+        <DataPanel title="Recent sends" meta="Click a row to follow it above.">
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Send</th>
+                <th className={TH}>Status</th>
+                <th className={`${TH} w-[30%]`}>Progress</th>
+                <th className={`${TH} text-right`}>Sent</th>
+                <th className={`${TH} hidden text-right sm:table-cell`}>Skipped</th>
+                <th className={`${TH} hidden text-right sm:table-cell`}>Failed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.slice(0, 8).map((j) => {
+                const c = tally(j);
+                const isActive = activeJobId === j.id;
+                return (
+                  <tr
+                    key={j.id}
+                    onClick={() => {
+                      setActiveJobId(j.id);
+                      setActiveJob(j);
+                    }}
+                    className={`cursor-pointer transition-colors ${isActive ? "bg-accent/[0.06]" : "hover:bg-ink/[0.03]"}`}
+                  >
+                    <td className={TD}>
+                      <div className="flex items-center gap-2.5">
+                        <div className="grid h-8 w-8 flex-none place-items-center rounded-[8px] bg-accent/10 text-accent">
+                          <MessageCircle size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="whitespace-nowrap font-medium text-ink">{c.total.toLocaleString()} recipients</div>
+                          <div className="whitespace-nowrap text-xs text-muted" title={j.id}>{fmtDateTime(j.createdAt)}</div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <Badge tone="ok">{c.ok}</Badge>
-                    {c.failedAll > 0 && <Badge tone="danger">{c.failedAll}</Badge>}
-                    <span className="text-muted">/ {c.total}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </Card>
+                    </td>
+                    <td className={TD}><JobBadge job={j} pending={c.pending} /></td>
+                    <td className={TD}>
+                      <Prog
+                        total={c.total}
+                        parts={[
+                          { value: c.ok, cls: "bg-ok" },
+                          { value: c.dnd, cls: "bg-muted/60" },
+                          { value: c.failedAll, cls: "bg-danger" },
+                        ]}
+                      />
+                    </td>
+                    <td className={`${TD} text-right tabular-nums`}>{c.ok.toLocaleString()}</td>
+                    <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{c.dnd.toLocaleString()}</td>
+                    <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{c.failedAll.toLocaleString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </DataTable>
+        </DataPanel>
       )}
     </>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: "ok" | "warn" | "danger" | "muted" }) {
-  const c = {
-    ok: "text-ok",
-    warn: "text-warn",
-    danger: "text-danger",
-    muted: "text-ink2",
-  }[tone];
-  return (
-    <div className="bg-bg/60 border border-line rounded-lg px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className={`text-xl font-semibold tabular-nums ${c}`}>{value}</div>
-    </div>
-  );
+function JobBadge({ job, pending }: { job: BulkJobWithCounts; pending: number }) {
+  if (job.status === "running") return <Badge tone="accent" dot>Sending</Badge>;
+  if (pending > 0) return <Badge tone="warn">Paused</Badge>;
+  return <Badge tone="ok">Completed</Badge>;
 }
 
 function tally(job: BulkJobWithCounts) {
   const c = job.counts || {};
+  const ok = c.ok ?? 0, failedAll = c.failed ?? 0, dnd = c.dnd ?? 0;
+  const total = job.total || 0;
   return {
-    ok: c.ok ?? 0,
-    failedAll: c.failed ?? 0,
+    ok,
+    failedAll,
     pending: c.pending ?? 0,
-    dnd: c.dnd ?? 0,
+    dnd,
     dialing: c.dialing ?? 0,
-    total: job.total || 0,
+    total,
+    donePct: total ? ((ok + failedAll + dnd) / total) * 100 : 0,
   };
-}
-
-function ProgressBar({ counts }: { counts: { ok: number; failedAll: number; dnd: number; total: number } }) {
-  const okPct = (counts.ok / counts.total) * 100;
-  const failPct = (counts.failedAll / counts.total) * 100;
-  // DND skips are finished rows too — without them a job that skipped one
-  // number sat at "67% complete" forever.
-  const dndPct = (counts.dnd / counts.total) * 100;
-  const donePct = okPct + failPct + dndPct;
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted">{Math.round(donePct)}% complete</span>
-        <span className="font-mono text-ink2 tabular-nums">{counts.ok + counts.failedAll + counts.dnd} / {counts.total}</span>
-      </div>
-      <div className="w-full h-2 bg-line rounded-full overflow-hidden flex">
-        <div className="h-full bg-ok transition-all duration-500" style={{ width: `${okPct}%` }} />
-        <div className="h-full bg-danger transition-all duration-500" style={{ width: `${failPct}%` }} />
-        <div className="h-full bg-muted/60 transition-all duration-500" style={{ width: `${dndPct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function sleep(ms: number) {
-  return new Promise((res) => setTimeout(res, ms));
 }
