@@ -134,7 +134,7 @@ export default function FinancialsView() {
                       </button>
                       <button
                         onClick={() => viewAsClient(r.id, "billing")}
-                        className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 px-2 py-1 rounded-md hover:bg-brand/10"
+                        className="inline-flex items-center gap-1 text-xs text-accent hover:text-accent/80 px-2 py-1 rounded-md hover:bg-accent/10"
                         title="Open this client's console"
                       >
                         <ExternalLink size={12} /> Open
@@ -190,7 +190,7 @@ function RateCell({ value, overridden, currency }: { value: number; overridden: 
     <span className="inline-flex items-center gap-1">
       {fmtMoney(value, currency)}
       {overridden && (
-        <span className="text-[9px] uppercase tracking-wider text-brand" title="Client-specific override">
+        <span className="text-[9px] uppercase tracking-wider text-accent" title="Client-specific override">
           •
         </span>
       )}

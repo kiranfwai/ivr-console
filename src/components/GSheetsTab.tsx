@@ -263,7 +263,7 @@ export default function GSheetsTab() {
         <Card
           title={
             <span className="flex items-center gap-2">
-              <FileSpreadsheet size={16} className="text-brand" /> Sheet Auto-Dial
+              <FileSpreadsheet size={16} className="text-accent" /> Sheet Auto-Dial
             </span>
           }
           description="Connect a Google Sheet to automatically dial leads within a calling window."
@@ -318,7 +318,7 @@ export default function GSheetsTab() {
         <Card
           title={
             <span className="flex items-center gap-2">
-              <Clock size={16} className="text-brand" /> Lead Queue
+              <Clock size={16} className="text-accent" /> Lead Queue
             </span>
           }
           description="Rows picked up from all connected sheets — called automatically within each connection's window, queued outside it."
@@ -726,7 +726,7 @@ function ConnectSheetForm({
     <Card
       title={
         <span className="flex items-center gap-2">
-          <FileSpreadsheet size={16} className="text-brand" />
+          <FileSpreadsheet size={16} className="text-accent" />
           {existing ? "Edit sheet connection" : "Connect a Google Sheet"}
         </span>
       }
@@ -788,7 +788,7 @@ function ConnectSheetForm({
               ) : (
                 <>
                   <div className="text-ink">
-                    {preview.rows} row(s), <span className="text-brand">{preview.usable} number(s) to call</span>
+                    {preview.rows} row(s), <span className="text-accent">{preview.usable} number(s) to call</span>
                   </div>
                   {(preview.invalid > 0 || preview.blank > 0 || preview.duplicates > 0) && (
                     <div className="mt-1 text-xs text-muted">
@@ -951,7 +951,7 @@ function LeadRow({
       : "—";
 
   return (
-    <tr className={`border-t border-line hover:bg-elev/40 ${selected ? "bg-brand/5" : ""}`}>
+    <tr className={`border-t border-line hover:bg-elev/40 ${selected ? "bg-accent/5" : ""}`}>
       <td className="py-2 px-1 w-6">
         <input
           type="checkbox"
@@ -1004,7 +1004,7 @@ function LeadRow({
             <button
               onClick={handleCall}
               disabled={calling}
-              className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-brand px-2 py-1 rounded-md hover:bg-elev disabled:opacity-50"
+              className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-accent px-2 py-1 rounded-md hover:bg-elev disabled:opacity-50"
               title="Trigger call now"
             >
               {calling ? <Spinner size={12} /> : <Phone size={12} />}
@@ -1033,7 +1033,7 @@ function StatBox({ label, value, href }: { label: string; value: string; href?: 
     <div className="bg-bg/50 border border-line rounded-lg px-3 py-2 min-w-0">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
       {href ? (
-        <a href={href} target="_blank" rel="noreferrer" className="block text-sm font-medium text-ink truncate hover:text-brand" title="Open the sheet">
+        <a href={href} target="_blank" rel="noreferrer" className="block text-sm font-medium text-ink truncate hover:text-accent" title="Open the sheet">
           {value} ↗
         </a>
       ) : (

@@ -28,7 +28,7 @@ function ModeBtn({ active, onClick, icon, label }: { active: boolean; onClick: (
     <button
       onClick={onClick}
       className={`px-3 py-1.5 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-        active ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+        active ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
       }`}
     >
       {icon}
@@ -89,9 +89,9 @@ function SingleSend() {
             {/* Both fields below are optional and fall back to the account
                 default. They were sitting in the middle of the form looking as
                 important as the phone number. Collapsed, not removed. */}
-            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+            <details className="group rounded-xl border border-dashed border-accent/30 bg-accent/[0.035] px-3.5 py-3 open:bg-accent/[0.05]">
               <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+                <span className="text-accent transition-transform group-open:rotate-90">&#9656;</span>
                 <b className="font-semibold text-ink">Advanced</b>
                 <span className="ml-auto text-right text-[11px] leading-tight text-muted">
                   webhook URL &middot; extra JSON
@@ -266,9 +266,9 @@ function BulkSend() {
             {/* Both fields below are optional and fall back to the account
                 default. They were sitting in the middle of the form looking as
                 important as the phone number. Collapsed, not removed. */}
-            <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+            <details className="group rounded-xl border border-dashed border-accent/30 bg-accent/[0.035] px-3.5 py-3 open:bg-accent/[0.05]">
               <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-                <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+                <span className="text-accent transition-transform group-open:rotate-90">&#9656;</span>
                 <b className="font-semibold text-ink">Advanced</b>
                 <span className="ml-auto text-right text-[11px] leading-tight text-muted">
                   webhook URL
@@ -454,7 +454,7 @@ function BulkSend() {
                     setActiveJob(j);
                   }}
                   className={`w-full text-left rounded-lg px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
-                    isActive ? "bg-brand/10 border border-brand/25" : "hover:bg-elev/60 border border-transparent"
+                    isActive ? "bg-accent/10 border border-accent/25" : "hover:bg-elev/60 border border-transparent"
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">

@@ -107,7 +107,7 @@ export function RangeControl({
         value={from}
         max={to}
         onChange={(e) => onChange(e.target.value, to)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+        className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
       />
       <span className="text-muted text-xs">→</span>
       <input
@@ -116,7 +116,7 @@ export function RangeControl({
         min={from}
         max={today}
         onChange={(e) => onChange(from, e.target.value)}
-        className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
+        className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2.5 py-1.5 text-xs outline-none"
       />
       <div className="flex items-center gap-1 ml-1">
         {PRESETS.map((p) => {
@@ -127,7 +127,7 @@ export function RangeControl({
               onClick={() => onChange(p.from(), today)}
               className={`px-2 py-1 rounded-md text-xs border transition-colors ${
                 active
-                  ? "bg-brand/10 text-brand border-brand/25"
+                  ? "bg-accent/10 text-accent border-accent/25"
                   : "text-ink2 border-line hover:bg-elev/60"
               }`}
             >

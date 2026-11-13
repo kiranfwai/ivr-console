@@ -394,13 +394,13 @@ function ClientModal({
                   onClick={() => toggle(f.id)}
                   className={`flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm border transition-colors text-left ${
                     on
-                      ? "bg-brand/10 text-brand border-brand/25"
+                      ? "bg-accent/10 text-accent border-accent/25"
                       : "text-ink2 border-line hover:bg-elev/60"
                   }`}
                 >
                   <span
                     className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                      on ? "bg-brand border-brand text-bg" : "border-line2"
+                      on ? "bg-brand border-accent text-bg" : "border-line2"
                     }`}
                   >
                     {on && <Check size={10} />}

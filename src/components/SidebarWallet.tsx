@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Wallet } from "lucide-react";
 import { api } from "./useData";
 
 /**
- * Wallet balance, pinned in the sidebar.
+ * Wallet balance, pinned in the top bar.
  *
  * Before the restructure the balance lived only inside Billing, so "can I still
  * dial?" meant leaving whatever you were doing. It's the one number worth
  * carrying on every screen.
  */
-export default function SidebarWallet() {
+export default function SidebarWallet({ onOpen }: { onOpen?: () => void }) {
   const [balance, setBalance] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -38,16 +39,23 @@ export default function SidebarWallet() {
 
   if (failed && balance === null) return null;
 
+  // A compact button in the top bar: always visible, opens Billing.
   return (
-    <div className="rounded-xl border border-brand/20 bg-gradient-to-b from-brand/[0.07] to-brand/[0.02] px-3 py-2.5">
-      <div className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-muted">Wallet balance</div>
-      <div className="mt-0.5 text-[17px] font-extrabold tracking-[-0.035em] tabular-nums">
-        {balance === null ? (
-          <span className="text-muted">…</span>
-        ) : (
-          `₹ ${balance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        )}
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Wallet balance — add money"
+      className="flex h-[34px] items-center gap-2 rounded-[9px] border border-line bg-panel px-2.5 text-[13px] font-semibold shadow-xs transition-colors hover:border-line2"
+    >
+      <Wallet size={15} className="text-muted" />
+      <span className="tabular-nums">
+        {balance === null
+          ? "…"
+          : `₹${balance.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`}
+      </span>
+      {balance !== null && balance < 1000 && (
+        <span className="border-l border-line pl-2 text-[11.5px] font-medium text-warn">Low</span>
+      )}
+    </button>
   );
 }

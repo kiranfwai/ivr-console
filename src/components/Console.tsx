@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Users2, Eye, X } from "lucide-react";
+import { Eye, X } from "lucide-react";
 import DialTab from "@/components/DialTab";
 import BulkTab from "@/components/BulkTab";
 import CampaignsTab from "@/components/CampaignsTab";
@@ -236,7 +236,7 @@ export default function Console() {
       <div className="min-h-screen flex items-center justify-center p-4 text-center">
         <div>
           <div className="text-sm text-danger mb-2">Couldn’t load your account.</div>
-          <button onClick={() => location.reload()} className="text-xs text-brand underline">
+          <button onClick={() => location.reload()} className="text-xs text-accent underline">
             Retry
           </button>
         </div>
@@ -251,36 +251,13 @@ export default function Console() {
     );
   }
 
-  // The admin's "viewing as" control. It lives in the SIDEBAR now rather than as
-  // a bare <select> in the top-right corner, so it reads as an account picker
-  // and doesn't compete with the page's primary action.
-  const clientSwitcher = isAdmin ? (
-    <div className="rounded-xl border border-line2 bg-white/[0.03] px-2.5 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-muted">
-        <Users2 size={11} className="text-brand" /> Viewing
-      </div>
-      <select
-        value={viewClient}
-        onChange={(e) => chooseClient(e.target.value)}
-        className="w-full cursor-pointer rounded-lg bg-transparent text-xs text-ink outline-none"
-        title="View a client's data"
-      >
-        <option value="">FWAI admin (no client)</option>
-        {switcherClients.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name || c.email}
-            {c.active ? "" : " (disabled)"}
-          </option>
-        ))}
-      </select>
-    </div>
-  ) : undefined;
-
   const isAdminTab = ADMIN_TABS.includes(tab);
   // Only meaningful in a client scope — an admin with no client selected has no
   // single wallet to show.
   const showWallet = !isAdmin || !!viewClient;
-  const userLabel = isAdmin ? `${me.email} · Admin` : me.email;
+  const workspaceName = isAdmin
+    ? selectedClient?.name || selectedClient?.email || (viewClient ? "Client" : "Admin console")
+    : me.name || me.email || "Your workspace";
 
   return (
     <>
@@ -291,13 +268,17 @@ export default function Console() {
         description={META[tab].desc}
         onLogout={logout}
         allowedTabs={allowedTabs}
-        userLabel={userLabel}
-        accountPicker={clientSwitcher}
-        wallet={showWallet ? <SidebarWallet key={viewClient} /> : undefined}
-      >
-        {isAdmin && viewClient && !isAdminTab && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-brand/25 bg-brand/10 px-3 py-2 text-sm">
-            <Eye size={15} className="text-brand shrink-0" />
+        userEmail={me.email}
+        isAdmin={isAdmin}
+        workspaceName={workspaceName}
+        clients={switcherClients.map((c) => ({ id: c.id, name: c.name || c.email, active: c.active }))}
+        viewClient={viewClient}
+        onChooseClient={chooseClient}
+        onAdminConsole={exitViewAs}
+        walletPill={showWallet ? <SidebarWallet key={viewClient} onOpen={() => changeTab("billing")} /> : undefined}
+        banner={isAdmin && viewClient && !isAdminTab ? (
+          <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-accent/25 bg-accent/[0.07] px-3.5 py-2.5 text-[13.5px]">
+            <Eye size={15} className="text-accent shrink-0" />
             <span className="text-ink2 min-w-0 truncate">
               Viewing as{" "}
               <span className="font-medium text-ink">
@@ -310,12 +291,13 @@ export default function Console() {
             </span>
             <button
               onClick={exitViewAs}
-              className="ml-auto inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs text-ink2 hover:text-ink hover:bg-elev/60 transition-colors"
+              className="ml-auto inline-flex h-[28px] items-center gap-1 rounded-[8px] border border-line bg-panel px-2.5 text-[12.5px] font-semibold text-ink2 shadow-xs hover:text-ink hover:bg-elev transition-colors"
             >
               <X size={12} /> Exit
             </button>
           </div>
-        )}
+        ) : undefined}
+      >
 
         {isAdminTab ? (
           <AdminTab view={ADMIN_VIEW[tab] ?? "clients"} />

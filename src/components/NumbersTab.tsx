@@ -109,7 +109,7 @@ export default function NumbersTab() {
         <Card
           title={
             <span className="flex items-center gap-2">
-              <Phone size={16} className="text-brand" /> Your numbers
+              <Phone size={16} className="text-accent" /> Your numbers
             </span>
           }
           description="Caller-ID numbers on your connected Plivo account. Star one to make it your default caller ID."
@@ -138,7 +138,7 @@ export default function NumbersTab() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search your numbers…"
-                className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg pl-9 pr-3 py-2 text-sm outline-none"
+                className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg pl-9 pr-3 py-2 text-sm outline-none"
               />
             </div>
           )}
@@ -186,13 +186,13 @@ export default function NumbersTab() {
                       </td>
                       <td className="px-1 text-right">
                         {n.isDefault ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-brand">
+                          <span className="inline-flex items-center gap-1 text-xs text-accent">
                             <Star size={12} className="fill-current" /> Default
                           </span>
                         ) : (
                           <button
                             onClick={() => setDefault(n.e164)}
-                            className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-brand px-2 py-1 rounded-md hover:bg-elev"
+                            className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-accent px-2 py-1 rounded-md hover:bg-elev"
                             title="Make this the default caller ID"
                           >
                             <Star size={12} /> Set default
@@ -429,7 +429,7 @@ function PlivoConnectCard({
     // the old card kept a full panel of them above the numbers table forever.
     // One line carries the same information.
     return (
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.94)] px-4 py-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line2 bg-panel px-4 py-3 text-sm">
         <CheckCircle2 size={15} className="shrink-0 text-ok" />
         <b className="font-semibold">Plivo connected</b>
         <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Account</span>
@@ -473,7 +473,7 @@ function PlivoConnectCard({
     <Card
       title={
         <span className="flex items-center gap-2">
-          <Link2 size={16} className="text-brand" /> Connect your Plivo account
+          <Link2 size={16} className="text-accent" /> Connect your Plivo account
         </span>
       }
       description="Enter your Plivo Auth ID and Auth Token (from your Plivo Console home page). Your numbers and calls will run through your own account."

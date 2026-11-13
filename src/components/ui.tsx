@@ -47,25 +47,22 @@ export function Button({
   loading?: boolean;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 " +
-    "disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 " +
-    "focus-visible:ring-brand/40 active:scale-[0.98] whitespace-nowrap";
-  // Same button language as the landing and sign-in pages: the primary action is
-  // a teal gradient with a glow under it and lifts a pixel on hover.
+    "inline-flex items-center justify-center gap-2 font-semibold rounded-[9px] border transition-[background-color,border-color,color,box-shadow,transform] duration-150 " +
+    "disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:shadow-glow " +
+    "active:translate-y-px whitespace-nowrap";
+  // One main action per screen (navy in light, off-white in dark); everything
+  // else is a quiet white/outlined button.
   const variantCls = {
-    primary:
-      "bg-gradient-to-b from-[#a9f2e8] to-brand text-[#042420] " +
-      "shadow-[0_12px_28px_-12px_rgba(94,234,212,0.7)] hover:-translate-y-px " +
-      "disabled:hover:translate-y-0",
-    ghost: "bg-white/[0.03] border border-line2 text-ink hover:border-white/30 hover:bg-white/5",
-    outline: "border border-line2 text-ink hover:bg-white/5 hover:border-white/30",
-    subtle: "text-ink2 hover:text-ink hover:bg-white/[0.04]",
-    danger: "bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20",
+    primary: "bg-brand text-onbrand border-transparent shadow-xs hover:bg-brand/90",
+    ghost: "bg-panel text-ink border-line shadow-xs hover:bg-elev hover:border-line2",
+    outline: "bg-panel text-ink border-line shadow-xs hover:bg-elev hover:border-line2",
+    subtle: "bg-transparent text-ink2 border-transparent hover:text-ink hover:bg-ink/[0.05]",
+    danger: "bg-panel text-danger border-danger/30 shadow-xs hover:bg-danger/[0.07]",
   }[variant];
   const sizeCls = {
-    sm: "px-2.5 py-1.5 text-xs",
-    md: "px-3.5 py-2 text-sm",
-    lg: "px-4 py-2.5 text-sm",
+    sm: "h-[30px] px-2.5 text-[12.5px]",
+    md: "h-9 px-3.5 text-[13.5px]",
+    lg: "h-[42px] px-[18px] text-sm",
   }[size];
   return (
     <button
@@ -94,14 +91,14 @@ export function IconButton({
   size?: Size;
 }) {
   const base =
-    "inline-flex items-center justify-center rounded-lg transition-all duration-150 " +
-    "disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 " +
-    "focus-visible:ring-brand/40 active:scale-[0.95]";
+    "inline-flex items-center justify-center rounded-[9px] transition-colors duration-150 " +
+    "disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:shadow-glow " +
+    "active:translate-y-px";
   const variantCls = {
-    primary: "bg-brand text-bg hover:bg-brand/90",
-    ghost: "bg-elev/60 border border-line text-ink hover:bg-elev",
-    outline: "border border-line text-ink hover:bg-elev",
-    subtle: "text-ink2 hover:text-ink hover:bg-elev/60",
+    primary: "bg-brand text-onbrand hover:bg-brand/90",
+    ghost: "bg-panel border border-line text-ink hover:bg-elev",
+    outline: "bg-panel border border-line text-ink hover:bg-elev",
+    subtle: "text-muted hover:text-ink hover:bg-ink/[0.05]",
     danger: "text-danger hover:bg-danger/10",
   }[variant];
   const sizeCls = { sm: "p-1.5", md: "p-2", lg: "p-2.5" }[size];
@@ -129,13 +126,13 @@ export function Input({
   // because "Required" under every blank box is noise next to a red asterisk.
   const borderCls = error || invalid
     ? "border-danger/60 focus:border-danger"
-    : "border-line hover:border-line2 focus:border-brand/60";
+    : "border-line hover:border-line2 focus:border-accent focus:shadow-glow";
   return (
     <div>
       <input
         aria-invalid={error || invalid ? true : undefined}
-        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
-          placeholder:text-muted focus:bg-bg ${borderCls} ${className}`}
+        className={`w-full bg-panel border rounded-[9px] px-3 py-2 text-sm text-ink outline-none shadow-xs transition-[border-color,box-shadow]
+          placeholder:text-muted ${borderCls} ${className}`}
         {...rest}
       />
       <FieldMessages error={error} hint={hint} />
@@ -151,13 +148,13 @@ export function Textarea({
 }: TextareaHTMLAttributes<HTMLTextAreaElement> & { error?: string; hint?: string }) {
   const borderCls = error
     ? "border-danger/60 focus:border-danger"
-    : "border-line hover:border-line2 focus:border-brand/60";
+    : "border-line hover:border-line2 focus:border-accent focus:shadow-glow";
   return (
     <div>
       <textarea
         aria-invalid={error ? true : undefined}
-        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm font-mono outline-none transition-colors
-          placeholder:text-muted focus:bg-bg ${borderCls} ${className}`}
+        className={`w-full bg-panel border rounded-[9px] px-3 py-2.5 text-sm text-ink leading-relaxed outline-none shadow-xs transition-[border-color,box-shadow]
+          placeholder:text-muted ${borderCls} ${className}`}
         {...rest}
       />
       <FieldMessages error={error} hint={hint} />
@@ -175,13 +172,13 @@ export function Select({
 }: SelectHTMLAttributes<HTMLSelectElement> & { error?: string; invalid?: boolean; hint?: string }) {
   const borderCls = error || invalid
     ? "border-danger/60 focus:border-danger"
-    : "border-line hover:border-line2 focus:border-brand/60";
+    : "border-line hover:border-line2 focus:border-accent focus:shadow-glow";
   return (
     <div>
       <select
         aria-invalid={error || invalid ? true : undefined}
-        className={`w-full bg-bg/60 border rounded-lg px-3 py-2 text-sm outline-none transition-colors
-          focus:bg-bg cursor-pointer ${borderCls} ${className}`}
+        className={`w-full bg-panel border rounded-[9px] px-3 py-2 text-sm text-ink outline-none shadow-xs transition-[border-color,box-shadow]
+          cursor-pointer ${borderCls} ${className}`}
         {...rest}
       >
         {children}
@@ -202,7 +199,7 @@ export function Label({
 }) {
   return (
     <div className="flex items-center justify-between mb-1.5">
-      <div className="text-xs font-medium text-ink2 uppercase tracking-wider">
+      <div className="text-[13px] font-medium text-ink2">
         {children}
         {required && <span className="text-danger ml-0.5" aria-hidden="true">*</span>}
       </div>
@@ -230,22 +227,18 @@ export function Card({
   return (
     <div
       className={
-        // Gradient surface + deep soft shadow + the teal hairline across the top
-        // edge — the same treatment as the sign-in card and the landing page's
-        // product windows, so the console reads as part of the same product.
-        "relative bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.96)] " +
-        "border border-line2 rounded-2xl " +
-        "shadow-[0_34px_70px_-50px_#000,inset_0_1px_0_rgba(255,255,255,0.04)] " +
-        "before:absolute before:inset-x-6 before:-top-px before:h-px before:content-[''] " +
-        "before:bg-gradient-to-r before:from-transparent before:via-brand/40 before:to-transparent " +
+        // White card on the soft grey canvas (light) / one step up from the
+        // canvas with a hairline edge (dark). Firm border + soft shadow so the
+        // card never melts into the page.
+        "relative bg-panel border border-line rounded-xl shadow-card " +
         `${noPadding ? "" : "p-5"} ${className}`
       }
     >
       {(title || action) && (
         <div className={`flex flex-wrap items-start gap-3 ${noPadding ? "p-5 pb-3" : "mb-4"}`}>
           <div className="min-w-0 flex-1">
-            {title && <div className="font-semibold text-ink">{title}</div>}
-            {description && <div className="text-xs text-muted mt-0.5">{description}</div>}
+            {title && <div className="text-[15px] font-semibold tracking-[-0.015em] text-ink">{title}</div>}
+            {description && <div className="text-[13px] text-muted mt-0.5">{description}</div>}
           </div>
           {action && <div className="w-full sm:w-auto shrink-0">{action}</div>}
         </div>
@@ -276,15 +269,15 @@ export function Badge({
   // Drawn with an inner ring rather than a hard border, matching the tags on the
   // landing page — softer edge, same information.
   const c = {
-    muted: "bg-white/5 text-ink2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]",
-    ok: "bg-ok/10 text-ok shadow-[inset_0_0_0_1px_rgba(34,197,94,0.2)]",
-    warn: "bg-warn/10 text-warn shadow-[inset_0_0_0_1px_rgba(245,158,11,0.2)]",
-    danger: "bg-danger/10 text-danger shadow-[inset_0_0_0_1px_rgba(239,68,68,0.2)]",
-    accent: "bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.2)]",
-    info: "bg-info/10 text-info shadow-[inset_0_0_0_1px_rgba(99,102,241,0.2)]",
+    muted: "bg-elev text-ink2 border-line",
+    ok: "bg-ok/[0.09] text-ok border-ok/25",
+    warn: "bg-warn/[0.09] text-warn border-warn/25",
+    danger: "bg-danger/[0.08] text-danger border-danger/25",
+    accent: "bg-accent/[0.09] text-accent border-accent/25",
+    info: "bg-info/[0.09] text-info border-info/25",
   }[tone];
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${c} ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 h-[22px] px-2 rounded-full border text-xs font-medium whitespace-nowrap ${c} ${className}`}>
       {dot && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse2" />}
       {children}
     </span>
@@ -312,15 +305,15 @@ export function KPI({
     ok: "bg-ok/10 text-ok",
     warn: "bg-warn/10 text-warn",
     danger: "bg-danger/10 text-danger",
-    accent: "bg-brand/10 text-brand",
+    accent: "bg-accent/10 text-accent",
     info: "bg-info/10 text-info",
   }[tone];
   return (
-    <Card className="hover:border-line2 transition-colors">
+    <Card className="hover:shadow-pop transition-shadow">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs uppercase tracking-wider text-muted">{label}</div>
-          <div className="text-3xl font-semibold mt-1 tabular-nums">{value}</div>
+          <div className="text-[13px] font-medium text-muted">{label}</div>
+          <div className="text-[28px] font-semibold tracking-[-0.035em] mt-1.5 leading-tight tabular-nums">{value}</div>
           {sub && (
             <div className="text-xs text-muted mt-1 flex items-center gap-1">
               {sub}
@@ -330,7 +323,7 @@ export function KPI({
           )}
         </div>
         {icon && (
-          <div className={`shrink-0 w-10 h-10 rounded-lg ${iconBg} flex items-center justify-center`}>
+          <div className={`shrink-0 w-9 h-9 rounded-[9px] ${iconBg} flex items-center justify-center`}>
             {icon}
           </div>
         )}
@@ -394,15 +387,15 @@ export function CsvFilePicker({ onLoad }: { onLoad: (text: string) => void }) {
         setDragOver(false);
         handleFile(e.dataTransfer.files?.[0]);
       }}
-      className={`relative overflow-hidden cursor-pointer px-2.5 py-1.5 rounded-md border text-ink inline-flex items-center gap-1.5 text-xs transition-colors ${
+      className={`relative overflow-hidden cursor-pointer h-[30px] px-2.5 rounded-[8px] border text-ink inline-flex items-center gap-1.5 text-[12.5px] font-semibold shadow-xs transition-colors ${
         dragOver
-          ? "bg-brand/10 border-brand/40"
-          : "bg-elev/80 hover:bg-elev border-line hover:border-line2"
+          ? "bg-accent/10 border-accent/40"
+          : "bg-panel hover:bg-elev border-line hover:border-line2"
       }`}
     >
       {reading && (
         <span
-          className="absolute inset-y-0 left-0 bg-brand/20 transition-[width] duration-150"
+          className="absolute inset-y-0 left-0 bg-accent/15 transition-[width] duration-150"
           style={{ width: `${progress}%` }}
         />
       )}
@@ -435,11 +428,11 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-      <div className="w-12 h-12 rounded-xl bg-elev border border-line flex items-center justify-center text-muted mb-3">
+      <div className="w-11 h-11 rounded-xl bg-elev border border-line flex items-center justify-center text-muted mb-3">
         {icon || <Inbox size={20} />}
       </div>
-      <div className="text-sm font-medium text-ink">{title}</div>
-      {description && <div className="text-xs text-muted mt-1 max-w-sm">{description}</div>}
+      <div className="text-sm font-semibold text-ink">{title}</div>
+      {description && <div className="text-[13px] text-muted mt-1 max-w-sm">{description}</div>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -465,7 +458,7 @@ export function Loading({ label, py = "py-12" }: { label?: string; py?: string }
 /* -------------------- Skeleton loader -------------------- */
 export function Skeleton({ className = "h-4 w-full" }: { className?: string }) {
   return (
-    <div className={`bg-elev/60 rounded-md animate-pulse ${className}`} />
+    <div className={`bg-ink/[0.06] rounded-md animate-pulse ${className}`} />
   );
 }
 
@@ -549,20 +542,17 @@ export function Toaster() {
     <div className="fixed bottom-4 right-4 space-y-2 z-50 pointer-events-none">
       {items.map((t) => {
         const Icon = t.tone === "ok" ? Check : t.tone === "danger" ? AlertCircle : Info;
-        const cls = t.tone === "ok"
-          ? "bg-ok/10 text-ok border-ok/30"
-          : t.tone === "danger"
-          ? "bg-danger/10 text-danger border-danger/30"
-          : "bg-panel text-ink border-line";
+        const cls = "bg-panel text-ink border-line";
+        const icCls = t.tone === "ok" ? "bg-ok/10 text-ok" : t.tone === "danger" ? "bg-danger/10 text-danger" : "bg-accent/10 text-accent";
         return (
           <div
             key={t.id}
             role="status"
             onMouseEnter={() => pause(t.id)}
             onMouseLeave={() => resume(t.id)}
-            className={`px-3 py-2.5 rounded-lg shadow-elev border text-sm flex items-center gap-2 animate-slide-up pointer-events-auto backdrop-blur ${cls}`}
+            className={`max-w-sm pl-2.5 pr-4 py-2.5 rounded-xl shadow-pop border text-[13.5px] flex items-center gap-2.5 animate-slide-up pointer-events-auto ${cls}`}
           >
-            <Icon size={16} />
+            <span className={`w-7 h-7 shrink-0 rounded-full grid place-items-center ${icCls}`}><Icon size={15} /></span>
             {t.text}
           </div>
         );
@@ -638,7 +628,7 @@ export function Modal({
   const widthCls = maxWidth ?? MODAL_SIZES[size];
   return (
     <div
-      className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+      className="fixed inset-0 z-40 bg-scrim/50 backdrop-blur-[3px] flex items-center justify-center p-4 animate-fade-in"
       onClick={onClose}
     >
       <div
@@ -647,16 +637,16 @@ export function Modal({
         aria-modal="true"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full ${widthCls} bg-panel border border-line rounded-2xl shadow-elev animate-slide-up outline-none`}
+        className={`w-full ${widthCls} bg-panel border border-line rounded-2xl shadow-pop animate-slide-up outline-none max-h-[calc(100vh-2rem)] flex flex-col`}
       >
         {title && (
-          <div className="flex items-center justify-between px-5 py-4 border-b border-line">
-            <div className="font-semibold">{title}</div>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-line">
+            <div className="text-[17px] font-semibold tracking-[-0.02em]">{title}</div>
             <IconButton icon={<X size={16} />} onClick={onClose} aria-label="Close dialog" />
           </div>
         )}
-        <div className="p-5">{children}</div>
-        {footer && <div className="px-5 py-3 border-t border-line flex justify-end gap-2">{footer}</div>}
+        <div className="p-6 overflow-y-auto">{children}</div>
+        {footer && <div className="px-6 py-3.5 border-t border-line bg-elev/60 rounded-b-2xl flex justify-end gap-2">{footer}</div>}
       </div>
     </div>
   );
@@ -697,17 +687,17 @@ export function Tile({
 }) {
   const subCls = {
     muted: "text-muted",
-    ok: "text-brand",
+    ok: "text-ok",
     warn: "text-warn",
     danger: "text-danger",
   }[tone];
   return (
-    <div className="rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.95)] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">{label}</div>
-      <div className="mt-1 text-[22px] font-extrabold tracking-[-0.04em] tabular-nums leading-tight">
+    <div className="rounded-xl border border-line bg-panel px-5 py-4 shadow-card">
+      <div className="text-[13px] font-medium text-muted">{label}</div>
+      <div className="mt-1.5 text-[26px] font-semibold tracking-[-0.035em] tabular-nums leading-tight">
         {value}
       </div>
-      {sub != null && <div className={`mt-0.5 text-[11.5px] ${subCls}`}>{sub}</div>}
+      {sub != null && <div className={`mt-1 text-[12.5px] ${subCls}`}>{sub}</div>}
     </div>
   );
 }
@@ -726,24 +716,24 @@ export function DataPanel({
   footer?: ReactNode;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.96)] shadow-[0_34px_70px_-50px_#000,inset_0_1px_0_rgba(255,255,255,0.04)] before:absolute before:inset-x-8 before:-top-px before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/40 before:to-transparent before:content-['']">
-      <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3.5">
+    <div className="relative overflow-hidden rounded-xl border border-line bg-panel shadow-card">
+      <div className="flex flex-wrap items-center gap-3 px-5 py-4">
         <div className="min-w-0">
-          <div className="text-sm font-bold tracking-[-0.015em]">{title}</div>
-          {meta && <div className="mt-0.5 text-[11.5px] text-muted">{meta}</div>}
+          <div className="text-[15px] font-semibold tracking-[-0.015em]">{title}</div>
+          {meta && <div className="mt-0.5 text-[13px] text-muted">{meta}</div>}
         </div>
-        {action && <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div>}
+        {action && <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">{action}</div>}
       </div>
       {children}
-      {footer && <div className="border-t border-line px-4 py-3 text-xs text-muted">{footer}</div>}
+      {footer && <div className="border-t border-line px-5 py-3 text-[13px] text-muted">{footer}</div>}
     </div>
   );
 }
 
 /** Table styling shared by every DataPanel, so column rhythm matches across screens. */
 export const TH =
-  "text-left text-[10px] font-bold uppercase tracking-[0.14em] text-muted px-4 py-2.5 border-b border-line";
-export const TD = "px-4 py-3 text-[13px] align-middle border-b border-line/60";
+  "text-left text-xs font-medium text-muted bg-elev px-5 py-2.5 border-y border-line whitespace-nowrap";
+export const TD = "px-5 py-3 text-[13.5px] align-middle border-b border-line/70";
 
 export function DataTable({ children, className = "" }: { children: ReactNode; className?: string }) {
   // Wide tables scroll inside their own panel rather than pushing the page sideways.
@@ -790,14 +780,14 @@ export function Kebab({ items, label = "Actions" }: { items: KebabItem[]; label?
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-line2 bg-white/[0.03] text-muted transition-colors hover:text-ink hover:bg-white/[0.07]"
+        className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-[8px] text-muted transition-colors hover:text-ink hover:bg-ink/[0.06]"
       >
         <span className="-mt-1 text-base leading-none">···</span>
       </button>
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-1 min-w-[172px] overflow-hidden rounded-xl border border-line2 bg-[rgba(18,21,29,0.98)] py-1 shadow-[0_24px_50px_-20px_#000] backdrop-blur"
+          className="absolute right-0 z-30 mt-1 min-w-[180px] overflow-hidden rounded-xl border border-line bg-panel p-1 shadow-pop animate-fade-in"
         >
           {items.map((it) => (
             <button
@@ -807,8 +797,8 @@ export function Kebab({ items, label = "Actions" }: { items: KebabItem[]; label?
                 setOpen(false);
                 it.onClick();
               }}
-              className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] transition-colors ${
-                it.danger ? "text-danger hover:bg-danger/10" : "text-ink2 hover:bg-white/[0.06] hover:text-ink"
+              className={`flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+                it.danger ? "text-danger hover:bg-danger/[0.08]" : "text-ink2 hover:bg-ink/[0.05] hover:text-ink"
               }`}
             >
               {it.icon}

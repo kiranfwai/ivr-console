@@ -144,7 +144,7 @@ export default function ScheduledTab() {
         {err ? (
           <div className="py-10 text-center text-sm text-danger">
             Couldn’t load schedules.{" "}
-            <button onClick={load} className="text-brand underline">
+            <button onClick={load} className="text-accent underline">
               Retry
             </button>
           </div>
@@ -176,7 +176,7 @@ export default function ScheduledTab() {
               {items.map((s) => {
                 const finished = !s.nextRunAt && !s.enabled && s.runs > 0;
                 return (
-                  <tr key={s.id} className="transition-colors hover:bg-white/[0.022]">
+                  <tr key={s.id} className="transition-colors hover:bg-ink/[0.022]">
                     <td className={TD}>
                       <div className="flex items-center gap-2 font-semibold">
                         <span

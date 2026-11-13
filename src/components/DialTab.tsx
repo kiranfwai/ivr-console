@@ -315,7 +315,7 @@ export default function DialTab() {
             </thead>
             <tbody>
               {recent.map((r) => (
-                <tr key={r.callUuid} className="transition-colors hover:bg-white/[0.022]">
+                <tr key={r.callUuid} className="transition-colors hover:bg-ink/[0.022]">
                   <td className={`${TD} font-mono tabular-nums whitespace-nowrap`}>
                     {formatPhone(r.to)}
                     {!isDiallablePhone(normalizePhone(r.to)) && (

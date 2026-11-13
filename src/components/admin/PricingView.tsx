@@ -117,7 +117,7 @@ function ConnectedRateCard() {
             <select
               value={currency}
               onChange={(e) => setCurrency(e.target.value)}
-              className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-3 py-2 text-sm outline-none"
+              className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-3 py-2 text-sm outline-none"
             >
               {CURRENCIES.map((c) => (
                 <option key={c} value={c}>
@@ -226,7 +226,7 @@ function CashfreeCard() {
               <select
                 value={env}
                 onChange={(e) => setEnv(e.target.value as "sandbox" | "production")}
-                className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-3 py-2 text-sm outline-none"
+                className="w-full bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-3 py-2 text-sm outline-none"
               >
                 <option value="sandbox">Sandbox (test)</option>
                 <option value="production">Production (live)</option>
@@ -235,7 +235,7 @@ function CashfreeCard() {
             <div>
               <div className="flex items-center justify-between">
                 <Label>App ID (x-client-id)</Label>
-                <button type="button" className="text-xs text-brand hover:underline mb-1.5" onClick={() => setShowAppId((v) => !v)}>
+                <button type="button" className="text-xs text-accent hover:underline mb-1.5" onClick={() => setShowAppId((v) => !v)}>
                   {showAppId ? "Hide" : "Show"}
                 </button>
               </div>

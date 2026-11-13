@@ -101,7 +101,7 @@ export default function ReportsByClientView() {
                     <td className="px-2 text-right whitespace-nowrap">
                       <button
                         onClick={() => viewAsClient(r.id, "reports")}
-                        className="inline-flex items-center gap-1 text-xs text-brand hover:text-brand/80 px-2 py-1 rounded-md hover:bg-brand/10"
+                        className="inline-flex items-center gap-1 text-xs text-accent hover:text-accent/80 px-2 py-1 rounded-md hover:bg-accent/10"
                         title="Open this client's full reports"
                       >
                         <ExternalLink size={12} /> Open

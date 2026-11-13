@@ -120,7 +120,7 @@ export default function ScheduleCard({
   return (
     <>
       <Card
-        title={<span className="flex items-center gap-2"><CalendarClock size={16} className="text-brand" /> {title || "Scheduled runs"}</span>}
+        title={<span className="flex items-center gap-2"><CalendarClock size={16} className="text-accent" /> {title || "Scheduled runs"}</span>}
         description={description || "Starts by itself at the time you choose — nothing needs to be open"}
         action={
           <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setOpen(true)} disabled={!recipientCount}>
@@ -293,7 +293,7 @@ function NewScheduleModal({
                     key={d}
                     onClick={() => setDays(on ? days.filter((x) => x !== i) : [...days, i].sort())}
                     className={`px-2.5 py-1 rounded-lg text-xs border transition-colors ${
-                      on ? "bg-brand/15 border-brand/40 text-brand" : "border-line text-ink2 hover:text-ink"
+                      on ? "bg-accent/15 border-accent/40 text-accent" : "border-line text-ink2 hover:text-ink"
                     }`}
                   >
                     {d}

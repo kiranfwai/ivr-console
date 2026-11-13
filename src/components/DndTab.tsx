@@ -203,7 +203,7 @@ export default function DndTab() {
         ) : err ? (
           <div className="py-10 text-center text-sm text-danger">
             Couldn’t load the DND list.{" "}
-            <button onClick={() => load(offset, debouncedQ)} className="text-brand underline">
+            <button onClick={() => load(offset, debouncedQ)} className="text-accent underline">
               Retry
             </button>
           </div>
@@ -224,7 +224,7 @@ export default function DndTab() {
             {shown.map((num) => (
               <div
                 key={num}
-                className="group flex items-center justify-between gap-2 rounded-lg border border-line bg-white/[0.022] px-3 py-1.5"
+                className="group flex items-center justify-between gap-2 rounded-lg border border-line bg-ink/[0.022] px-3 py-1.5"
               >
                 <span className="truncate font-mono text-sm tabular-nums">{num}</span>
                 <button
@@ -345,7 +345,7 @@ function AddNumbersModal({
             autoFocus
           />
         </div>
-        <div className="rounded-lg border border-brand/25 bg-brand/[0.06] px-3 py-2 text-xs text-[#a9f2e8]">
+        <div className="rounded-lg border border-accent/25 bg-accent/[0.06] px-3 py-2 text-xs text-ink2">
           Spaces inside a number are fine — <span className="font-mono">+91 88255 74083</span> is read as one
           number, not three. Put each number on its own line, or separate them with commas.
         </div>

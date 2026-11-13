@@ -141,7 +141,7 @@ export default function SheetReportPanel({
     <Card
       title={
         <span className="flex items-center gap-2">
-          <PhoneCall size={16} className="text-brand" />
+          <PhoneCall size={16} className="text-accent" />
           <span>Report — {conn.connName || conn.tabName}</span>
         </span>
       }
@@ -170,7 +170,7 @@ export default function SheetReportPanel({
             onClick={() => { setPreset(p.key); setVisible(PAGE); }}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
               preset === p.key
-                ? "bg-brand/10 border-brand/40 text-brand"
+                ? "bg-accent/10 border-accent/40 text-accent"
                 : "bg-elev border-line text-muted hover:text-ink"
             }`}
           >
@@ -236,7 +236,7 @@ export default function SheetReportPanel({
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={80} paddingAngle={2}>
-                      {pieData.map((d) => <Cell key={d.key} fill={OUTCOME_COLOR[d.key] || "#7A8597"} />)}
+                      {pieData.map((d) => <Cell key={d.key} fill={OUTCOME_COLOR[d.key] || "rgb(var(--c-muted))"} />)}
                     </Pie>
                     <Tooltip contentStyle={TOOLTIP} />
                   </PieChart>
@@ -248,7 +248,7 @@ export default function SheetReportPanel({
                     key={d.key}
                     onClick={() => { setOutcome(outcome === d.key ? "" : d.key); setVisible(PAGE); }}
                     className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border transition-colors ${
-                      outcome === d.key ? "border-brand/40 bg-brand/10" : "border-line hover:border-line2"
+                      outcome === d.key ? "border-accent/40 bg-accent/10" : "border-line hover:border-line2"
                     }`}
                   >
                     <span className="w-2 h-2 rounded-full" style={{ background: OUTCOME_COLOR[d.key] }} />
@@ -263,11 +263,11 @@ export default function SheetReportPanel({
               <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={dayData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E2430" vertical={false} />
-                    <XAxis dataKey="day" stroke="#7A8597" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#7A8597" fontSize={11} tickLine={false} allowDecimals={false} />
-                    <Tooltip contentStyle={TOOLTIP} cursor={{ fill: "#ffffff08" }} />
-                    <Bar dataKey="dialled" name="Placed" fill="#5EEAD4" radius={[3, 3, 0, 0]} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--c-line))" vertical={false} />
+                    <XAxis dataKey="day" stroke="rgb(var(--c-muted))" fontSize={11} tickLine={false} />
+                    <YAxis stroke="rgb(var(--c-muted))" fontSize={11} tickLine={false} allowDecimals={false} />
+                    <Tooltip contentStyle={TOOLTIP} cursor={{ fill: "rgb(var(--c-ink) / 0.03)" }} />
+                    <Bar dataKey="dialled" name="Placed" fill="rgb(var(--c-accent))" radius={[3, 3, 0, 0]} />
                     <Bar dataKey="lifted" name="Lifted" fill="#22C55E" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -333,9 +333,9 @@ export default function SheetReportPanel({
 }
 
 const TOOLTIP = {
-  background: "#12161F",
+  background: "rgb(var(--c-panel))",
   border: "1px solid #1E2430",
   borderRadius: 10,
   fontSize: 12,
-  color: "#E8ECF3",
+  color: "rgb(var(--c-ink))",
 };

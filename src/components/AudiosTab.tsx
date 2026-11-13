@@ -38,7 +38,7 @@ function PlayButton({ src, label }: { src: string; label: string }) {
   return (
     <button type="button" onClick={toggle} aria-label={`${playing ? "Pause" : "Play"} ${label}`}
       className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
-        playing ? "border-brand/40 bg-brand/10 text-brand" : "border-line text-ink2 hover:text-ink hover:bg-elev/60"}`}>
+        playing ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-ink2 hover:text-ink hover:bg-elev/60"}`}>
       {playing ? <Pause size={13} /> : <Play size={13} />}
       {playing ? "Pause" : "Play"}
     </button>
@@ -115,7 +115,7 @@ function drawWave(canvas: HTMLCanvasElement, audio: AudioBuffer) {
   const block = Math.floor(data.length / bars) || 1;
   const mid = H / 2;
   const barW = W / bars;
-  ctx.fillStyle = "#5eead4";
+  ctx.fillStyle = "rgb(var(--c-accent))";
   for (let i = 0; i < bars; i++) {
     let peak = 0;
     for (let j = 0; j < block; j++) {
@@ -218,7 +218,7 @@ function AudioRow({
   const duration = needsProbe ? probed.duration : a.durationSec!;
 
   return (
-    <tr className="transition-colors hover:bg-white/[0.022]">
+    <tr className="transition-colors hover:bg-ink/[0.022]">
       <td className={TD}>
         <input
           type="checkbox"
@@ -230,7 +230,7 @@ function AudioRow({
       </td>
       <td className={TD}>
         <div className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.25)]">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent shadow-[inset_0_0_0_1px_rgb(var(--c-accent)/0.25)]">
             <Music size={13} />
           </span>
           <span className="font-semibold truncate">{a.label}</span>
@@ -589,7 +589,7 @@ export default function AudiosTab() {
             <button
               onClick={() => setMode("url")}
               className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-                mode === "url" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+                mode === "url" ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
               }`}
             >
               <LinkIcon size={12} />
@@ -598,7 +598,7 @@ export default function AudiosTab() {
             <button
               onClick={() => setMode("upload")}
               className={`px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 transition-all ${
-                mode === "upload" ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+                mode === "upload" ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
               }`}
             >
               <Upload size={12} />
@@ -651,7 +651,7 @@ export default function AudiosTab() {
                     pickFile(e.dataTransfer.files?.[0]);
                   }}
                   className={`flex items-center gap-3 px-3 py-3 border rounded-lg cursor-pointer transition-colors ${
-                    dragOver ? "bg-brand/10 border-brand/40" : "bg-bg/60 border-line hover:border-line2"
+                    dragOver ? "bg-accent/10 border-accent/40" : "bg-bg/60 border-line hover:border-line2"
                   }`}
                 >
                   <Upload size={14} className="text-muted shrink-0" />
@@ -681,7 +681,7 @@ export default function AudiosTab() {
                   </div>
                   <div className="h-1.5 w-full rounded-full bg-elev overflow-hidden">
                     {progress == null ? (
-                      <div className="h-full w-1/3 bg-brand/70 rounded-full animate-pulse" />
+                      <div className="h-full w-1/3 bg-accent/70 rounded-full animate-pulse" />
                     ) : (
                       <div className="h-full bg-brand rounded-full transition-all duration-150" style={{ width: `${progress}%` }} />
                     )}
@@ -691,7 +691,7 @@ export default function AudiosTab() {
 
               <div className="md:col-span-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="text-xs text-muted">
-                  Goes to S3 (requires <code className="text-brand">S3_BUCKET</code> + AWS credentials).
+                  Goes to S3 (requires <code className="text-accent">S3_BUCKET</code> + AWS credentials).
                 </div>
                 <Button
                   onClick={uploadFile}

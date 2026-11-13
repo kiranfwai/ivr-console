@@ -135,7 +135,7 @@ export default function CallersView() {
           <select
             value={client}
             onChange={(e) => setClient(e.target.value)}
-            className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2.5 py-1.5 text-xs outline-none max-w-[200px]"
+            className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2.5 py-1.5 text-xs outline-none max-w-[200px]"
           >
             <option value="all">All clients</option>
             {clients.map((c) => (
@@ -158,7 +158,7 @@ export default function CallersView() {
               key={s.id}
               onClick={() => setStatus(s.id)}
               className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
-                active ? "bg-brand/10 text-brand border-brand/25" : "text-ink2 border-line hover:bg-elev/60"
+                active ? "bg-accent/10 text-accent border-accent/25" : "text-ink2 border-line hover:bg-elev/60"
               }`}
             >
               {s.label}

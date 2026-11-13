@@ -112,7 +112,7 @@ const OUTCOME_COLOR: Record<string, string> = {
   "no-answer": "#fbbf24",
   rejected: "#ef4444",
   error: "#dc2626",
-  pending: "#7a8597",
+  pending: "rgb(var(--c-muted))",
 };
 
 export default function ReportsTab() {
@@ -202,7 +202,7 @@ export default function ReportsTab() {
                 value={from}
                 max={to}
                 onChange={(e) => changeFrom(e.target.value)}
-                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-brand/60"
+                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-accent/60"
               />
             </div>
             <div>
@@ -212,7 +212,7 @@ export default function ReportsTab() {
                 value={to}
                 min={from}
                 onChange={(e) => changeTo(e.target.value)}
-                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-brand/60"
+                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-accent/60"
               />
             </div>
           </div>
@@ -363,7 +363,7 @@ function RangeBtn({ active, onClick, label }: { active: boolean; onClick: () => 
     <button
       onClick={onClick}
       className={`px-2.5 py-1.5 rounded-md text-xs transition-all ${
-        active ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+        active ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
       }`}
     >
       {label}
@@ -466,15 +466,15 @@ function HourlyChart({ byHour }: { byHour: Record<string, number> }) {
         <AreaChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
           <defs>
             <linearGradient id="brandFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#5eead4" stopOpacity={0.45} />
-              <stop offset="100%" stopColor="#5eead4" stopOpacity={0} />
+              <stop offset="0%" stopColor="rgb(var(--c-accent))" stopOpacity={0.45} />
+              <stop offset="100%" stopColor="rgb(var(--c-accent))" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke="#1f2531" vertical={false} />
-          <XAxis dataKey="hour" tick={{ fontSize: 10, fill: "#7a8597" }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#7a8597" }} axisLine={false} tickLine={false} allowDecimals={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "#2a3142" }} />
-          <Area type="monotone" dataKey="calls" stroke="#5eead4" strokeWidth={2} fill="url(#brandFill)" />
+          <CartesianGrid stroke="rgb(var(--c-line))" vertical={false} />
+          <XAxis dataKey="hour" tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} allowDecimals={false} />
+          <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "rgb(var(--c-line))" }} />
+          <Area type="monotone" dataKey="calls" stroke="rgb(var(--c-accent))" strokeWidth={2} fill="url(#brandFill)" />
         </AreaChart>
       </ResponsiveContainer>
     </div>
@@ -490,10 +490,10 @@ function CampaignBars({ rows }: { rows: Record<string, number> }) {
     <div className="h-40">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} layout="vertical" margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 10, fill: "#7a8597" }} axisLine={false} tickLine={false} allowDecimals={false} />
-          <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11, fill: "#b8c0cf" }} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "#161a23" }} />
-          <Bar dataKey="calls" fill="#5eead4" radius={[4, 4, 4, 4]} />
+          <XAxis type="number" tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} allowDecimals={false} />
+          <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11, fill: "rgb(var(--c-ink2))" }} axisLine={false} tickLine={false} />
+          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgb(var(--c-panel))" }} />
+          <Bar dataKey="calls" fill="rgb(var(--c-accent))" radius={[4, 4, 4, 4]} />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -538,7 +538,7 @@ function KVList({ rows }: { rows: Record<string, number> }) {
               <span className="font-mono tabular-nums text-muted">{v}</span>
             </div>
             <div className="h-1 bg-line rounded-full overflow-hidden">
-              <div className="h-full bg-brand/50" style={{ width: `${(v / max) * 100}%` }} />
+              <div className="h-full bg-accent/50" style={{ width: `${(v / max) * 100}%` }} />
             </div>
           </div>
         </div>
@@ -775,7 +775,7 @@ function DrillDown({ campaignId, from, to }: { campaignId: string; from: string;
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="bg-bg/60 border border-line rounded-md px-2 py-1 text-xs outline-none hover:border-line2 focus:border-brand/60"
+          className="bg-bg/60 border border-line rounded-md px-2 py-1 text-xs outline-none hover:border-line2 focus:border-accent/60"
         >
           {DRILL_STATUSES.map((s) => (
             <option key={s.value} value={s.value}>{s.label}</option>
@@ -815,9 +815,9 @@ function DrillDown({ campaignId, from, to }: { campaignId: string; from: string;
 }
 
 const tooltipStyle = {
-  background: "#0f1218",
-  border: "1px solid #2a3142",
+  background: "rgb(var(--c-panel))",
+  border: "1px solid rgb(var(--c-line))",
   borderRadius: 8,
   fontSize: 12,
-  color: "#e8ecf3",
+  color: "rgb(var(--c-ink))",
 };

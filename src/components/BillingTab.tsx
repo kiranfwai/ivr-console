@@ -150,7 +150,7 @@ export default function BillingTab() {
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
-            <div className="shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-brand to-brand2 flex items-center justify-center text-bg shadow-glow">
+            <div className="shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-accent to-brand2 flex items-center justify-center text-bg shadow-glow">
               <Wallet size={26} strokeWidth={2.25} />
             </div>
             <div className="min-w-0">
@@ -199,7 +199,7 @@ export default function BillingTab() {
                 key={f.id}
                 onClick={() => changeFilter(f.id)}
                 className={`px-2.5 py-1 rounded-md text-xs transition-all ${
-                  filter === f.id ? "bg-brand/15 text-brand" : "text-ink2 hover:text-ink"
+                  filter === f.id ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
                 }`}
               >
                 {f.label}
@@ -212,7 +212,7 @@ export default function BillingTab() {
               value={from}
               max={to || undefined}
               onChange={(e) => changeFrom(e.target.value)}
-              className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2 py-1.5 text-xs outline-none"
+              className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2 py-1.5 text-xs outline-none"
               title="From date"
             />
             <span className="text-muted text-xs">→</span>
@@ -221,7 +221,7 @@ export default function BillingTab() {
               value={to}
               min={from || undefined}
               onChange={(e) => changeTo(e.target.value)}
-              className="bg-bg/60 border border-line hover:border-line2 focus:border-brand/60 rounded-lg px-2 py-1.5 text-xs outline-none"
+              className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2 py-1.5 text-xs outline-none"
               title="To date"
             />
             {(from || to) && (
@@ -378,7 +378,7 @@ function PaymentSuccess({
             <svg width="46" height="46" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
                 d="M4.5 12.5l5 5 10-11"
-                stroke="#0a0c10"
+                stroke="rgb(var(--c-panel))"
                 strokeWidth="2.75"
                 strokeLinecap="round"
                 strokeLinejoin="round"

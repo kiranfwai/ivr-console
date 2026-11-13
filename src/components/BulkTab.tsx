@@ -625,7 +625,7 @@ export default function BulkTab() {
               return (
                 <button key={j.id} onClick={() => { setActiveJobId(j.id); setJob(j); sampleRef.current = null; }}
                   className={`w-full text-left rounded-lg px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
-                    isActive ? "bg-brand/10 border border-brand/25" : "hover:bg-elev/60 border border-transparent"
+                    isActive ? "bg-accent/10 border border-accent/25" : "hover:bg-elev/60 border border-transparent"
                   }`}>
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Users size={14} className="text-muted shrink-0" />

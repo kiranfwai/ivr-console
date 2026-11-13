@@ -33,7 +33,7 @@ import type { TabId } from "./Shell";
  *
  * Validated, not eyeballed:
  *   node scripts/validate_palette.js "#0ca30c,#fab219,#d03b3b" \
- *        --mode dark --surface "#0f1218"
+ *        --mode dark --surface "rgb(var(--c-panel))"
  *   → colour-blind separation ΔE 11.3, normal vision 27.6, all ≥3:1.
  *
  * The app's own tokens FAILED this check — brand teal (#5eead4) and sky
@@ -45,7 +45,7 @@ const C_GOOD = "#0ca30c";
 const C_WARN = "#fab219";
 const C_BAD = "#d03b3b";
 const C_NEUTRAL = "#898781";
-const C_BRAND = "#5eead4";
+const C_BRAND = "rgb(var(--c-accent))";
 
 interface Kpis {
   placed: number; placedPrev: number;
@@ -124,7 +124,7 @@ function Stat({
   const up = (delta ?? 0) > 0;
   const good = deltaGood === false ? !up : up;
   return (
-    <div className="flex items-center gap-3.5 rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.95)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="flex items-center gap-3.5 rounded-xl border border-line2 bg-panel px-4 py-4 shadow-card">
       <div
         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
         style={{ background: `${tint}22`, color: tint }}
@@ -135,7 +135,7 @@ function Stat({
         <div className="text-[23px] font-extrabold leading-tight tracking-[-0.04em] tabular-nums">{value}</div>
         <div className="text-xs text-muted">{label}</div>
         {show ? (
-          <div className={`mt-0.5 text-[11.5px] ${good ? "text-brand" : "text-warn"}`}>
+          <div className={`mt-0.5 text-[11.5px] ${good ? "text-accent" : "text-warn"}`}>
             {up ? "↑" : "↓"} {Math.abs(delta! * 100).toFixed(1)}% vs previous
           </div>
         ) : note ? (
@@ -154,7 +154,7 @@ function Bar({ label, value, share, color, muted }: { label: string; value: numb
         <span className="h-[9px] w-[9px] shrink-0 rounded-[3px]" style={{ background: color }} />
         {label}
       </div>
-      <div className="h-[11px] overflow-hidden rounded-md bg-white/[0.055] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]">
+      <div className="h-[11px] overflow-hidden rounded-md bg-ink/[0.055] shadow-[inset_0_0_0_1px_rgb(var(--c-ink)/0.04)]">
         <div className="h-full rounded-md" style={{ width: `${Math.min(100, share * 100)}%`, background: color }} />
       </div>
       <div className="text-right text-[12.5px] tabular-nums">
@@ -209,14 +209,14 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
     <Section>
       {/* filters */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex overflow-hidden rounded-xl border border-line2 bg-white/[0.03]">
+        <div className="inline-flex overflow-hidden rounded-xl border border-line2 bg-ink/[0.03]">
           {RANGES.map((r) => (
             <button
               key={r.key}
               onClick={() => setDays(r.key)}
               className={`px-3.5 py-2 text-xs font-semibold transition-colors ${
                 days === r.key
-                  ? "bg-brand/12 text-brand shadow-[inset_0_0_0_1px_rgba(94,234,212,0.22)]"
+                  ? "bg-accent/12 text-accent shadow-[inset_0_0_0_1px_rgb(var(--c-accent)/0.22)]"
                   : "text-ink2 hover:text-ink"
               }`}
             >
@@ -264,16 +264,16 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
               <div className="h-[240px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data.series} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.055)" vertical={false} />
-                    <XAxis dataKey="day" tickFormatter={(d: string) => fmtDayKey(d)} tick={{ fill: "#7a8597", fontSize: 10 }}
-                           axisLine={{ stroke: "rgba(255,255,255,0.14)" }} tickLine={false} minTickGap={24} />
-                    <YAxis tick={{ fill: "#7a8597", fontSize: 10 }} axisLine={false} tickLine={false} width={52} />
+                    <CartesianGrid stroke="rgb(var(--c-line))" vertical={false} />
+                    <XAxis dataKey="day" tickFormatter={(d: string) => fmtDayKey(d)} tick={{ fill: "rgb(var(--c-muted))", fontSize: 10 }}
+                           axisLine={{ stroke: "rgb(var(--c-line2))" }} tickLine={false} minTickGap={24} />
+                    <YAxis tick={{ fill: "rgb(var(--c-muted))", fontSize: 10 }} axisLine={false} tickLine={false} width={52} />
                     <Tooltip
                       contentStyle={{
-                        background: "rgba(18,21,29,0.98)", border: "1px solid #2a3142",
+                        background: "rgb(var(--c-panel))", border: "1px solid rgb(var(--c-line))",
                         borderRadius: 11, fontSize: 12,
                       }}
-                      labelStyle={{ color: "#7a8597" }}
+                      labelStyle={{ color: "rgb(var(--c-muted))" }}
                     />
                     {/* Two 2px strokes with no fill under either, so neither series hides the other. */}
                     <Line type="monotone" dataKey="placed" name="Calls placed" stroke={C_BRAND} strokeWidth={2} dot={false} />
@@ -366,7 +366,7 @@ export default function DashboardTab({ onGo }: { onGo?: (tab: TabId) => void }) 
               description={data.upcoming.length ? `${data.upcoming.length} scheduled` : "nothing armed"}
               action={
                 onGo && (
-                  <button onClick={() => onGo("scheduled")} className="inline-flex items-center gap-1 text-xs text-brand hover:text-[#a9f2e8]">
+                  <button onClick={() => onGo("scheduled")} className="inline-flex items-center gap-1 text-xs text-accent hover:text-ink2">
                     All <ArrowRight size={12} />
                   </button>
                 )

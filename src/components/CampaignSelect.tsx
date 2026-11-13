@@ -38,7 +38,7 @@ export default function CampaignSelect({
   return (
     <div className="space-y-1.5">
       {searchable && (
-        <label className="flex items-center gap-2 rounded-lg border border-line bg-bg/40 px-2.5 py-1.5 text-xs focus-within:border-brand/60">
+        <label className="flex items-center gap-2 rounded-lg border border-line bg-bg/40 px-2.5 py-1.5 text-xs focus-within:border-accent/60">
           <Search size={13} className="text-muted shrink-0" />
           <input
             value={q}

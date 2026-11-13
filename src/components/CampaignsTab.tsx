@@ -26,7 +26,7 @@ type WaTrigger = "answer" | "press1" | "always" | "never";
 /** How the campaigns split across the WhatsApp settings, as one bar + legend. */
 function WhatsappMix({ total, parts }: { total: number; parts: { label: string; value: number; dot: string }[] }) {
   return (
-    <div className="rounded-xl border border-line2 bg-gradient-to-b from-[rgba(22,26,35,0.9)] to-[rgba(14,17,23,0.95)] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="rounded-xl border border-line2 bg-panel px-4 py-3.5 shadow-card">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">WhatsApp message</div>
       <div className="mt-2.5 flex h-2 w-full gap-[2px] overflow-hidden rounded-full bg-line">
         {parts.filter((p) => p.value > 0).map((p) => (
@@ -217,7 +217,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
                   // keeps the old press-1 behaviour until someone changes it.
                   const trigger = c.whatsappTrigger;
                   return (
-                    <tr key={c.id} className="transition-colors hover:bg-white/[0.022]">
+                    <tr key={c.id} className="transition-colors hover:bg-ink/[0.022]">
                       <td className={TD}>
                         <div className="font-semibold">{c.name}</div>
                         {c.webhookUrl && (
@@ -566,9 +566,9 @@ function CampaignEditor({
             sit in the middle of this form looking as important as the name,
             which had clients believing they'd skipped a step. Collapsed, not
             removed — every client still has them, one click down. */}
-        <details className="group rounded-xl border border-dashed border-brand/30 bg-brand/[0.035] px-3.5 py-3 open:bg-brand/[0.05]">
+        <details className="group rounded-xl border border-dashed border-accent/30 bg-accent/[0.035] px-3.5 py-3 open:bg-accent/[0.05]">
           <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-            <span className="text-brand transition-transform group-open:rotate-90">&#9656;</span>
+            <span className="text-accent transition-transform group-open:rotate-90">&#9656;</span>
             <b className="font-semibold text-ink">Advanced</b>
             <span className="ml-auto text-right text-[11px] leading-tight text-muted">
               call ending duration &middot; webhook URL &middot; from number

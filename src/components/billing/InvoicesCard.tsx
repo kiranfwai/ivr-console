@@ -96,7 +96,7 @@ export default function InvoicesCard() {
   return (
     <>
       <Card
-        title={<span className="flex items-center gap-2"><FileText size={16} className="text-brand" /> Tax Invoices</span>}
+        title={<span className="flex items-center gap-2"><FileText size={16} className="text-accent" /> Tax Invoices</span>}
         description="A GST invoice is issued automatically for every top-up"
         action={
           <div className="flex items-center gap-1.5">

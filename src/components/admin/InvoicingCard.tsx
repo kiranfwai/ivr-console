@@ -116,7 +116,7 @@ export default function InvoicingCard() {
 
   return (
     <Card
-      title={<span className="flex items-center gap-2"><FileText size={16} className="text-brand" /> Tax invoices</span>}
+      title={<span className="flex items-center gap-2"><FileText size={16} className="text-accent" /> Tax invoices</span>}
       description="Your details, printed on every invoice issued to a customer"
       action={
         cfg.issuing
