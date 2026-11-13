@@ -2,8 +2,9 @@
 import { fmtDate } from "@/lib/format";
 
 import { useCallback, useEffect, useState } from "react";
-import { FileText, AlertCircle, CheckCircle2, Download } from "lucide-react";
-import { Card, Button, Input, Label, Select, Badge, Spinner, toast } from "../ui";
+import { FileText, AlertCircle, CheckCircle2, Download, Pencil } from "lucide-react";
+import { Button, Input, Label, Select, Badge, Loading, DataTable, TH, TD, toast } from "../ui";
+import { Panel, Callout } from "../AdminTabKit";
 import BillingIdentityFields, { BillingIdentity, EMPTY_IDENTITY } from "../BillingIdentityFields";
 import { api } from "../useData";
 
@@ -108,101 +109,115 @@ export default function InvoicingCard() {
     setFilling(false);
   }
 
-  if (!f || !cfg) return <Card title="Tax invoices"><div className="flex justify-center py-8"><Spinner /></div></Card>;
+  if (!f || !cfg) {
+    return (
+      <Panel title="Tax invoices" bordered>
+        <Loading py="py-8" />
+      </Panel>
+    );
+  }
 
   const set = (k: keyof Seller) => (e: any) => setF({ ...f, [k]: e.target.value });
   // Open the form straight away only while invoicing isn't set up yet.
   const isEditing = editing ?? !cfg.issuing;
 
   return (
-    <Card
-      title={<span className="flex items-center gap-2"><FileText size={16} className="text-accent" /> Tax invoices</span>}
-      description="Your details, printed on every invoice issued to a customer"
-      action={
-        cfg.issuing
-          ? <Badge tone="ok"><CheckCircle2 size={12} /> Issuing</Badge>
-          : <Badge tone="muted">Not issuing</Badge>
+    <Panel
+      title="Tax invoices"
+      sub="Your details, printed on every invoice issued to a customer."
+      bordered
+      right={
+        cfg.issuing ? (
+          <Badge tone="ok"><CheckCircle2 size={12} /> Issuing</Badge>
+        ) : (
+          <Badge tone="muted">Not issuing</Badge>
+        )
       }
     >
-      {!cfg.issuing && (
-        <div className="mb-4 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-sm flex items-start gap-2">
-          <AlertCircle size={14} className="mt-0.5 shrink-0 text-warn" />
-          <div>
-            <b className="font-medium">No invoices are being issued.</b>
-            <div className="text-xs text-muted mt-0.5">
-              {cfg.missing.length
-                ? <>Still needed: {cfg.missing.join(", ")}.</>
-                : <>Fill in the details below, then switch invoicing on.</>}{" "}
-              Payments are unaffected — anything taken meanwhile can be issued afterwards.
+      <div className="px-5 py-4">
+        {!cfg.issuing && (
+          <div className="mb-4">
+            <Callout tone="warn" icon={<AlertCircle size={15} />}>
+              <b className="font-semibold">No invoices are being issued.</b>
+              <div className="mt-0.5 text-[12.5px] opacity-90">
+                {cfg.missing.length
+                  ? <>Still needed: {cfg.missing.join(", ")}.</>
+                  : <>Fill in the details below, then switch invoicing on.</>}{" "}
+                Payments are unaffected — anything taken meanwhile can be issued afterwards.
+              </div>
+            </Callout>
+          </div>
+        )}
+
+        {!isEditing ? (
+          <dl className="m-0 grid gap-x-8 gap-y-2.5 text-[13.5px] sm:grid-cols-2">
+            <SummaryRow k="Legal name" v={f.legalName} />
+            <SummaryRow k="GSTIN" v={f.gstin} mono />
+            <SummaryRow k="State" v={f.state} />
+            <SummaryRow k="Numbering" v={`${f.seriesPrefix}/… · GST ${f.gstRate}% · SAC ${f.sacCode}`} />
+            <div className="sm:col-span-2">
+              <SummaryRow
+                k="Tax"
+                v={f.taxMode === "inclusive" ? "Already included in what the customer pays" : "Added on top at checkout"}
+              />
+            </div>
+          </dl>
+        ) : (<>
+          <BillingIdentityFields
+            value={sellerToIdentity(f)}
+            onChange={(n) => setF({
+              ...f,
+              legalName: n.legalName, gstin: n.gstin, pan: n.pan,
+              email: n.billingEmail, phone: n.phone,
+              line1: n.line1, line2: n.line2, city: n.city, pincode: n.pincode,
+              state: n.state, stateCode: n.stateCode,
+            })}
+            enforce
+            legalNamePlaceholder="Your company's legal name"
+          />
+
+          <div className="mt-4 grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
+            <div className="text-[13.5px] font-semibold text-ink sm:col-span-2">How invoices are raised</div>
+            <div>
+              <Label hint="e.g. FWAI/26-27/0001">Invoice number prefix</Label>
+              <Input value={f.seriesPrefix} onChange={set("seriesPrefix")} placeholder="FWAI" />
+            </div>
+            <div>
+              <Label>GST rate %</Label>
+              <Input type="number" value={f.gstRate} onChange={(e) => setF({ ...f, gstRate: Number(e.target.value) })} />
+            </div>
+            <div>
+              <Label>SAC code</Label>
+              <Input value={f.sacCode} onChange={set("sacCode")} placeholder="998414" />
+            </div>
+            <div className="sm:col-span-2">
+              <Label>Is tax already inside the amount, or added on top?</Label>
+              <Select value={f.taxMode} onChange={(e) => setF({ ...f, taxMode: e.target.value as Seller["taxMode"] })}>
+                <option value="inclusive">Already included — customer pays ₹1,000 and gets ₹1,000 of credit</option>
+                <option value="exclusive">Added on top — customer pays ₹1,180 for ₹1,000 of credit</option>
+              </Select>
+              <div className={`mt-1 text-xs ${f.taxMode === "inclusive" ? "text-muted" : "text-warn"}`}>
+                {f.taxMode === "inclusive"
+                  ? "Nothing changes for the customer; the tax is carved out of what they already pay."
+                  : "Warning: this changes the amount charged at checkout, not just the invoice."}
+              </div>
+            </div>
+            <div className="sm:col-span-2">
+              <Label>Line-item wording</Label>
+              <Input value={f.description} onChange={set("description")} />
             </div>
           </div>
-        </div>
-      )}
-
-      {!isEditing ? (
-        <div className="rounded-lg border border-line px-3 py-2.5 text-sm grid gap-x-6 gap-y-1 sm:grid-cols-2">
-          <div><span className="text-muted">Legal name · </span>{f.legalName || "—"}</div>
-          <div><span className="text-muted">GSTIN · </span>{f.gstin || "—"}</div>
-          <div><span className="text-muted">State · </span>{f.state || "—"}</div>
-          <div><span className="text-muted">Numbering · </span>{f.seriesPrefix}/… · GST {f.gstRate}% · SAC {f.sacCode}</div>
-          <div className="sm:col-span-2"><span className="text-muted">Tax · </span>
-            {f.taxMode === "inclusive" ? "Already included in what the customer pays" : "Added on top at checkout"}</div>
-        </div>
-      ) : (<>
-      <BillingIdentityFields
-        value={sellerToIdentity(f)}
-        onChange={(n) => setF({
-          ...f,
-          legalName: n.legalName, gstin: n.gstin, pan: n.pan,
-          email: n.billingEmail, phone: n.phone,
-          line1: n.line1, line2: n.line2, city: n.city, pincode: n.pincode,
-          state: n.state, stateCode: n.stateCode,
-        })}
-        enforce
-        legalNamePlaceholder="Freedom With AI Technologies Private Limited"
-      />
-
-      <div className="grid gap-3 sm:grid-cols-2 mt-3 pt-3 border-t border-line">
-        <div className="sm:col-span-2 text-sm font-medium text-ink">How invoices are raised</div>
-        <div>
-          <Label hint="e.g. FWAI/26-27/0001">Invoice number prefix</Label>
-          <Input value={f.seriesPrefix} onChange={set("seriesPrefix")} placeholder="FWAI" />
-        </div>
-        <div>
-          <Label>GST rate %</Label>
-          <Input type="number" value={f.gstRate} onChange={(e) => setF({ ...f, gstRate: Number(e.target.value) })} />
-        </div>
-        <div>
-          <Label>SAC code</Label>
-          <Input value={f.sacCode} onChange={set("sacCode")} placeholder="998414" />
-        </div>
-        <div className="sm:col-span-2">
-          <Label>Is tax already inside the amount, or added on top?</Label>
-          <Select value={f.taxMode} onChange={(e) => setF({ ...f, taxMode: e.target.value as Seller["taxMode"] })}>
-            <option value="inclusive">Already included — customer pays ₹1,000 and gets ₹1,000 of credit</option>
-            <option value="exclusive">Added on top — customer pays ₹1,180 for ₹1,000 of credit</option>
-          </Select>
-          <div className="text-xs text-muted mt-1">
-            {f.taxMode === "inclusive"
-              ? "Nothing changes for the customer; the tax is carved out of what they already pay."
-              : "Warning: this changes the amount charged at checkout, not just the invoice."}
-          </div>
-        </div>
-        <div className="sm:col-span-2">
-          <Label>Line-item wording</Label>
-          <Input value={f.description} onChange={set("description")} />
-        </div>
+        </>)}
       </div>
-      </>)}
 
-      <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-line">
+      <div className="flex flex-wrap items-center gap-2 border-t border-line bg-elev/60 px-5 py-3.5">
         {isEditing ? (
           <>
             <Button onClick={async () => { if (await save()) setEditing(false); }} loading={saving}>Save details</Button>
             {cfg.issuing && <Button variant="ghost" onClick={() => { void load(); setEditing(false); }}>Cancel</Button>}
           </>
         ) : (
-          <Button variant="ghost" onClick={() => setEditing(true)}>Edit details</Button>
+          <Button variant="ghost" leftIcon={<Pencil size={14} />} onClick={() => setEditing(true)}>Edit details</Button>
         )}
         <Button
           variant={f.enabled ? "ghost" : "primary"}
@@ -214,41 +229,43 @@ export default function InvoicingCard() {
         >
           {f.enabled ? "Stop issuing invoices" : "Start issuing invoices"}
         </Button>
-        <Button variant="ghost" onClick={backfill} loading={filling} disabled={!cfg.issuing}>
+        <Button variant="ghost" leftIcon={<FileText size={14} />} onClick={backfill} loading={filling} disabled={!cfg.issuing}>
           Issue missing invoices
         </Button>
       </div>
 
       {invoices && invoices.length > 0 && (
-        <div className="mt-5 pt-4 border-t border-line overflow-x-auto">
-          <div className="text-xs uppercase tracking-wider text-muted mb-2">Recent invoices</div>
-          <table className="w-full text-sm">
+        <div className="border-t border-line">
+          <div className="px-5 pb-3 pt-4 text-[14px] font-semibold text-ink">Recent invoices</div>
+          <DataTable>
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-muted border-b border-line">
-                <th className="py-2 pr-3 font-medium">Invoice</th>
-                <th className="py-2 pr-3 font-medium">Date</th>
-                <th className="py-2 pr-3 font-medium">Customer</th>
-                <th className="py-2 pr-3 font-medium">GSTIN</th>
-                <th className="py-2 pr-3 font-medium text-right">Total</th>
-                <th className="py-2 pr-3"></th>
+              <tr>
+                <th className={TH}>Invoice</th>
+                <th className={TH}>Date</th>
+                <th className={TH}>Customer</th>
+                <th className={`${TH} hidden md:table-cell`}>GSTIN</th>
+                <th className={`${TH} text-right`}>Total</th>
+                <th className={TH}></th>
               </tr>
             </thead>
             <tbody>
               {invoices.map((i) => (
-                <tr key={i.id} className="border-b border-line/60 hover:bg-elev/50">
-                  <td className="py-2 pr-3 tabular-nums whitespace-nowrap">
+                <tr key={i.id} className="transition-colors hover:bg-elev">
+                  <td className={`${TD} whitespace-nowrap font-semibold tabular-nums text-ink`}>
                     {i.invoiceNo}
                     {/* ₹1 / ₹10 top-ups were tests; flag them so they're easy to spot. */}
-                    {i.totals.totalP < 10000 && <span className="ml-2 text-[11px] text-warn" title="Under ₹100 — probably a test top-up">test?</span>}
+                    {i.totals.totalP < 10000 && (
+                      <span className="ml-2 text-[11px] font-normal text-warn" title="Under ₹100 — probably a test top-up">test?</span>
+                    )}
                   </td>
-                  <td className="py-2 pr-3 text-muted whitespace-nowrap">{fmtDate(i.issuedAt)}</td>
-                  <td className="py-2 pr-3">{i.buyer.legalName || i.buyer.name || i.clientId}</td>
-                  <td className="py-2 pr-3 text-muted text-xs">{i.buyer.gstin || "Unregistered"}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">₹{money(i.totals.totalP)}</td>
-                  <td className="py-2 pr-3 text-right">
+                  <td className={`${TD} whitespace-nowrap text-muted`}>{fmtDate(i.issuedAt)}</td>
+                  <td className={`${TD} max-w-[220px] truncate`}>{i.buyer.legalName || i.buyer.name || i.clientId}</td>
+                  <td className={`${TD} hidden font-mono text-xs text-muted md:table-cell`}>{i.buyer.gstin || "Unregistered"}</td>
+                  <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>₹{money(i.totals.totalP)}</td>
+                  <td className={`${TD} text-right`}>
                     <a
                       href={`/api/admin/invoices/${i.id}/pdf`}
-                      className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
+                      className="inline-flex h-[30px] items-center gap-1.5 rounded-[9px] border border-line bg-panel px-2.5 text-[12.5px] font-semibold text-ink shadow-xs transition-colors hover:bg-elev"
                     >
                       <Download size={13} /> PDF
                     </a>
@@ -256,9 +273,18 @@ export default function InvoicingCard() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         </div>
       )}
-    </Card>
+    </Panel>
+  );
+}
+
+function SummaryRow({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {
+  return (
+    <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-3">
+      <dt className="text-muted">{k}</dt>
+      <dd className={`m-0 break-words text-ink ${mono ? "font-mono text-[13px]" : ""}`}>{v && v.trim() ? v : "—"}</dd>
+    </div>
   );
 }

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet } from "lucide-react";
-import { Section, Card, Select, Label, EmptyState, Spinner, Badge } from "./ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FileSpreadsheet, ChevronDown, Check } from "lucide-react";
+import { Section, Card, EmptyState, Spinner, Badge } from "./ui";
 import { useFetch } from "./useData";
 import SheetReportPanel from "./SheetReportPanel";
+import { Popover, TRIGGER } from "./ReportsTabUi";
 import type { GSheetConn } from "@/lib/gsheets";
 import type { Campaign } from "@/lib/models";
 
@@ -61,49 +62,92 @@ export default function SheetReportsTab() {
           <EmptyState
             icon={<FileSpreadsheet size={20} />}
             title="No sheets connected yet"
-            description="Connect a Google Sheet under Sheet Auto-Dial and its report will appear here — every row it produced, and what happened to each one."
+            description="Connect a Google Sheet under Sheet auto-dial and its report will appear here — every row it produced, and what happened to each one."
           />
         </Card>
       </Section>
     );
   }
 
+  const lead = (
+    <>
+      <SheetPicker conns={conns} value={connId} onChange={setConnId} />
+      {conn && (
+        <>
+          <Badge tone={conn.enabled ? "ok" : "warn"}>{conn.enabled ? "Active" : "Paused"}</Badge>
+          {conn.lastError && <Badge tone="danger">Last sync failed</Badge>}
+        </>
+      )}
+    </>
+  );
+
   return (
     <Section>
-      <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[260px] flex-1">
-            <Label hint={`${conns.length} connected`}>Sheet</Label>
-            <Select value={connId} onChange={(e) => setConnId(e.target.value)}>
-              {[true, false].map((on) => {
-                const group = conns.filter((c) => c.enabled === on);
-                if (!group.length) return null;
-                return (
-                  <optgroup key={String(on)} label={on ? "Active" : "Paused"}>
-                    {group.map((c) => (
-                      <option key={c.id} value={c.id}>{c.connName || c.tabName}</option>
-                    ))}
-                  </optgroup>
-                );
-              })}
-            </Select>
-          </div>
-          {conn && (
-            <div className="flex items-center gap-2 pb-1">
-              <Badge tone={conn.enabled ? "ok" : "warn"}>
-                {conn.enabled ? "Active" : "Paused"}
-              </Badge>
-              {conn.lastError && <Badge tone="danger">Last sync failed</Badge>}
-            </div>
-          )}
-        </div>
-      </Card>
-
       {conn && (
         // key forces a clean refetch when the sheet changes, so filters and
         // paging don't carry over from the previous sheet's report.
-        <SheetReportPanel key={conn.id} conn={conn} campaignName={campaignName} />
+        <SheetReportPanel key={conn.id} conn={conn} campaignName={campaignName} toolbarLead={lead} />
       )}
     </Section>
+  );
+}
+
+function SheetPicker({
+  conns,
+  value,
+  onChange,
+}: {
+  conns: GSheetConn[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const cur = conns.find((c) => c.id === value);
+  const label = (c: GSheetConn) => c.connName || c.tabName;
+
+  return (
+    <Popover
+      open={open}
+      onClose={close}
+      trigger={
+        <button type="button" className={TRIGGER} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <FileSpreadsheet size={15} className="text-muted" />
+          <span className="max-w-[240px] truncate">{cur ? label(cur) : "Pick a sheet"}</span>
+          <ChevronDown size={14} className="text-muted" />
+        </button>
+      }
+    >
+      <div className="max-h-[360px] w-[min(320px,calc(100vw-2rem))] overflow-auto">
+        {[true, false].map((on) => {
+          const group = conns.filter((c) => c.enabled === on);
+          if (!group.length) return null;
+          return (
+            <div key={String(on)}>
+              <div className="px-2.5 pb-1 pt-2 text-xs font-medium text-muted">
+                {on ? "Active" : "Paused"} · {group.length}
+              </div>
+              {group.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(c.id);
+                    close();
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[13.5px] transition-colors hover:bg-ink/[0.05] ${
+                    c.id === value ? "text-ink" : "text-ink2"
+                  }`}
+                >
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.lastError ? "bg-danger" : on ? "bg-ok" : "bg-muted"}`} />
+                  <span className="min-w-0 flex-1 truncate">{label(c)}</span>
+                  {c.id === value && <Check size={14} className="shrink-0 text-accent" />}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </Popover>
   );
 }

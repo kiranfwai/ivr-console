@@ -2,54 +2,79 @@
 import { fmtDate } from "@/lib/format";
 import { formatPhone } from "@/lib/phone";
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import {
   Plus,
-  Edit2,
+  Pencil,
   Trash2,
   Megaphone,
   Copy,
+  Phone,
   PhoneCall,
   CheckCircle2,
   XCircle,
+  AudioLines,
+  Pointer,
+  MessageCircle,
+  ChevronRight,
 } from "lucide-react";
 import {
-  Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, Modal,
-  Tile, DataPanel, DataTable, TH, TD, Kebab, ConfirmDialog, toast,
+  Button, Card, Input, Label, Select, Textarea, EmptyState, Loading, Section, Modal,
+  DataTable, TH, TD, Kebab, ConfirmDialog, IconButton, toast,
 } from "./ui";
 import { useFetch, api } from "./useData";
 import type { Audio, Campaign } from "@/lib/models";
+import { Avatar, Drawer, Pager, PlayIcon, PlayRound, Seg, SearchField, WaveBars, fmtSec, seedOf } from "./CampaignsKit";
 
 type WaTrigger = "answer" | "press1" | "always" | "never";
+type Filter = "all" | WaTrigger;
 
 /** Anything unrecognised (or unset, on old campaigns) is the original press-1 behaviour. */
-/** How the campaigns split across the WhatsApp settings, as one bar + legend. */
-function WhatsappMix({ total, parts }: { total: number; parts: { label: string; value: number; dot: string }[] }) {
-  return (
-    <div className="rounded-xl border border-line2 bg-panel px-4 py-3.5 shadow-card">
-      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">WhatsApp message</div>
-      <div className="mt-2.5 flex h-2 w-full gap-[2px] overflow-hidden rounded-full bg-line">
-        {parts.filter((p) => p.value > 0).map((p) => (
-          <div key={p.label} className={`h-full ${p.dot}`} style={{ width: `${(p.value / Math.max(1, total)) * 100}%` }} />
-        ))}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
-        {parts.map((p) => (
-          <div key={p.label} className={`min-w-0 ${p.value ? "" : "opacity-45"}`}>
-            <div className="flex items-center gap-1.5 text-[11.5px] text-muted">
-              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${p.dot}`} />
-              <span className="truncate">{p.label}</span>
-            </div>
-            <div className="mt-0.5 text-[18px] font-extrabold tabular-nums leading-tight tracking-[-0.03em]">{p.value}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function toTrigger(v: unknown): WaTrigger {
   return v === "answer" || v === "always" || v === "never" ? v : "press1";
+}
+
+/** Label, colour and short line for each WhatsApp setting — one place, used by the
+ *  summary bar, the filter, the table pill and the drawer. */
+const TRIG: Record<WaTrigger, { label: string; short: string; dot: string; pill: string; flow: string }> = {
+  answer: {
+    label: "When they pick up",
+    short: "Pick up",
+    dot: "bg-ok2",
+    pill: "bg-ok/[0.09] text-ok border-ok/25",
+    flow: "when they pick up",
+  },
+  always: {
+    label: "Everyone, on dial",
+    short: "Everyone",
+    dot: "bg-brand2",
+    pill: "bg-brand2/[0.09] text-brand2 border-brand2/25",
+    flow: "as soon as it dials",
+  },
+  press1: {
+    label: "Only on press 1",
+    short: "Press 1",
+    dot: "bg-warn2",
+    pill: "bg-warn/[0.09] text-warn border-warn/25",
+    flow: "only if they press 1",
+  },
+  never: {
+    label: "Don’t send",
+    short: "Don’t send",
+    dot: "bg-muted",
+    pill: "bg-elev text-muted border-line",
+    flow: "not sent",
+  },
+};
+const TRIG_ORDER: WaTrigger[] = ["answer", "always", "press1", "never"];
+
+function TrigPill({ t }: { t: WaTrigger }) {
+  return (
+    <span className={`inline-flex h-[22px] items-center gap-1.5 whitespace-nowrap rounded-full border px-2 text-xs font-medium ${TRIG[t].pill}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${TRIG[t].dot}`} />
+      {TRIG[t].label}
+    </span>
+  );
 }
 
 function isValidHttpsUrl(v: string) {
@@ -91,6 +116,8 @@ function formatDate(iso?: string) {
   return fmtDate(iso);
 }
 
+const PER_PAGE = 10;
+
 export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: string) => void }) {
   const { data: cdata, loading: loadingC, reload: reloadC } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
   const { data: adata } = useFetch<{ audios: Audio[] }>("/api/audios");
@@ -99,10 +126,10 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   const [editing, setEditing] = useState<Campaign | null>(null);
   const [creating, setCreating] = useState(false);
   const [clone, setClone] = useState<Campaign | null>(null);
-  // Search + paging: one live account has 107 campaigns in a single long table.
+  // Search + filter + paging: one live account has 100+ campaigns.
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(0);
-  const PER_PAGE = 10;
   const [confirmDelete, setConfirmDelete] = useState<Campaign | null>(null);
   const [testFor, setTestFor] = useState<Campaign | null>(null);
 
@@ -126,25 +153,24 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
   }
 
   const editorOpen = creating || !!editing || !!clone;
-  const onAnswerCount = campaigns.filter((c) => c.whatsappTrigger === "answer").length;
-  const alwaysCount = campaigns.filter((c) => c.whatsappTrigger === "always").length;
-  const neverCount = campaigns.filter((c) => c.whatsappTrigger === "never").length;
-  const press1Count = campaigns.length - onAnswerCount - alwaysCount - neverCount;
+  const counts: Record<WaTrigger, number> = { answer: 0, always: 0, press1: 0, never: 0 };
+  campaigns.forEach((c) => counts[toTrigger(c.whatsappTrigger)]++);
   const noFromCount = campaigns.filter((c) => !c.fromNumber).length;
+  const audiosInUse = new Set(campaigns.map((c) => c.audioId).filter(Boolean)).size;
 
+  const audioOf = (c: Campaign) => audios.find((a) => a.id === c.audioId);
   const needle = q.trim().toLowerCase();
-  const matching = needle
-    ? campaigns.filter((c) => c.name.toLowerCase().includes(needle) ||
-        (audios.find((a) => a.id === c.audioId)?.label || "").toLowerCase().includes(needle))
-    : campaigns;
+  const matching = campaigns.filter(
+    (c) =>
+      (filter === "all" || toTrigger(c.whatsappTrigger) === filter) &&
+      (!needle || c.name.toLowerCase().includes(needle) || (audioOf(c)?.label || "").toLowerCase().includes(needle)),
+  );
   const pages = Math.max(1, Math.ceil(matching.length / PER_PAGE));
   const pg = Math.min(page, pages - 1);
   const shown = matching.slice(pg * PER_PAGE, (pg + 1) * PER_PAGE);
 
-  // One "New campaign" button (in the table header), not two on the same screen.
   return (
     <Section>
-
       {loadingC && !cdata ? (
         <Card>
           <Loading label="Loading campaigns…" />
@@ -154,7 +180,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
           <EmptyState
             icon={<Megaphone size={20} />}
             title="No campaigns yet"
-            description="A campaign bundles the audio, prompt, WhatsApp trigger and from-number. Pick one when dialing."
+            description="A campaign bundles the audio, the prompt, when the WhatsApp goes out and which number calls. Pick one when dialling."
             action={
               <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
                 Create campaign
@@ -164,127 +190,167 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
         </Card>
       ) : (
         <>
-          {/* One summary row: how many campaigns, how they send WhatsApp (one
-              breakdown instead of four look-alike tiles), and caller ID. */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2.4fr)_minmax(0,1fr)]">
-            <Tile label="Campaigns" value={campaigns.length} sub={`${audios.length} audio${audios.length === 1 ? "" : "s"} available`} />
-            <WhatsappMix
-              total={campaigns.length}
-              parts={[
-                { label: "When they pick up", value: onAnswerCount, dot: "bg-ok" },
-                { label: "Everyone, on dial", value: alwaysCount, dot: "bg-brand" },
-                { label: "Only if they press 1", value: press1Count, dot: "bg-warn" },
-                { label: "Don’t send", value: neverCount, dot: "bg-muted" },
-              ]}
-            />
-            <Tile
-              label="Caller ID"
-              value={noFromCount ? `${noFromCount} of ${campaigns.length}` : "All set"}
-              sub={noFromCount ? "use the account default number" : "every campaign has its own number"}
-              tone={noFromCount ? "warn" : "ok"}
-            />
+          {/* One summary card: how many, how they send WhatsApp, caller ID. */}
+          <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-line bg-panel shadow-card lg:grid-cols-[220px_minmax(0,1fr)_240px]">
+            <div className="px-[22px] py-[18px]">
+              <div className="text-[13px] font-medium text-muted">Campaigns</div>
+              <div className="mt-1.5 text-[28px] font-semibold leading-tight tracking-[-0.035em] tabular-nums">{campaigns.length}</div>
+              <div className="mt-1 text-[12.5px] text-muted">
+                using {audiosInUse} audio{audiosInUse === 1 ? "" : "s"}
+              </div>
+            </div>
+            <div className="border-t border-line px-[22px] py-[18px] lg:border-l lg:border-t-0">
+              <div className="text-[13px] font-medium text-muted">How they send WhatsApp</div>
+              <div className="mt-3.5 flex h-2.5 gap-[3px] overflow-hidden rounded-full bg-line/60">
+                {TRIG_ORDER.filter((t) => counts[t] > 0).map((t) => (
+                  <span key={t} className={`block h-full rounded-[3px] ${TRIG[t].dot}`} style={{ flex: counts[t] }} />
+                ))}
+              </div>
+              <div className="mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+                {TRIG_ORDER.map((t) => (
+                  <div key={t} className={`min-w-0 ${counts[t] ? "" : "opacity-50"}`}>
+                    <div className="flex items-center gap-[7px] whitespace-nowrap text-[12.5px] text-muted">
+                      <i className={`h-2 w-2 shrink-0 rounded-[2px] ${TRIG[t].dot}`} />
+                      <span className="truncate">{TRIG[t].label}</span>
+                    </div>
+                    <b className="mt-0.5 block text-[18px] font-semibold tracking-[-0.03em] text-ink tabular-nums">{counts[t]}</b>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-line px-[22px] py-[18px] lg:border-l lg:border-t-0">
+              <div className="text-[13px] font-medium text-muted">Caller ID</div>
+              {noFromCount ? (
+                <>
+                  <div className="mt-1.5 text-[28px] font-semibold leading-tight tracking-[-0.035em] tabular-nums">
+                    {noFromCount}
+                    <span className="text-sm font-medium tracking-normal text-muted"> of {campaigns.length}</span>
+                  </div>
+                  <div className="mt-1 text-[12.5px] text-muted">use the account default number</div>
+                </>
+              ) : (
+                <>
+                  <div className="mt-1.5 text-[28px] font-semibold leading-tight tracking-[-0.035em]">All set</div>
+                  <div className="mt-1 text-[12.5px] text-ok">every campaign has its own number</div>
+                </>
+              )}
+            </div>
           </div>
 
-          <DataPanel
-            title="Your campaigns"
-            meta={needle ? `${matching.length} of ${campaigns.length}` : `${campaigns.length} total`}
-            action={
-              <div className="flex items-center gap-2">
-                <Input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
-                       placeholder="Search campaigns or audio…" className="w-40 sm:w-56" />
-                <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setCreating(true)}>
+          <div className="relative overflow-hidden rounded-xl border border-line bg-panel shadow-card">
+            <div className="flex flex-wrap items-center gap-2.5 px-5 py-4">
+              <Seg<Filter>
+                ariaLabel="Filter by WhatsApp setting"
+                value={filter}
+                onChange={(f) => {
+                  setFilter(f);
+                  setPage(0);
+                }}
+                options={[
+                  { value: "all", label: "All", count: campaigns.length },
+                  ...TRIG_ORDER.map((t) => ({ value: t, label: TRIG[t].short, count: counts[t], dot: TRIG[t].dot })),
+                ]}
+              />
+              <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                <SearchField
+                  value={q}
+                  onChange={(v) => {
+                    setQ(v);
+                    setPage(0);
+                  }}
+                  placeholder="Search name or audio"
+                  className="min-w-0 flex-1 sm:w-[250px] sm:flex-none"
+                />
+                <Button leftIcon={<Plus size={14} />} onClick={() => setCreating(true)}>
                   New campaign
                 </Button>
               </div>
-            }
-          >
+            </div>
             <DataTable>
               <thead>
                 <tr>
                   <th className={TH}>Campaign</th>
-                  <th className={`${TH} hidden md:table-cell`}>Audio</th>
-                  <th className={TH}>WhatsApp message</th>
-                  <th className={`${TH} hidden lg:table-cell`}>Caller ID</th>
-                  <th className={`${TH} hidden md:table-cell`}>Created</th>
-                  <th className={`${TH} w-[52px]`} />
+                  <th className={TH}>WhatsApp</th>
+                  <th className={`${TH} hidden md:table-cell`}>Caller ID</th>
+                  <th className={`${TH} hidden lg:table-cell`}>Created</th>
+                  <th className={`${TH} w-[140px]`} />
                 </tr>
               </thead>
               <tbody>
                 {shown.map((c) => {
-                  const a = audios.find((a) => a.id === c.audioId);
+                  const a = audioOf(c);
                   const created = formatDate(c.createdAt);
-                  // Anything saved before this setting existed has no value and
-                  // keeps the old press-1 behaviour until someone changes it.
-                  const trigger = c.whatsappTrigger;
+                  const trigger = toTrigger(c.whatsappTrigger);
                   return (
-                    <tr key={c.id} className="transition-colors hover:bg-ink/[0.022]">
+                    <tr key={c.id} className="group transition-colors hover:bg-ink/[0.022]">
                       <td className={TD}>
-                        <div className="font-semibold">{c.name}</div>
-                        {c.webhookUrl && (
-                          <div className="mt-0.5 text-[11.5px] text-muted">custom message webhook</div>
-                        )}
+                        <div className="flex min-w-0 items-center gap-3">
+                          <Avatar name={c.name} />
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-ink">{c.name}</div>
+                            <div className="mt-0.5 truncate text-[12.5px] text-muted">
+                              {a ? (
+                                <>
+                                  {a.label}
+                                  {fmtSec(a.durationSec) && <span className="tabular-nums"> · {fmtSec(a.durationSec)}</span>}
+                                </>
+                              ) : (
+                                <span className="text-warn">No audio</span>
+                              )}
+                              {c.webhookUrl && <span> · custom webhook</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className={TD}>
+                        <TrigPill t={trigger} />
                       </td>
                       <td className={`${TD} hidden md:table-cell`}>
-                        {a ? (
-                          <>
-                            <span className="text-ink2">{a.label}</span>
-                            {a.durationSec ? (
-                              <div className="text-[11.5px] text-muted tabular-nums">
-                                {Math.floor(a.durationSec / 60)}:{String(Math.round(a.durationSec % 60)).padStart(2, "0")}
-                              </div>
-                            ) : null}
-                          </>
-                        ) : (
-                          <Badge tone="warn">No audio</Badge>
-                        )}
-                      </td>
-                      <td className={TD}>
-                        {/* The setting that decides whether a lead gets a message
-                            at all. It was previously only visible by opening the
-                            campaign one at a time. */}
-                        {trigger === "always" ? (
-                          <Badge tone="ok" className="whitespace-nowrap">Everyone, on dial</Badge>
-                        ) : trigger === "answer" ? (
-                          <Badge tone="ok" className="whitespace-nowrap">When they pick up</Badge>
-                        ) : trigger === "never" ? (
-                          <Badge tone="muted" className="whitespace-nowrap">Don&apos;t send</Badge>
-                        ) : (
-                          <Badge tone="warn" className="whitespace-nowrap">Only if they press 1</Badge>
-                        )}
-                      </td>
-                      <td className={`${TD} hidden lg:table-cell`}>
                         {c.fromNumber ? (
-                          <span className="font-mono text-[12.5px] tabular-nums whitespace-nowrap">{formatPhone(c.fromNumber)}</span>
+                          <span className="whitespace-nowrap text-ink2 tabular-nums">{formatPhone(c.fromNumber)}</span>
                         ) : (
-                          <Badge tone="muted">Account default</Badge>
+                          <span className="whitespace-nowrap text-muted">Account default</span>
                         )}
                       </td>
-                      <td className={`${TD} whitespace-nowrap text-muted hidden md:table-cell`}>{created ?? "—"}</td>
+                      <td className={`${TD} hidden whitespace-nowrap text-muted lg:table-cell`}>{created ?? "—"}</td>
                       <td className={TD}>
-                        <Kebab
-                          items={[
-                            { label: "Test call", icon: <PhoneCall size={13} />, onClick: () => setTestFor(c) },
-                            { label: "Edit", icon: <Edit2 size={13} />, onClick: () => setEditing(c) },
-                            { label: "Clone", icon: <Copy size={13} />, onClick: () => startClone(c) },
-                            { label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: () => setConfirmDelete(c) },
-                          ]}
-                        />
+                        <div className="flex items-center justify-end gap-0.5">
+                          <div className="flex items-center gap-0.5 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
+                            {a?.url && <PlayIcon src={a.url} label={a.label} />}
+                            <IconButton size="sm" icon={<Phone size={14} />} title="Test call" onClick={() => setTestFor(c)} />
+                            <IconButton size="sm" icon={<Pencil size={14} />} title="Edit" onClick={() => setEditing(c)} />
+                          </div>
+                          <Kebab
+                            items={[
+                              { label: "Test call", icon: <PhoneCall size={13} />, onClick: () => setTestFor(c) },
+                              { label: "Edit", icon: <Pencil size={13} />, onClick: () => setEditing(c) },
+                              { label: "Clone", icon: <Copy size={13} />, onClick: () => startClone(c) },
+                              { label: "Delete", icon: <Trash2 size={13} />, danger: true, onClick: () => setConfirmDelete(c) },
+                            ]}
+                          />
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
+                {!shown.length && (
+                  <tr>
+                    <td colSpan={5}>
+                      <EmptyState icon={<Megaphone size={20} />} title="No campaigns match" description="Try another filter or search." />
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </DataTable>
-            {pages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 text-xs text-muted border-t border-line">
-                <span>{pg * PER_PAGE + 1}–{Math.min(matching.length, (pg + 1) * PER_PAGE)} of {matching.length}</span>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" disabled={pg === 0} onClick={() => setPage(pg - 1)}>Prev</Button>
-                  <Button size="sm" variant="ghost" disabled={pg >= pages - 1} onClick={() => setPage(pg + 1)}>Next</Button>
-                </div>
-              </div>
-            )}
-          </DataPanel>
+            <Pager
+              page={pg}
+              pages={pages}
+              from={matching.length ? pg * PER_PAGE + 1 : 0}
+              to={pg * PER_PAGE + shown.length}
+              total={matching.length}
+              onPage={setPage}
+            />
+          </div>
         </>
       )}
 
@@ -293,6 +359,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
           audios={audios}
           initial={editing}
           cloneFrom={clone}
+          onTest={(c) => setTestFor(c)}
           onClose={() => {
             setCreating(false);
             setEditing(null);
@@ -323,9 +390,7 @@ export default function CampaignsTab({ onCreated }: { onCreated?: (campaignId: s
         onClose={() => setConfirmDelete(null)}
       />
 
-      {testFor && (
-        <TestCallModal campaign={testFor} onClose={() => setTestFor(null)} />
-      )}
+      {testFor && <TestCallModal campaign={testFor} onClose={() => setTestFor(null)} />}
     </Section>
   );
 }
@@ -361,20 +426,24 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
     <Modal
       open
       onClose={onClose}
-      title={`Test call — ${campaign.name}`}
+      title="Test call"
       maxWidth="max-w-md"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>Close</Button>
           <Button onClick={placeTest} disabled={!canDial} loading={busy} leftIcon={<PhoneCall size={14} />}>
-            {busy ? "Dialing…" : "Place test call"}
+            {busy ? "Dialling…" : "Call me"}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
+        <p className="text-sm text-ink2">
+          We’ll call your phone with <span className="font-medium text-ink">{campaign.name}</span> so you can hear it
+          exactly as leads do. It is one real call, using this campaign’s audio, prompt and webhook.
+        </p>
         <div>
-          <Label hint="India: auto-prefix +91">Phone to call</Label>
+          <Label hint="India: +91 added for you">Your phone</Label>
           <Input
             value={to}
             onChange={(e) => setTo(e.target.value)}
@@ -382,9 +451,6 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
             placeholder="9876543210 or +14155551234"
             autoFocus
           />
-          <div className="text-xs text-muted mt-1">
-            Places one real call using this campaign&apos;s audio, prompt, and webhook.
-          </div>
         </div>
 
         {result && (
@@ -411,6 +477,84 @@ function TestCallModal({ campaign, onClose }: { campaign: Campaign; onClose: () 
   );
 }
 
+/** One section of the drawer form. */
+function Sect({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+  return (
+    <section className="mb-6">
+      <h4 className="text-sm font-semibold tracking-[-0.01em] text-ink">{title}</h4>
+      {sub && <p className="mb-3.5 mt-0.5 text-[13px] text-muted">{sub}</p>}
+      {children}
+    </section>
+  );
+}
+
+/** "How this call will go": ring → audio → prompt → WhatsApp, live from the form. */
+function FlowStrip({
+  from,
+  audioLen,
+  hangUp,
+  trigger,
+}: {
+  from: string;
+  audioLen: string;
+  hangUp: string;
+  trigger: WaTrigger;
+}) {
+  const off = trigger === "never";
+  const steps = [
+    { icon: <Phone size={16} />, title: "Call rings", sub: from },
+    { icon: <AudioLines size={16} />, title: "Plays audio", sub: audioLen },
+    { icon: <Pointer size={16} />, title: "Speaks the prompt", sub: hangUp },
+  ];
+  return (
+    <div className="mb-[22px] rounded-xl border border-line bg-elev px-3 py-3.5">
+      <div className="mb-2.5 px-1 text-xs font-medium text-muted">How this call will go</div>
+      <div className="grid grid-cols-2 gap-y-3 sm:flex sm:items-stretch">
+        {steps.map((s, i) => (
+          <FlowStep key={s.title} first={i === 0} icon={s.icon} title={s.title} sub={s.sub} />
+        ))}
+        <FlowStep
+          icon={<MessageCircle size={16} />}
+          title="WhatsApp"
+          sub={TRIG[trigger].flow}
+          tone={off ? "off" : "send"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FlowStep({
+  icon,
+  title,
+  sub,
+  first,
+  tone,
+}: {
+  icon: ReactNode;
+  title: string;
+  sub: string;
+  first?: boolean;
+  tone?: "send" | "off";
+}) {
+  const bub =
+    tone === "send"
+      ? "bg-ok/10 border-ok/25 text-ok"
+      : tone === "off"
+      ? "bg-ink/[0.04] border-line text-muted"
+      : "bg-panel border-line text-muted";
+  return (
+    <div className="relative flex-1 px-1 text-center">
+      {!first && (
+        <span aria-hidden="true" className="absolute -left-3.5 top-[17px] hidden w-7 border-t-[1.5px] border-dashed border-line2 sm:block" />
+      )}
+      <div className={`mx-auto mb-[7px] grid h-9 w-9 place-items-center rounded-[11px] border shadow-xs ${bub}`}>{icon}</div>
+      <b className={`block text-xs font-semibold ${tone === "off" ? "text-muted line-through" : "text-ink"}`}>{title}</b>
+      <span className="block truncate text-[11.5px] text-muted">{sub}</span>
+    </div>
+  );
+}
+
 function CampaignEditor({
   initial,
   cloneFrom,
@@ -418,6 +562,7 @@ function CampaignEditor({
   onClose,
   onSaved,
   onCreated,
+  onTest,
 }: {
   initial: Campaign | null;
   cloneFrom: Campaign | null;
@@ -425,6 +570,7 @@ function CampaignEditor({
   onClose: () => void;
   onSaved: () => void;
   onCreated?: (campaignId: string) => void;
+  onTest: (c: Campaign) => void;
 }) {
   // `initial` = editing an existing record; `cloneFrom` = prefilled new record.
   const seed = initial ?? cloneFrom;
@@ -463,10 +609,16 @@ function CampaignEditor({
   const webhookValid = isValidHttpsUrl(webhookUrl);
   const fromEmpty = !fromNumber.trim();
   const fromErr = fromNumberError(fromNumber);
-  // FEATURE 5: require a name AND a selected audio (plus a valid webhook).
+  // Require a name AND a selected audio (plus a valid webhook / from number).
   const nameValid = !!name.trim();
   const audioValid = !!audioId;
   const canSave = nameValid && audioValid && webhookValid && !fromErr;
+  // Open Advanced straight away when something in it needs fixing.
+  const advancedHasError = !webhookValid || !!fromErr;
+  const [advOpen, setAdvOpen] = useState(advancedHasError);
+  useEffect(() => {
+    if (advancedHasError) setAdvOpen(true);
+  }, [advancedHasError]);
 
   async function save() {
     if (!canSave) return;
@@ -492,7 +644,7 @@ function CampaignEditor({
         });
         toast("Campaign created", "ok");
         onSaved();
-        // Jump to Bulk with this campaign pre-selected (FEATURE 5).
+        // Jump to Bulk with this campaign pre-selected.
         onCreated?.(res.campaign.id);
       }
     } catch (e: any) {
@@ -502,13 +654,27 @@ function CampaignEditor({
     }
   }
 
+  const OPTS: { k: WaTrigger; title: string; sub: string }[] = [
+    { k: "answer", title: "When they pick up", sub: "Everyone who answers. Press 1 still counted." },
+    { k: "press1", title: "Only if they press 1", sub: "Answering alone sends nothing." },
+    { k: "always", title: "Everyone, on dial", sub: "Even if they don’t answer. Never to DND." },
+    { k: "never", title: "Don’t send", sub: "Calls only. No WhatsApp." },
+  ];
+
   return (
-    <Modal
+    <Drawer
       open
       onClose={onClose}
       title={initial ? "Edit campaign" : cloneFrom ? "Clone campaign" : "New campaign"}
+      description="Everything here can be changed later."
       footer={
         <>
+          {initial && (
+            <Button variant="ghost" leftIcon={<Phone size={14} />} onClick={() => onTest(initial)}>
+              Test call
+            </Button>
+          )}
+          <span className="flex-1" />
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={save} disabled={!canSave} loading={busy}>
             {initial ? "Save changes" : "Create campaign"}
@@ -516,124 +682,166 @@ function CampaignEditor({
         </>
       }
     >
-      <div className="space-y-4">
-        <div>
-          <Label>Name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day-1 outreach" />
-        </div>
-        <div>
-          <Label hint={audios.length ? `${audios.length} available` : "add one in the Audios tab"}>Audio</Label>
-          <Select value={audioId ?? ""} onChange={(e) => setAudioId(e.target.value)}>
-            <option value="">— Select an audio —</option>
-            {audios.map((a) => (
-              <option key={a.id} value={a.id}>{a.label}</option>
-            ))}
-          </Select>
-          {!audioValid && (
-            <div className="text-xs text-danger mt-1">
-              {audios.length ? "Select an audio for this campaign." : "No audios yet — add one in the Audios tab first."}
-            </div>
-          )}
-        </div>
-        <div>
-          <Label>Send the WhatsApp message</Label>
-          <Select
-            value={whatsappTrigger}
-            onChange={(e) => setWhatsappTrigger(toTrigger(e.target.value))}
-          >
-            <option value="answer">As soon as they pick up</option>
-            <option value="press1">Only if they press 1</option>
-            <option value="always">Everyone, when the call is placed (no conditions)</option>
-            <option value="never">Don&apos;t send — calls only</option>
-          </Select>
-          <div className="text-xs text-muted mt-1">
-            {whatsappTrigger === "always"
-              ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed or low balance alike. Numbers on your Do Not Disturb list are never messaged. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
-              : whatsappTrigger === "never"
-              ? "This campaign only places calls. No WhatsApp is sent — not on pickup, not on press 1. Press 1 is still counted in reports."
-              : whatsappTrigger === "answer"
-              ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
-              : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
-          </div>
-        </div>
-        <div>
-          <Label>Prompt spoken after audio</Label>
-          <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-        </div>
+      <FlowStrip
+        from={fromNumber.trim() && !fromErr ? `from ${formatPhone(fromNumber.trim())}` : "from account default"}
+        audioLen={fmtSec(audioDuration) || (selectedAudio ? "length unknown" : "no audio yet")}
+        hangUp={callEndSec.trim() ? `hangs up at ${callEndSec.trim()}s` : "then hangs up"}
+        trigger={whatsappTrigger}
+      />
 
-        {/* The three fields below are wiring, not settings: leave every one of
-            them blank and the campaign uses the account defaults. They used to
-            sit in the middle of this form looking as important as the name,
-            which had clients believing they'd skipped a step. Collapsed, not
-            removed — every client still has them, one click down. */}
-        <details className="group rounded-xl border border-dashed border-accent/30 bg-accent/[0.035] px-3.5 py-3 open:bg-accent/[0.05]">
-          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-ink2 marker:content-['']">
-            <span className="text-accent transition-transform group-open:rotate-90">&#9656;</span>
-            <b className="font-semibold text-ink">Advanced</b>
-            <span className="ml-auto text-right text-[11px] leading-tight text-muted">
-              call ending duration &middot; webhook URL &middot; from number
-              <br />
-              leave blank and your account defaults are used
-            </span>
-          </summary>
-          <div className="mt-4 space-y-4">
-        <div>
-          <Label hint={audioDuration ? `audio is ${audioDuration}s` : "auto-filled from audio"}>
-            Call ending duration (seconds)
-          </Label>
-          <Input
-            type="number"
-            min={5}
-            value={callEndSec}
-            onChange={(e) => {
-              setCallEndTouched(true);
-              setCallEndSec(e.target.value);
-            }}
-            placeholder="auto"
-          />
-          <div className="text-xs text-muted mt-1">
-            The call hangs up automatically after this many seconds, so the audio plays once and the line
-            doesn&apos;t stay connected. Auto-filled from the audio length; adjust if needed.
-            {!audioDuration && selectedAudio && (
-              <span className="text-warn"> This audio has no detected length — re-add it in the Audios tab to auto-fill, or set a value here.</span>
+      <Sect title="Basics" sub="What it’s called and what people hear.">
+        <div className="space-y-3.5">
+          <div>
+            <Label required>Campaign name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day-1 outreach" invalid={!nameValid} />
+          </div>
+          <div>
+            <Label required hint={audios.length ? `${audios.length} available` : "add one under Audios"}>Audio</Label>
+            <Select value={audioId ?? ""} onChange={(e) => setAudioId(e.target.value)} invalid={!audioValid}>
+              <option value="">Select an audio</option>
+              {audios.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                  {fmtSec(a.durationSec) ? ` · ${fmtSec(a.durationSec)}` : ""}
+                </option>
+              ))}
+            </Select>
+            {!audioValid && (
+              <div className="mt-1 text-xs text-danger">
+                {audios.length ? "Select an audio for this campaign." : "No audios yet — add one under Audios first."}
+              </div>
+            )}
+            {selectedAudio?.url && (
+              <div className="mt-2 flex items-center gap-3 rounded-[10px] border border-line bg-elev py-2 pl-2 pr-3">
+                <PlayRound src={selectedAudio.url} label={selectedAudio.label} size={32} />
+                <WaveBars seed={seedOf(selectedAudio.id)} count={56} height={26} />
+                <span className="text-[12.5px] text-muted tabular-nums">{fmtSec(audioDuration) || "—"}</span>
+              </div>
             )}
           </div>
         </div>
-        <div>
-          <Label hint="optional">WhatsApp webhook URL</Label>
-          <Input
-            value={webhookUrl}
-            onChange={(e) => setWebhookUrl(e.target.value)}
-            placeholder="https://connect.pabbly.com/..."
-            className={!webhookValid ? "border-danger/60 focus:border-danger/60" : ""}
-          />
-          {webhookValid ? (
-            <div className="text-xs text-muted mt-1">Blank = use PABBLY_WEBHOOK_URL env var.</div>
-          ) : (
-            <div className="text-xs text-danger mt-1 flex items-center gap-1">
-              Must be a valid https:// URL.
-            </div>
-          )}
+      </Sect>
+
+      <Sect title="WhatsApp message" sub="When should this campaign send its WhatsApp?">
+        <div role="radiogroup" aria-label="When to send the WhatsApp message" className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {OPTS.map((o) => {
+            const on = whatsappTrigger === o.k;
+            return (
+              <button
+                key={o.k}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => setWhatsappTrigger(o.k)}
+                className={`flex gap-2.5 rounded-[11px] border p-3 text-left transition-[border-color,box-shadow,background-color] focus-visible:outline-none focus-visible:shadow-glow ${
+                  on
+                    ? "border-accent bg-accent/[0.06] shadow-[inset_0_0_0_1px_rgb(var(--c-accent)),0_0_0_4px_rgb(var(--c-accent)/0.12)]"
+                    : "border-line bg-panel hover:border-line2 hover:shadow-xs"
+                }`}
+              >
+                <span
+                  className={`mt-px grid h-4 w-4 shrink-0 place-items-center rounded-full border-[1.5px] ${on ? "border-accent" : "border-line2"}`}
+                >
+                  {on && <span className="h-2 w-2 rounded-full bg-accent" />}
+                </span>
+                <span className="min-w-0">
+                  <b className="block text-[13.5px] font-semibold tracking-[-0.01em] text-ink">
+                    {o.title}
+                    {o.k === "answer" && (
+                      <em className="ml-1.5 inline-flex h-[18px] items-center rounded-full border border-ok/25 bg-ok/[0.09] px-1.5 align-[1px] text-[10.5px] font-semibold not-italic text-ok">
+                        Recommended
+                      </em>
+                    )}
+                  </b>
+                  <span className="mt-0.5 block text-[12.5px] leading-snug text-muted">{o.sub}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
-        <div>
-          <Label hint="optional">From number</Label>
-          <Input
-            value={fromNumber}
-            onChange={(e) => setFromNumber(e.target.value)}
-            placeholder="+918031340818"
-            className={fromErr ? "border-danger/60 focus:border-danger/60" : ""}
-          />
-          {fromErr ? (
-            <div className="text-xs text-danger mt-1">{fromErr}</div>
-          ) : fromEmpty ? (
-            <div className="text-xs text-warn mt-1">
-              No from-number set — calls will use the account default.
-            </div>
-          ) : null}
+        <div className="mt-2.5 text-xs leading-relaxed text-muted">
+          {whatsappTrigger === "always"
+            ? "Every lead gets the WhatsApp + email the moment their call is placed — answered, busy, no answer, failed or low balance alike. Numbers on your Do not disturb list are never messaged. Pickup and press 1 are still counted but send nothing more, and a lead is never messaged twice."
+            : whatsappTrigger === "never"
+            ? "This campaign only places calls. No WhatsApp is sent — not on pickup, not on press 1. Press 1 is still counted in reports."
+            : whatsappTrigger === "answer"
+            ? "Everyone who answers gets the message. Press 1 still works and is still counted — it just isn't what sends it, and nobody gets two messages."
+            : "Only leads who press 1 get the message. Anyone who answers and doesn't press gets nothing."}
         </div>
+      </Sect>
+
+      <Sect title="After the audio" sub="Spoken once the recording ends.">
+        <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+      </Sect>
+
+      {/* Wiring, not settings: leave every one blank and the account defaults
+          are used. Collapsed so nobody thinks they skipped a step. */}
+      <details
+        className="group rounded-xl border border-line"
+        open={advOpen}
+        onToggle={(e) => setAdvOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-3 marker:content-['']">
+          <ChevronRight size={14} className="text-muted transition-transform group-open:rotate-90" />
+          <span className="min-w-0">
+            <b className="block text-sm font-semibold text-ink">Advanced</b>
+            <span className="block text-[12.5px] text-muted">Hang-up time, webhook URL, call-from number. Leave blank to use your account defaults.</span>
+          </span>
+        </summary>
+        <div className="space-y-4 border-t border-line px-3.5 py-4">
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+            <div>
+              <Label hint={audioDuration ? `audio is ${audioDuration}s` : "auto-filled from audio"}>Hang up after (seconds)</Label>
+              <Input
+                type="number"
+                min={5}
+                value={callEndSec}
+                onChange={(e) => {
+                  setCallEndTouched(true);
+                  setCallEndSec(e.target.value);
+                }}
+                placeholder="auto"
+                className="tabular-nums"
+              />
+            </div>
+            <div>
+              <Label hint="optional">Call from</Label>
+              <Input
+                value={fromNumber}
+                onChange={(e) => setFromNumber(e.target.value)}
+                placeholder="+918031340818"
+                className={fromErr ? "border-danger/60 focus:border-danger/60" : ""}
+              />
+              {fromErr ? (
+                <div className="mt-1 text-xs text-danger">{fromErr}</div>
+              ) : fromEmpty ? (
+                <div className="mt-1 text-xs text-muted">Blank — calls use the account default.</div>
+              ) : null}
+            </div>
           </div>
-        </details>
-      </div>
-    </Modal>
+          <div className="text-xs text-muted">
+            The call hangs up automatically after this many seconds, so the audio plays once and the line
+            doesn&apos;t stay connected. Auto-filled from the audio length; adjust if needed.
+            {!audioDuration && selectedAudio && (
+              <span className="text-warn"> This audio has no detected length — re-add it under Audios to auto-fill, or set a value here.</span>
+            )}
+          </div>
+          <div>
+            <Label hint="optional">WhatsApp webhook URL</Label>
+            <Input
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder="https://connect.pabbly.com/..."
+              className={!webhookValid ? "border-danger/60 focus:border-danger/60" : ""}
+            />
+            {webhookValid ? (
+              <div className="mt-1 text-xs text-muted">Blank = use the account’s default webhook.</div>
+            ) : (
+              <div className="mt-1 text-xs text-danger">Must be a valid https:// URL.</div>
+            )}
+          </div>
+        </div>
+      </details>
+    </Drawer>
   );
 }

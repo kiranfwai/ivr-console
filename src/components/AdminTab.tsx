@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { UserPlus, Pencil, Trash2, Copy, Check, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { UserPlus, Pencil, Trash2, Copy, KeyRound, Users, Wand2 } from "lucide-react";
 import {
-  Card,
   Section,
   Button,
   Input,
   Label,
   Badge,
-  Modal,
-  Spinner,
+  DataTable,
+  TH,
+  TD,
+  Kebab,
+  ConfirmDialog,
+  EmptyState,
+  Loading,
   toast,
 } from "./ui";
 import { api } from "./useData";
@@ -18,7 +22,9 @@ import FinancialsView from "./admin/FinancialsView";
 import ReportsByClientView from "./admin/ReportsByClientView";
 import CallersView from "./admin/CallersView";
 import PricingView from "./admin/PricingView";
-import { viewAsClient } from "./admin/shared";
+import { viewAsClient, useAnalytics } from "./admin/shared";
+import { fmtMoney, istToday, istDaysAgo } from "./admin/money";
+import { Seg, Avatar, Perm, SearchBox, Drawer, Chip } from "./AdminTabKit";
 
 /** Data-tab ids in sidebar order — used to pick which tab to land on when an
  *  admin opens a client's console (their first granted feature). */
@@ -60,11 +66,24 @@ export default function AdminTab({ view = "clients" }: { view?: AdminView }) {
   );
 }
 
+type StatusFilter = "all" | "active" | "disabled";
+
 function ClientsView() {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
+  const [deleting, setDeleting] = useState<Client | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [q, setQ] = useState("");
+
+  // Wallet + last-30-day call volume per client (read-only, same source as Financials).
+  const [from] = useState(istDaysAgo(29));
+  const [to] = useState(istToday());
+  const { data: analytics } = useAnalytics(from, to);
+  const stats = useMemo(() => new Map((analytics?.rows ?? []).map((r) => [r.id, r])), [analytics]);
+  const currency = analytics?.currency || "INR";
 
   const load = useCallback(async () => {
     setErr(null);
@@ -80,7 +99,18 @@ function ClientsView() {
     load();
   }, [load]);
 
-  const rows: Client[] = clients ?? [];
+  const all: Client[] = clients ?? [];
+  const counts = {
+    all: all.length,
+    active: all.filter((c) => c.active).length,
+    disabled: all.filter((c) => !c.active).length,
+  };
+  const needle = q.trim().toLowerCase();
+  const rows = all.filter(
+    (c) =>
+      (status === "all" || (status === "active" ? c.active : !c.active)) &&
+      (!needle || `${c.name} ${c.email}`.toLowerCase().includes(needle)),
+  );
 
   // Enter a client's console (view-as-client), landing on their first granted
   // feature tab. Middleware scopes all data to this client via the cookie set
@@ -90,96 +120,145 @@ function ClientsView() {
     viewAsClient(c.id, firstTab);
   }
 
+  function copyId(id: string) {
+    navigator.clipboard?.writeText(id).then(
+      () => toast("Client ID copied", "ok"),
+      () => toast("Couldn't copy the client ID", "danger"),
+    );
+  }
+
+  async function del() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    try {
+      await api(`/api/admin/clients/${deleting.id}`, { method: "DELETE" });
+      toast(`Deleted ${deleting.email}`, "info");
+      setDeleting(null);
+      load();
+    } catch (e: any) {
+      toast(String(e?.message || e), "danger");
+    }
+    setDeleteBusy(false);
+  }
+
   return (
     <Section>
-      <Card
-        title="Client accounts"
-        description="Click a client to open their console · create logins, grant access, reset passwords"
-        action={
-          <Button leftIcon={<UserPlus size={14} />} onClick={() => setCreateOpen(true)}>
-            New client
-          </Button>
-        }
-      >
-        {err && <div className="text-sm text-danger mb-3">{err}</div>}
+      <div className="flex justify-end">
+        <Button leftIcon={<UserPlus size={15} />} onClick={() => setCreateOpen(true)}>
+          New client
+        </Button>
+      </div>
+
+      <div className="relative overflow-hidden rounded-xl border border-line bg-panel shadow-card">
+        <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+          <Seg
+            value={status}
+            onChange={setStatus}
+            options={[
+              { id: "all", label: "All", count: counts.all },
+              { id: "active", label: "Active", count: counts.active },
+              { id: "disabled", label: "Disabled", count: counts.disabled },
+            ]}
+          />
+          <span className="flex-1" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search clients" className="w-full sm:w-[240px]" />
+        </div>
+
+        {err && <div className="px-5 pb-3 text-sm text-danger">{err}</div>}
+
         {clients === null ? (
-          <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
-            <Spinner size={16} /> Loading…
-          </div>
+          <Loading label="Loading clients…" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={<Users size={20} />}
+            title={all.length === 0 ? "No client logins yet" : "No clients match"}
+            description={
+              all.length === 0
+                ? "Create one with New client to onboard a client."
+                : "Try a different search or status."
+            }
+          />
         ) : (
-          <div className="overflow-auto -mx-1">
-            {clients.length === 0 && (
-              <div className="mb-3 text-xs text-muted">
-                No client logins yet — create one with <span className="text-ink2">New client</span> to onboard a client.
-              </div>
-            )}
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                  <th className="font-medium py-2 px-1">Client</th>
-                  <th className="font-medium px-1">Status</th>
-                  <th className="font-medium px-1 hidden md:table-cell">Access</th>
-                  <th className="font-medium px-1 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c) => (
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Client</th>
+                <th className={`${TH} hidden md:table-cell`}>Can use</th>
+                <th className={`${TH} text-right`}>Wallet</th>
+                <th className={`${TH} hidden text-right sm:table-cell`}>Calls · 30d</th>
+                <th className={TH}>Status</th>
+                <th className={`${TH} w-[130px]`}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => {
+                const s = stats.get(c.id);
+                return (
                   <tr
                     key={c.id}
                     onClick={() => openClientConsole(c)}
-                    className="border-t border-line align-top hover:bg-elev/40 cursor-pointer"
+                    className="cursor-pointer transition-colors hover:bg-elev"
                     title={`Open ${c.name || c.email}'s console`}
                   >
-                    <td className="py-2.5 px-1">
-                      <div className="font-medium text-ink flex items-center gap-1.5">
-                        {c.name}
-                        <ExternalLink size={12} className="text-muted" />
-                      </div>
-                      <div className="text-xs text-muted">{c.email}</div>
-                      <ClientId id={c.id} />
-                    </td>
-                    <td className="px-1 py-2.5">
-                      <Badge tone={c.active ? "ok" : "muted"} dot={c.active}>
-                        {c.active ? "Active" : "Disabled"}
-                      </Badge>
-                      {/* On phones the Access column is hidden — say how much access instead. */}
-                      <div className="md:hidden mt-1 text-xs text-muted">
-                        {c.perms.length} feature{c.perms.length === 1 ? "" : "s"}
+                    <td className={TD}>
+                      <div className="flex items-center gap-3">
+                        <Avatar name={c.name || c.email} />
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold tracking-[-0.01em] text-ink">{c.name || c.email}</div>
+                          <div className="truncate text-[12.5px] text-muted">{c.email}</div>
+                        </div>
                       </div>
                     </td>
-                    <td className="px-1 py-2.5 hidden md:table-cell">
-                      <div className="flex flex-wrap gap-1 max-w-[280px]">
+                    <td className={`${TD} hidden md:table-cell`}>
+                      <div className="flex max-w-[300px] flex-wrap">
                         {c.perms.length === 0 ? (
                           <span className="text-xs text-muted">No access</span>
                         ) : (
                           // Menu order, so every client's chips line up the same way.
-                          FEATURES.filter((f) => c.perms.includes(f.id)).map((f) => (
-                            <Badge key={f.id} tone="accent">{f.label}</Badge>
-                          ))
+                          FEATURES.filter((f) => c.perms.includes(f.id)).map((f) => <Perm key={f.id}>{f.label}</Perm>)
                         )}
                       </div>
                     </td>
                     <td
-                      className="px-1 py-2.5 text-right whitespace-nowrap"
-                      onClick={(e) => e.stopPropagation()}
+                      className={`${TD} whitespace-nowrap text-right tabular-nums ${
+                        s && s.balance <= 0 ? "font-semibold text-warn" : "text-ink"
+                      }`}
                     >
-                      <button
-                        onClick={() => setEditing(c)}
-                        className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev"
-                      >
-                        <Pencil size={12} /> Edit
-                      </button>
-                      <DeleteButton client={c} onDone={load} />
+                      {s ? fmtMoney(s.balance, currency) : "—"}
+                    </td>
+                    <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>
+                      {s ? s.total.toLocaleString("en-IN") : "—"}
+                    </td>
+                    <td className={TD}>
+                      <Badge tone={c.active ? "ok" : "muted"} dot={c.active}>
+                        {c.active ? "Active" : "Disabled"}
+                      </Badge>
+                    </td>
+                    <td className={TD} onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => openClientConsole(c)}>
+                          Open
+                        </Button>
+                        <Kebab
+                          label={`Actions for ${c.name || c.email}`}
+                          items={[
+                            { label: "Edit access", icon: <Pencil size={14} />, onClick: () => setEditing(c) },
+                            { label: "Reset password", icon: <KeyRound size={14} />, onClick: () => setEditing(c) },
+                            { label: "Copy client ID", icon: <Copy size={14} />, onClick: () => copyId(c.id) },
+                            { label: "Delete client", icon: <Trash2 size={14} />, danger: true, onClick: () => setDeleting(c) },
+                          ]}
+                        />
+                      </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                );
+              })}
+            </tbody>
+          </DataTable>
         )}
-      </Card>
+      </div>
 
-      <ClientModal
+      <ClientDrawer
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onSaved={() => {
@@ -187,7 +266,7 @@ function ClientsView() {
           load();
         }}
       />
-      <ClientModal
+      <ClientDrawer
         open={!!editing}
         client={editing ?? undefined}
         onClose={() => setEditing(null)}
@@ -196,83 +275,35 @@ function ClientsView() {
           load();
         }}
       />
+      <ConfirmDialog
+        open={!!deleting}
+        title="Delete this client?"
+        body={
+          <>
+            This removes the login for <b className="text-ink">{deleting?.email}</b>. They won’t be able to sign in
+            again. You can’t undo it.
+          </>
+        }
+        confirmLabel="Yes, delete"
+        busy={deleteBusy}
+        onConfirm={del}
+        onClose={() => (deleteBusy ? undefined : setDeleting(null))}
+      />
     </Section>
   );
 }
 
-function ClientId({ id }: { id: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        navigator.clipboard?.writeText(id).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          },
-          () => {},
-        );
-      }}
-      className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-mono text-muted hover:text-ink2"
-      title="Copy client id (use as the `client` field for /api/trigger-call)"
-    >
-      {copied ? <Check size={10} /> : <Copy size={10} />}
-      {id}
-    </button>
-  );
-}
-
-function DeleteButton({ client, onDone }: { client: Client; onDone: () => void }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  async function del() {
-    setBusy(true);
-    try {
-      await api(`/api/admin/clients/${client.id}`, { method: "DELETE" });
-      toast(`Deleted ${client.email}`, "info");
-      onDone();
-    } catch (e: any) {
-      toast(String(e?.message || e), "danger");
-    }
-    setBusy(false);
-    setConfirming(false);
-  }
-
-  if (!confirming) {
-    return (
-      <button
-        onClick={() => setConfirming(true)}
-        // Quiet until hovered: a red Delete beside Edit on every row is easy to hit.
-        className="inline-flex items-center gap-1 text-xs text-muted hover:text-danger px-2 py-1 rounded-md hover:bg-danger/10"
-        title={`Delete ${client.email}`}
-      >
-        <Trash2 size={12} /> Delete
-      </button>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        onClick={del}
-        disabled={busy}
-        className="text-xs text-danger font-medium px-2 py-1 rounded-md hover:bg-danger/10 disabled:opacity-50"
-      >
-        {busy ? "…" : "Confirm"}
-      </button>
-      <button
-        onClick={() => setConfirming(false)}
-        className="text-xs text-muted px-1 py-1 rounded-md hover:bg-elev"
-      >
-        Cancel
-      </button>
-    </span>
-  );
+/** A readable random password to paste into the form (admin can still type their own). */
+function generatePassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const buf = new Uint32Array(12);
+  crypto.getRandomValues(buf);
+  const s = Array.from(buf, (n) => chars[n % chars.length]).join("");
+  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
 }
 
 /** Create (no client prop) or Edit (client prop) a client login. */
-function ClientModal({
+function ClientDrawer({
   open,
   client,
   onClose,
@@ -292,7 +323,7 @@ function ClientModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Reset fields whenever the target changes / modal reopens.
+  // Reset fields whenever the target changes / drawer reopens.
   useEffect(() => {
     if (!open) return;
     setErr(null);
@@ -337,14 +368,15 @@ function ClientModal({
   }
 
   return (
-    <Modal
+    <Drawer
       open={open}
       onClose={onClose}
       title={isEdit ? "Edit client" : "New client"}
-      size="sm"
+      sub={isEdit ? client?.email : "They’ll get a login and only see their own data."}
       footer={
         <>
-          <Button variant="subtle" onClick={onClose}>
+          <span className="flex-1" />
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button onClick={save} loading={busy}>
@@ -356,74 +388,72 @@ function ClientModal({
       <div className="space-y-4">
         {err && <div className="text-sm text-danger">{err}</div>}
         <div>
-          <Label required>Name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+          <Label required>Company name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Bright Minds Coaching" />
         </div>
-        <div>
-          <Label required={!isEdit}>Email</Label>
-          <Input
-            type="email"
-            value={email}
-            disabled={isEdit}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="client@company.com"
-            hint={isEdit ? "Email can't be changed" : undefined}
-          />
-        </div>
-        <div>
-          <Label required={!isEdit} hint={isEdit ? "leave blank to keep" : "min 6 chars"}>
-            {isEdit ? "Reset password" : "Password"}
-          </Label>
-          <Input
-            type="text"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={isEdit ? "New password" : "Initial password"}
-          />
+        <div className="grid gap-3.5 sm:grid-cols-2">
+          <div>
+            <Label required={!isEdit}>Login email</Label>
+            <Input
+              type="email"
+              value={email}
+              disabled={isEdit}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="ops@company.com"
+              hint={isEdit ? "Email can't be changed" : undefined}
+            />
+          </div>
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-ink2">
+                {isEdit ? "Reset password" : "Password"}
+                {!isEdit && <span className="ml-0.5 text-danger" aria-hidden="true">*</span>}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPassword(generatePassword())}
+                className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+              >
+                <Wand2 size={12} /> Generate
+              </button>
+            </div>
+            <Input
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={isEdit ? "New password" : "Initial password"}
+              className="font-mono"
+              hint={isEdit ? "Leave blank to keep the current one." : "At least 6 characters."}
+            />
+          </div>
         </div>
 
         <div>
-          <Label>Feature access</Label>
-          <div className="grid grid-cols-2 gap-1.5">
-            {FEATURES.map((f) => {
-              const on = perms.includes(f.id);
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => toggle(f.id)}
-                  className={`flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm border transition-colors text-left ${
-                    on
-                      ? "bg-accent/10 text-accent border-accent/25"
-                      : "text-ink2 border-line hover:bg-elev/60"
-                  }`}
-                >
-                  <span
-                    className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                      on ? "bg-brand border-accent text-bg" : "border-line2"
-                    }`}
-                  >
-                    {on && <Check size={10} />}
-                  </span>
-                  {f.label}
-                </button>
-              );
-            })}
+          <Label>Can use</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {FEATURES.map((f) => (
+              <Chip key={f.id} on={perms.includes(f.id)} onClick={() => toggle(f.id)}>
+                {f.label}
+              </Chip>
+            ))}
           </div>
         </div>
 
         {isEdit && (
-          <label className="flex items-center gap-2 text-sm text-ink2 cursor-pointer">
+          <label className="flex cursor-pointer items-start gap-3 rounded-[11px] border border-line px-3.5 py-3">
             <input
               type="checkbox"
               checked={active}
               onChange={(e) => setActive(e.target.checked)}
-              className="accent-brand"
+              className="mt-0.5 h-4 w-4 accent-[rgb(var(--c-accent))]"
             />
-            Account active (uncheck to block sign-in)
+            <span>
+              <b className="font-semibold text-ink">Account active</b>
+              <span className="mt-0.5 block text-[12.5px] text-muted">Turn off to block this client from signing in.</span>
+            </span>
           </label>
         )}
       </div>
-    </Modal>
+    </Drawer>
   );
 }

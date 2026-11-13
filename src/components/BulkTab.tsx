@@ -2,18 +2,24 @@
 import CampaignSelect from "./CampaignSelect";
 import { fmtDateTime } from "@/lib/format";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Play, Square, RotateCw, Users, AlertCircle, Wifi, WifiOff, CheckCircle2, XCircle, Phone, PhoneOff, Zap, Clock, Download, Gauge, Server, Activity } from "lucide-react";
-import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, CsvFilePicker, Modal, toast } from "./ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Play, Square, RotateCw, Users, Wifi, WifiOff, Phone, Zap, Clock, Download, Gauge, Server, Activity, X, CalendarClock, AlertTriangle, XCircle } from "lucide-react";
+import { Button, Card, Input, Label, Select, Textarea, Badge, EmptyState, Loading, Section, CsvFilePicker, Modal, DataPanel, DataTable, TH, TD, toast } from "./ui";
 import { useFetch, api, apiRetry, usePersistentState } from "./useData";
 import { parseContacts, type Contact } from "@/lib/contacts";
-import ScheduleCard from "./ScheduleCard";
+import ScheduleCard, { ScheduleFields, newScheduleDraft, saveSchedule, type ScheduleDraft, type ScheduleSpec } from "./ScheduleCard";
+import {
+  Seg, StepsLayout, Step, SummaryCard, SumRow, SumTotal, FileChip, Chips, Callout,
+  StatTiles, StatTile, Prog, ConfirmSendModal, ModalActions,
+} from "./BulkTabParts";
 import type { BulkJobWithCounts, BulkRow, Campaign } from "@/lib/models";
 
 // Large-upload guardrails (FEATURE 4).
 const WARN_THRESHOLD = 5000;   // warn + offer split above this
 const MAX_CONTACTS = 30000;    // hard block above this
 const SPLIT_SIZE = 10000;      // "Split & upload" chunk size
+
+const EMPTY_CSV = "phone,name,email\n";
 
 type Counts = ReturnType<typeof summarize>;
 type SummaryData = { job: BulkJobWithCounts; durationSum: number; durationCount: number };
@@ -73,7 +79,7 @@ export default function BulkTab() {
   // campaign are never lost (BUG 1). Live progress is re-fetched from the server
   // by the polling effect once activeJobId rehydrates.
   const [campaignId, setCampaignId] = usePersistentState("ivr.bulk.campaignId", "");
-  const [csv, setCsv] = usePersistentState("ivr.bulk.csv", "phone,name,email\n");
+  const [csv, setCsv] = usePersistentState("ivr.bulk.csv", EMPTY_CSV);
   const [concurrency, setConcurrency] = usePersistentState("ivr.bulk.concurrency", 50);
   const [batchDelay, setBatchDelay] = usePersistentState("ivr.bulk.batchDelay", 0); // ms between batches (FEATURE 1)
   const [activeJobId, setActiveJobId] = usePersistentState<string | null>("ivr.bulk.activeJobId", null);
@@ -82,7 +88,8 @@ export default function BulkTab() {
   const [failed, setFailed] = useState<BulkRow[]>([]);
   const [skipped, setSkipped] = useState<BulkRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [confirm, setConfirm] = useState<null | "warn" | "blocked">(null); // FEATURE 4
+  // FEATURE 4 large-list gates + the plain "Start calling N people?" check.
+  const [confirm, setConfirm] = useState<null | "start" | "warn" | "blocked">(null);
   const [testPhone, setTestPhone] = useState(""); // FEATURE 5 — test call before launch
   const [testing, setTesting] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -95,12 +102,19 @@ export default function BulkTab() {
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const prevStatusRef = useRef<string | null>(null);
   const summaryShownRef = useRef<Set<string>>(new Set());
+  // "When" step: start now, or save as a schedule.
+  const [when, setWhen] = useState<"now" | "schedule">("now");
+  const [schedDraft, setSchedDraft] = useState<ScheduleDraft>(newScheduleDraft);
+  const [scheduling, setScheduling] = useState(false);
+  const [schedReload, setSchedReload] = useState(0);
+  const [showPaste, setShowPaste] = useState(false);
 
   const counts = useMemo(() => (job ? summarize(job) : null), [job]);
   const running = job?.status === "running";
   // Parse once; reuse rows + the transparent counts (BUG 4).
   const parsed = useMemo(() => parseContacts(csv), [csv]);
   const previewCount = parsed.rows.length;
+  const { stats } = parsed;
 
   // Poll the active job for live progress. Display-only — the backend dials.
   useEffect(() => {
@@ -196,12 +210,13 @@ export default function BulkTab() {
     setLog([]); setFailed([]);
   }
 
-  // Gate the Start button on the large-upload thresholds (FEATURE 4).
+  // Gate the Start button on the large-upload thresholds (FEATURE 4). Every
+  // path ends in a confirmation before anything is dialed.
   function onStart() {
     if (!campaignId || !previewCount) return;
     if (previewCount > MAX_CONTACTS) { setConfirm("blocked"); return; }
     if (previewCount > WARN_THRESHOLD) { setConfirm("warn"); return; }
-    start();
+    setConfirm("start");
   }
 
   // Fetch the completion summary (counts + call-duration aggregates) (FEATURE 6).
@@ -240,7 +255,7 @@ export default function BulkTab() {
     try {
       const j = await submitRows(rows);
       setActive(j);
-      setCsv("phone,name,email\n");
+      setCsv(EMPTY_CSV);
       reloadJobs();
       toast(`Queued ${rows.length.toLocaleString()} calls — dialing in the background. Safe to close this tab.`, "ok");
     } catch (e: any) {
@@ -265,13 +280,47 @@ export default function BulkTab() {
         if (!first) first = j;
       }
       if (first) setActive(first);
-      setCsv("phone,name,email\n");
+      setCsv(EMPTY_CSV);
       reloadJobs();
       toast(`Split into ${chunks.length} campaigns of up to ${SPLIT_SIZE.toLocaleString()} — all queued.`, "ok");
     } catch (e: any) {
       toast(e.message || "Failed to queue", "danger");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // What a schedule saves — exactly what "Start now" would have sent.
+  function buildSpec(): ScheduleSpec | null {
+    if (!campaignId) {
+      toast("Choose a campaign first.", "danger");
+      return null;
+    }
+    if (!parsed.rows.length) {
+      toast("Add numbers first.", "danger");
+      return null;
+    }
+    return {
+      campaignId,
+      recipients: parsed.rows,
+      concurrency,
+      delayMs: batchDelay,
+    };
+  }
+
+  async function scheduleIt() {
+    const spec = buildSpec();
+    if (!spec || scheduling) return;
+    setScheduling(true);
+    try {
+      await saveSchedule("call", schedDraft, spec);
+      toast("Scheduled.", "ok");
+      setSchedDraft(newScheduleDraft());
+      setSchedReload((n) => n + 1);
+    } catch (e: any) {
+      toast(e?.message || "Could not save the schedule", "danger");
+    } finally {
+      setScheduling(false);
     }
   }
 
@@ -320,6 +369,10 @@ export default function BulkTab() {
   const acctCps = acct?.cps ?? 0;
   const estSec = acctCps > 0 ? Math.ceil(previewCount / acctCps) : 0;
   const estMin = Math.max(1, Math.ceil(estSec / 60));
+  const pl = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+  const money = (n: number) => `${wallet?.currency === "INR" ? "₹" : ""}${n.toFixed(2)}`;
+  const chosenName = campaignId ? campaignName(campaignId) : "";
+  const fmtDelay = (v: number) => (v === 0 ? "No delay" : v >= 1000 ? `${v / 1000}s` : `${v}ms`);
 
   if (loadingCampaigns && !cdata) {
     return (
@@ -345,360 +398,395 @@ export default function BulkTab() {
     );
   }
 
+  const factsLeftOut: [string, string][] =
+    stats.duplicates + stats.noPhone > 0
+      ? [[
+          "Left out",
+          [
+            stats.duplicates > 0 ? pl(stats.duplicates, "duplicate", "duplicates") : "",
+            stats.noPhone > 0 ? `${stats.noPhone.toLocaleString()} without a phone` : "",
+          ].filter(Boolean).join(" · "),
+        ]]
+      : [];
+  const factsPace: [string, string] = [
+    "Pace",
+    `${concurrency} live calls${batchDelay ? ` · ${fmtDelay(batchDelay)} between batches` : ""}${previewCount && acctCps > 0 ? ` · about ${estMin} min` : ""}`,
+  ];
+
+  const jobCard = job && counts && (
+    <JobCard
+      job={job}
+      counts={counts}
+      title={campaignName(job.campaignId)}
+      running={running}
+      stale={stale}
+      updatedAt={updatedAt}
+      cpm={cpm}
+      acct={acct}
+      log={log}
+      failed={failed}
+      skipped={skipped}
+      onPause={pause}
+      onResume={() => resume(job.id)}
+      onRetry={() => retry(job.id)}
+    />
+  );
+
   return (
     <Section>
-      {lowBalance && (
-        <div className="flex items-center gap-2.5 rounded-xl border border-warn/30 bg-warn/10 px-3 py-2.5 text-sm">
-          <AlertCircle size={16} className="text-warn shrink-0" />
-          <span className="text-ink2">
-            Low wallet balance —{" "}
-            <span className="font-medium text-ink">
-              {wallet!.currency === "INR" ? "₹" : ""}{wallet!.balance.toFixed(2)}
-            </span>
-            . Calls cost {wallet!.currency === "INR" ? "₹" : ""}{wallet!.rate.toFixed(2)} per connected call, so dialing is blocked until you top up in the <span className="font-medium text-ink">Billing</span> tab.
-          </span>
-        </div>
-      )}
-      {/* The running job goes FIRST.
-          Before this, the page rendered banner -> start form -> scheduled
-          campaigns -> progress -> recent, so the progress bar for the batch
-          you had just launched sat below two other sections and you had to
-          scroll down to watch the thing you just started. */}
-      {job && counts && (
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <span>Campaign progress</span>
-              <StatusPill status={job.status} remaining={counts.pending + counts.dialing} />
-            </div>
-          }
-          description={
-            <span className="flex items-center gap-2 text-xs">
-              {job.kind === "whatsapp" ? "WhatsApp send" : campaignName(job.campaignId)} · started {fmtWhen(job.createdAt)}
-              <ConnDot stale={stale} updatedAt={updatedAt} />
-            </span>
-          }
-          action={
-            <div className="flex gap-2">
-              {running
-                ? <Button variant="danger" leftIcon={<Square size={12} />} onClick={pause}>Stop</Button>
-                : counts.pending + counts.dialing > 0
-                  ? <Button leftIcon={<Play size={12} />} onClick={() => resume(job.id)}>Resume</Button>
-                  : null}
-            </div>
-          }
-        >
-          <LiveDashboard counts={counts} cpm={cpm} running={running} />
+      {/* While a batch is dialing its progress goes first, so you never scroll
+          past the form to watch the thing you just started. Otherwise it sits
+          under the form, as in the design. */}
+      {running && jobCard}
 
-          <RatePanel
-            acct={acct}
-            campaignCps={running ? cpm / 60 : 0}
-            campaignLive={counts.dialing + counts.ok}
-            cap={job.concurrency}
-            campaignSec={
-              job.startedAt
-                ? Math.max(0, Math.floor(
-                    ((job.completedAt ? Date.parse(job.completedAt) : Date.now()) - Date.parse(job.startedAt)) / 1000,
-                  ))
-                : 0
-            }
-            running={running}
-          />
-
-          {/* Granular breakdown — complements the live rollup above (Connected /
-              Failed / No Answer) without repeating those labels. "Connected" and
-              "No answer" are intentionally omitted here so each label shows once. */}
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Stat label="Press 1" value={counts.press1} tone="ok" />
-            <Stat label="Busy" value={counts.busy} tone="warn" />
-            <Stat label="Rejected" value={counts.rejected} tone="danger" />
-            <Stat label="Error" value={counts.error + counts.failed} tone="danger" />
-            <Stat label="Pending" value={counts.pending} tone="muted" />
-            {counts.skipped > 0 && <Stat label="Skipped (DND)" value={counts.skipped} tone="muted" />}
-            <Stat label="Total" value={counts.total} tone="muted" />
-          </div>
-
-          {running && log.length > 0 && (
-            <div className="mt-4">
-              <Label>Live dispatch</Label>
-              <div className="mt-1.5 max-h-56 overflow-auto rounded-lg border border-line bg-bg/50 divide-y divide-line/60">
-                {log.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs font-mono">
-                    <span className="truncate">
-                      <span className="text-muted">[{r.idx}]</span> {r.phone}
-                      {r.name && <span className="text-muted ml-1">— {r.name}</span>}
-                    </span>
-                    <RowStatus row={r} />
-                  </div>
-                ))}
+      <StepsLayout
+        steps={
+          <>
+            <Step n={1} done={!!campaignId} title="Campaign" description="Decides the audio, the WhatsApp rule and the caller ID.">
+              <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
+              {/* FEATURE 5 — test one number with this campaign before launching. */}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="whitespace-nowrap text-[13px] text-muted">Test before launch</span>
+                <div className="w-44">
+                  <Input
+                    value={testPhone}
+                    onChange={(e) => setTestPhone(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") testCall(); }}
+                    placeholder="98765 43210"
+                    inputMode="tel"
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={testCall}
+                  disabled={!campaignId || !testPhone.trim() || testing}
+                  loading={testing}
+                  leftIcon={<Phone size={13} />}
+                >
+                  Test call
+                </Button>
               </div>
-            </div>
-          )}
+            </Step>
 
-          {counts.retryable > 0 && job.status !== "running" && (
-            <div className="mt-4 flex items-center justify-between gap-3 bg-warn/5 border border-warn/20 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <AlertCircle size={16} className="text-warn shrink-0" />
-                <div className="text-sm">
-                  <span className="text-ink">{counts.retryable.toLocaleString()} numbers didn&apos;t connect.</span>
-                  <span className="text-muted ml-1">Retry no-answer / busy / errors in a new campaign.</span>
+            <Step
+              n={2}
+              done={previewCount > 0}
+              title="Contacts"
+              description={
+                <>A CSV with a <span className="font-mono text-ink2">phone</span> column. <span className="font-mono text-ink2">name</span> and{" "}
+                <span className="font-mono text-ink2">email</span> are optional.</>
+              }
+            >
+              <FileChip
+                title={previewCount > 0 ? "Your list" : "No list yet"}
+                sub={
+                  previewCount > 0
+                    ? `${pl(stats.totalRows, "row", "rows")} · checked just now`
+                    : "Choose a CSV file, or paste the numbers below."
+                }
+                action={
+                  <>
+                    <CsvFilePicker onLoad={setCsv} />
+                    {previewCount > 0 && (
+                      <Button size="sm" variant="subtle" leftIcon={<X size={13} />} onClick={() => setCsv(EMPTY_CSV)}>
+                        Clear
+                      </Button>
+                    )}
+                  </>
+                }
+              />
+              {previewCount > 0 && (
+                <Chips>
+                  <Badge tone="ok">{pl(previewCount, "ready", "ready")}</Badge>
+                  {stats.duplicates > 0 && <Badge tone="muted">{pl(stats.duplicates, "duplicate removed", "duplicates removed")}</Badge>}
+                  {stats.noPhone > 0 && <Badge tone="warn">{pl(stats.noPhone, "row without a phone · skipped", "rows without a phone · skipped")}</Badge>}
+                  {previewCount > WARN_THRESHOLD && previewCount <= MAX_CONTACTS && <Badge tone="warn">Large list</Badge>}
+                  {previewCount > MAX_CONTACTS && <Badge tone="danger">Over the {MAX_CONTACTS.toLocaleString()} limit</Badge>}
+                </Chips>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowPaste((v) => !v)}
+                className="mt-3 text-[13px] font-medium text-accent hover:underline"
+              >
+                {showPaste ? "Hide the list" : "Paste or edit the numbers"}
+              </button>
+              {showPaste && (
+                <div className="mt-2">
+                  <Textarea
+                    rows={6}
+                    value={csv}
+                    onChange={(e) => setCsv(e.target.value)}
+                    placeholder={"phone,name,email\n9876543210,Test,test@example.com\n9123456789,Test,"}
+                  />
+                </div>
+              )}
+            </Step>
+
+            <Step
+              n={3}
+              title="Pace"
+              description={
+                acctCps > 0
+                  ? <>How fast it dials. Your account allows up to <span className="tabular-nums">{acctCps}</span> new calls a second.</>
+                  : "How fast it dials."
+              }
+            >
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <div>
+                  <Label>Max live calls</Label>
+                  <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
+                    {[25, 50, 75, 100, 125, 150, 175, 200].map((v) => <option key={v} value={v}>{v}</option>)}
+                  </Select>
+                  <div className="mt-1 text-xs text-muted">Calls ringing at the same time.</div>
+                </div>
+                <div>
+                  <Label>Gap between batches</Label>
+                  <Select value={batchDelay} onChange={(e) => setBatchDelay(Number(e.target.value))}>
+                    {[0, 250, 500, 1000, 2000, 5000].map((v) => (
+                      <option key={v} value={v}>{fmtDelay(v)}</option>
+                    ))}
+                  </Select>
                 </div>
               </div>
-              <Button leftIcon={<RotateCw size={12} />} onClick={() => retry(job.id)}>Retry failed</Button>
-            </div>
-          )}
+            </Step>
 
-          {failed.length > 0 && (
-            <details className="mt-3">
-              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
-                See failed numbers ({failed.length}{failed.length >= 100 ? "+" : ""})
-              </summary>
-              <div className="mt-2 max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
-                {failed.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
-                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
-                    {/* Show the recorded error, not just the status. "failed"
-                        alone tells you nothing; "Plivo 400" tells you the
-                        caller ID is wrong. */}
-                    <span className="text-muted">
-                      {r.error || r.status}
-                      {r.hangupCause ? ` · ${r.hangupCause}` : ""}
-                    </span>
+            <Step n={4} title="When" description="Start now, or let it start by itself later.">
+              <Seg<"now" | "schedule">
+                value={when}
+                onChange={setWhen}
+                options={[
+                  { value: "now", label: "Start now" },
+                  { value: "schedule", label: "Schedule" },
+                ]}
+              />
+              {when === "schedule" && (
+                <div className="mt-3.5">
+                  <ScheduleFields kind="call" draft={schedDraft} onChange={setSchedDraft} />
+                  <div className="mt-2 text-xs text-muted">
+                    The list is saved with the schedule and used every time it runs. Times are IST.
                   </div>
-                ))}
-              </div>
-            </details>
-          )}
-
-          {skipped.length > 0 && (
-            <details className="mt-3">
-              <summary className="text-xs text-muted cursor-pointer hover:text-ink">
-                See skipped (DND) numbers ({skipped.length}{skipped.length >= 100 ? "+" : ""})
-              </summary>
-              <div className="mt-1.5 mb-2 text-[11px] text-muted">
-                These numbers are on the Do-Not-Disturb list, so they were never called.
-              </div>
-              <div className="max-h-64 overflow-auto text-xs font-mono space-y-0.5 bg-bg/50 rounded-md p-2">
-                {skipped.map((r, i) => (
-                  <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
-                    <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="text-muted ml-1">— {r.name}</span>}</span>
-                    <span className="text-muted">skipped · DND</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-        </Card>
-      )}
-
-      <Card title="Start a campaign" description="Submitted to the backend — it dials on the server, not your browser.">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div className="col-span-2 md:col-span-2">
-            <Label>Campaign</Label>
-            <CampaignSelect campaigns={campaigns} value={campaignId} onChange={setCampaignId} emptyLabel="Choose a campaign…" />
-          </div>
-          <div>
-            <Label hint="max calls live at once">Max live calls</Label>
-            <Select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))}>
-              {[25, 50, 75, 100, 125, 150, 175, 200].map((v) => <option key={v} value={v}>{v}</option>)}
-            </Select>
-          </div>
-          <div>
-            <Label hint="delay between batches">Batch delay</Label>
-            <Select value={batchDelay} onChange={(e) => setBatchDelay(Number(e.target.value))}>
-              {[0, 250, 500, 1000, 2000, 5000].map((v) => (
-                <option key={v} value={v}>{v === 0 ? "No delay" : v >= 1000 ? `${v / 1000}s` : `${v}ms`}</option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex items-end">
-            <Button onClick={onStart} disabled={!campaignId || !previewCount || submitting} loading={submitting}
-              leftIcon={<Play size={14} />} className="w-full" size="lg">
-              {submitting ? "Queuing…" : previewCount ? `Start · ${previewCount.toLocaleString()} numbers` : "Start"}
-            </Button>
-          </div>
-        </div>
-        <p className="text-xs text-muted mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
-          {/* Unknown limits used to print as "—/s"; say nothing until we know. */}
-          {acctCps > 0 && (
-            <>
-              <span className="inline-flex items-center gap-1">
-                <Server size={12} className="text-muted" />
-                Up to <span className="text-ink2 font-medium tabular-nums">{acctCps}</span> new calls a second across your account
-              </span>
-              <span className="text-line">·</span>
-            </>
-          )}
-          <span>At most <span className="text-ink2 font-medium tabular-nums">{concurrency}</span> calls live at once</span>
-          {previewCount > 0 && acctCps > 0 && (
-            <>
-              <span className="text-line">·</span>
-              <span>~<span className="text-ink2 font-medium tabular-nums">{estMin}</span> min for {previewCount.toLocaleString()} numbers</span>
-            </>
-          )}
-        </p>
-
-        {/* FEATURE 5 — test one number with this campaign before launching. */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted whitespace-nowrap">Test before launch:</span>
-          <div className="w-44">
-            <Input
-              value={testPhone}
-              onChange={(e) => setTestPhone(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") testCall(); }}
-              placeholder="9876543210"
-            />
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={testCall}
-            disabled={!campaignId || !testPhone.trim() || testing}
-            loading={testing}
-            leftIcon={<Phone size={13} />}
-          >
-            Test call
-          </Button>
-        </div>
-
-        <div className="mt-5">
-          <div className="flex items-center justify-between mb-1.5">
-            <Label>Numbers · CSV with headers phone, name, email</Label>
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <span className="tabular-nums">{previewCount.toLocaleString()} recipients</span>
-              <CsvFilePicker onLoad={setCsv} />
-              <button onClick={() => setCsv("phone,name,email\n")}
-                className="px-2 py-1 rounded-md bg-elev/60 hover:bg-elev text-ink2 hover:text-ink border border-line transition-colors">
-                Clear
-              </button>
+                </div>
+              )}
+            </Step>
+          </>
+        }
+        summary={
+          <SummaryCard>
+            <SumRow label="Rows in file" value={stats.totalRows.toLocaleString()} />
+            {stats.duplicates > 0 && <SumRow label="Duplicates" value={`− ${stats.duplicates.toLocaleString()}`} tone="muted" />}
+            {stats.noPhone > 0 && <SumRow label="No phone number" value={`− ${stats.noPhone.toLocaleString()}`} tone="warn" />}
+            {previewCount > 0 && acctCps > 0 && <SumRow label="Takes about" value={`${estMin.toLocaleString()} min`} />}
+            <SumTotal label="Will be called" value={previewCount.toLocaleString()} />
+            {lowBalance && (
+              <Callout tone="warn" className="mt-2.5">
+                Low wallet balance — <b className="font-semibold text-ink">{money(wallet!.balance)}</b>. Calls cost{" "}
+                {money(wallet!.rate)} per connected call, so dialing is blocked until you top up in Billing.
+              </Callout>
+            )}
+            {when === "now" ? (
+              <Button
+                size="lg"
+                className="mt-3.5 w-full"
+                onClick={onStart}
+                disabled={!campaignId || !previewCount || submitting}
+                loading={submitting}
+                leftIcon={<Phone size={15} />}
+              >
+                {submitting ? "Queuing…" : "Review & start"}
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                className="mt-3.5 w-full"
+                onClick={scheduleIt}
+                disabled={!campaignId || !previewCount || scheduling}
+                loading={scheduling}
+                leftIcon={<CalendarClock size={15} />}
+              >
+                Schedule it
+              </Button>
+            )}
+            <div className="mt-1.5 text-center text-xs text-muted">
+              {when === "now"
+                ? "You’ll confirm before any call is placed. Numbers on your DND list are skipped."
+                : "Runs on the server at the time you pick — nothing needs to be open."}
             </div>
-          </div>
-          <Textarea rows={6} value={csv} onChange={(e) => setCsv(e.target.value)}
-            placeholder={"phone,name,email\n9876543210,Animesh,animesh@example.com\n9123456789,Test,"} />
-          {previewCount > 0 && (
-            <div className="mt-2 flex items-start gap-2 text-xs bg-ok/5 border border-ok/20 rounded-lg px-3 py-2">
-              <CheckCircle2 size={14} className="text-ok shrink-0 mt-0.5" />
-              <span className="text-ink2">
-                <span className="text-ok font-semibold">✓ {previewCount.toLocaleString()} contacts loaded</span>
-                {parsed.stats.duplicates > 0 && (
-                  <> · {parsed.stats.duplicates.toLocaleString()} duplicate{parsed.stats.duplicates === 1 ? "" : "s"} removed</>
-                )}
-                {parsed.stats.noPhone > 0 && (
-                  <> · <span className="text-warn">{parsed.stats.noPhone.toLocaleString()} row{parsed.stats.noPhone === 1 ? "" : "s"} skipped — no phone</span></>
-                )}
-              </span>
-            </div>
-          )}
-        </div>
-      </Card>
+          </SummaryCard>
+        }
+      />
+
+      {!running && jobCard}
 
       <ScheduleCard
         kind="call"
         recipientCount={previewCount}
         title="Scheduled campaigns"
-        description="Dials by itself at the time you pick — once, or on a repeat"
-        buildSpec={() => {
-          if (!campaignId) {
-            toast("Choose a campaign first.", "danger");
-            return null;
-          }
-          if (!parsed.rows.length) {
-            toast("Add numbers first.", "danger");
-            return null;
-          }
-          return {
-            campaignId,
-            recipients: parsed.rows,
-            concurrency,
-            delayMs: batchDelay,
-          };
-        }}
+        description="Dials by itself at the time you pick — once, or on a repeat."
+        hideNew
+        reloadKey={schedReload}
+        emptyHint="Choose Schedule under When to add one."
+        buildSpec={buildSpec}
       />
 
-
       {!!jobs.length && (
-        <Card title="Recent campaigns">
-          <div className="space-y-1">
-            {jobs.slice(0, 8).map((j) => {
-              const s = summarize(j);
-              const isActive = activeJobId === j.id;
-              return (
-                <button key={j.id} onClick={() => { setActiveJobId(j.id); setJob(j); sampleRef.current = null; }}
-                  className={`w-full text-left rounded-lg px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
-                    isActive ? "bg-accent/10 border border-accent/25" : "hover:bg-elev/60 border border-transparent"
-                  }`}>
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Users size={14} className="text-muted shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-ink truncate" title={j.id}>
-                        {j.kind === "whatsapp" ? "WhatsApp send" : campaignName(j.campaignId)}
+        <DataPanel title="Recent jobs" meta="Click a row to follow it.">
+          <DataTable>
+            <thead>
+              <tr>
+                <th className={TH}>Campaign</th>
+                <th className={TH}>Status</th>
+                <th className={`${TH} w-[24%]`}>Progress</th>
+                <th className={`${TH} text-right`}>Answered</th>
+                <th className={`${TH} hidden text-right sm:table-cell`}>Pressed 1</th>
+                <th className={`${TH} hidden md:table-cell`}>Started</th>
+                <th className={`${TH} w-[150px]`} />
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.slice(0, 8).map((j) => {
+                const s = summarize(j);
+                const isActive = activeJobId === j.id;
+                return (
+                  <tr
+                    key={j.id}
+                    onClick={() => { setActiveJobId(j.id); setJob(j); sampleRef.current = null; }}
+                    className={`cursor-pointer transition-colors ${isActive ? "bg-accent/[0.06]" : "hover:bg-ink/[0.03]"}`}
+                  >
+                    <td className={TD}>
+                      <div className="flex items-center gap-2.5">
+                        <div className="grid h-8 w-8 flex-none place-items-center rounded-[8px] bg-accent/10 text-accent">
+                          <Users size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="max-w-[220px] truncate font-medium text-ink" title={j.id}>
+                            {j.kind === "whatsapp" ? "WhatsApp send" : campaignName(j.campaignId)}
+                          </div>
+                          <div className="whitespace-nowrap text-xs text-muted">{pl(s.total, "contact", "contacts")}</div>
+                        </div>
                       </div>
-                      <div className="text-xs text-muted">{fmtWhen(j.createdAt)}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <StatusPill status={j.status} remaining={s.pending + s.dialing} small />
-                    <span className="text-ok tabular-nums">{s.connectedLifted.toLocaleString()} answered</span>
-                    {s.bad > 0 && <span className="text-muted tabular-nums">· {s.bad.toLocaleString()} not answered</span>}
-                    <span className="text-muted tabular-nums">· {s.total.toLocaleString()} total</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </Card>
+                    </td>
+                    <td className={TD}><StatusPill status={j.status} remaining={s.pending + s.dialing} /></td>
+                    <td className={TD}>
+                      <Prog
+                        total={s.total}
+                        title={`${s.donePct}% done`}
+                        parts={[
+                          { value: s.connectedLifted, cls: "bg-ok" },
+                          { value: s.ok + s.bad, cls: "bg-muted/50" },
+                          { value: s.skipped, cls: "bg-warn/60" },
+                        ]}
+                      />
+                    </td>
+                    <td className={`${TD} text-right tabular-nums`}>{s.connectedLifted.toLocaleString()}</td>
+                    <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{s.press1.toLocaleString()}</td>
+                    <td className={`${TD} hidden whitespace-nowrap text-muted md:table-cell`}>{fmtWhen(j.createdAt)}</td>
+                    <td className={TD}>
+                      <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          variant="subtle"
+                          leftIcon={<Download size={13} />}
+                          onClick={() => window.open(`/api/bulk/${j.id}/csv`, "_blank")}
+                        >
+                          CSV
+                        </Button>
+                        {s.retryable > 0 && j.status !== "running" && (
+                          <Button size="sm" variant="ghost" leftIcon={<RotateCw size={12} />} onClick={() => retry(j.id)}>
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </DataTable>
+        </DataPanel>
       )}
+
+      {/* Plain start check — like every other send in the console. */}
+      <ConfirmSendModal
+        open={confirm === "start"}
+        icon={<Phone size={20} />}
+        title={`Start calling ${pl(previewCount, "person", "people")}?`}
+        body="Calls start right away and run on the server. You can stop at any time. The list is cleared once it’s queued."
+        facts={[
+          ["Campaign", chosenName],
+          ["Will be called", previewCount.toLocaleString()],
+          ...factsLeftOut,
+          ["Do Not Disturb", "Numbers on the list are skipped"],
+          factsPace,
+        ]}
+        extra={lowBalance ? (
+          <Callout tone="warn" className="mt-3">
+            Your wallet ({money(wallet!.balance)}) is below the cost of one connected call, so dialing will not start until you top up.
+          </Callout>
+        ) : null}
+        onClose={() => setConfirm(null)}
+        actions={
+          <ModalActions>
+            <Button variant="ghost" size="lg" onClick={() => setConfirm(null)}>Cancel</Button>
+            <Button size="lg" onClick={start} loading={submitting}>Start {pl(previewCount, "call", "calls")}</Button>
+          </ModalActions>
+        }
+      />
 
       {/* FEATURE 4 — large-upload warning */}
-      {confirm === "warn" && (
-        <Modal
-          open
-          onClose={() => setConfirm(null)}
-          title="⚠️ Large contact list detected"
-          maxWidth="max-w-md"
-          footer={
-            <>
-              <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
-              <Button variant="ghost" onClick={startSplit}>Split &amp; upload</Button>
-              <Button onClick={start}>Upload anyway</Button>
-            </>
-          }
-        >
-          <div className="text-sm text-ink2 space-y-2">
+      <ConfirmSendModal
+        open={confirm === "warn"}
+        tone="warn"
+        icon={<AlertTriangle size={20} />}
+        title={`Large list — ${pl(previewCount, "contact", "contacts")}`}
+        body={
+          <>
             <p>
-              You&apos;ve uploaded <span className="font-semibold text-ink">{previewCount.toLocaleString()}</span> contacts.
-              At the account CPS limit{acctCps ? ` of ${acctCps}/s` : ""}, this will take approximately{" "}
+              At the account limit{acctCps ? ` of ${acctCps} calls a second` : ""}, this will take about{" "}
               <span className="font-semibold text-ink">{estMin} min</span>.
             </p>
-            <p className="text-muted">
-              Tip: split into batches of {SPLIT_SIZE.toLocaleString()} for better reliability.
-              “Split &amp; upload” queues {Math.ceil(previewCount / SPLIT_SIZE)} campaigns automatically.
+            <p className="mt-2">
+              Tip: split into batches of {SPLIT_SIZE.toLocaleString()} for better reliability. “Split &amp; upload” queues{" "}
+              {Math.ceil(previewCount / SPLIT_SIZE)} campaigns automatically.
             </p>
-          </div>
-        </Modal>
-      )}
+          </>
+        }
+        facts={[["Campaign", chosenName], ...factsLeftOut, ["Do Not Disturb", "Numbers on the list are skipped"], factsPace]}
+        onClose={() => setConfirm(null)}
+        actions={
+          <ModalActions>
+            <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
+            <Button variant="ghost" onClick={startSplit}>Split &amp; upload</Button>
+            <Button onClick={start}>Upload anyway</Button>
+          </ModalActions>
+        }
+      />
 
       {/* FEATURE 4 — hard limit */}
-      {confirm === "blocked" && (
-        <Modal
-          open
-          onClose={() => setConfirm(null)}
-          title="❌ Upload limit exceeded"
-          maxWidth="max-w-md"
-          footer={<Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>}
-        >
-          <div className="text-sm text-ink2 space-y-2">
+      <ConfirmSendModal
+        open={confirm === "blocked"}
+        tone="danger"
+        icon={<XCircle size={20} />}
+        title="Upload limit exceeded"
+        body={
+          <>
             <p>
-              Maximum supported contacts per campaign:{" "}
-              <span className="font-semibold text-ink">{MAX_CONTACTS.toLocaleString()}</span>.
+              Maximum supported contacts per campaign: <span className="font-semibold text-ink">{MAX_CONTACTS.toLocaleString()}</span>.
             </p>
-            <p>
-              Your file has <span className="font-semibold text-danger">{previewCount.toLocaleString()}</span> rows.
-              Please split the file into smaller lists and upload them separately.
+            <p className="mt-2">
+              Your file has <span className="font-semibold text-danger">{previewCount.toLocaleString()}</span> rows. Please
+              split the file into smaller lists and upload them separately.
             </p>
-          </div>
-        </Modal>
-      )}
+          </>
+        }
+        onClose={() => setConfirm(null)}
+        actions={
+          <ModalActions>
+            <Button variant="ghost" size="lg" onClick={() => setConfirm(null)}>Cancel</Button>
+          </ModalActions>
+        }
+      />
 
       {/* FEATURE 6 — post-campaign summary */}
       {summary && (
@@ -717,14 +805,206 @@ export default function BulkTab() {
   );
 }
 
+/** The live (or last-followed) job: progress bar, stat tiles, speed, limits, lists. */
+function JobCard({
+  job, counts, title, running, stale, updatedAt, cpm, acct, log, failed, skipped, onPause, onResume, onRetry,
+}: {
+  job: BulkJobWithCounts;
+  counts: Counts;
+  title: string;
+  running: boolean;
+  stale: boolean;
+  updatedAt: number | null;
+  cpm: number;
+  acct: AcctStats | null;
+  log: BulkRow[];
+  failed: BulkRow[];
+  skipped: BulkRow[];
+  onPause: () => void;
+  onResume: () => void;
+  onRetry: () => void;
+}) {
+  const remaining = counts.pending + counts.dialing;
+  const heading = running ? "Running now" : job.status === "completed" ? "Finished" : remaining > 0 ? "Paused" : "Stopped";
+  const failedAll = counts.rejected + counts.error + counts.failed;
+  const total = counts.total;
+  const etaSec = running && cpm > 0 && counts.pending > 0 ? Math.round((counts.pending / cpm) * 60) : 0;
+
+  return (
+    <Card noPadding>
+      <div className="flex flex-wrap items-start gap-3 p-5 pb-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-[15px] font-semibold tracking-[-0.015em]">
+            <span className="min-w-0 truncate">{heading} · {job.kind === "whatsapp" ? "WhatsApp send" : title}</span>
+            <StatusPill status={job.status} remaining={remaining} />
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-muted">
+            <span>Started {fmtWhen(job.createdAt)}</span>
+            <span>·</span>
+            <span className="tabular-nums">{counts.donePct}% done</span>
+            <ConnDot stale={stale} updatedAt={updatedAt} />
+          </div>
+        </div>
+        {running ? (
+          <Button size="sm" variant="danger" leftIcon={<Square size={12} />} onClick={onPause}>Stop</Button>
+        ) : remaining > 0 ? (
+          <Button size="sm" leftIcon={<Play size={12} />} onClick={onResume}>Resume</Button>
+        ) : null}
+      </div>
+
+      <div className="px-5 pb-5">
+        <Prog
+          height="h-2.5"
+          total={total}
+          title="Answered · no answer · busy · failed · skipped (DND) · ringing"
+          parts={[
+            { value: counts.connectedLifted, cls: "bg-ok" },
+            { value: counts.ok, cls: "bg-ok/40" },
+            { value: counts.noAnswer, cls: "bg-muted/50" },
+            { value: counts.busy, cls: "bg-warn/70" },
+            { value: failedAll, cls: "bg-danger" },
+            { value: counts.skipped, cls: "bg-warn/40" },
+            { value: counts.dialing, cls: "bg-accent" },
+          ]}
+        />
+
+        <div className="mt-3.5">
+          <StatTiles>
+            <StatTile label="Total" value={total} />
+            <StatTile label="Dialed" value={counts.dialed} tone="accent" />
+            <StatTile label="Answered" value={counts.connectedLifted} tone="ok" />
+            <StatTile label="Pressed 1" value={counts.press1} tone="ok" />
+            <StatTile label="No answer" value={counts.noAnswer} />
+            <StatTile label="Busy" value={counts.busy} tone="warn" />
+            <StatTile label="Failed" value={failedAll} tone="danger" />
+            <StatTile label="Skipped · DND" value={counts.skipped} tone="warn" />
+          </StatTiles>
+        </div>
+
+        <div className="mt-3.5 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-[13px]">
+          <span className="flex items-center gap-1.5">
+            <Zap size={13} className="text-ok" />
+            <span className="text-muted">Speed</span>
+            <span className="font-semibold tabular-nums text-ink">{(running ? cpm : 0).toLocaleString()} calls/min</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock size={13} className="text-muted" />
+            <span className="text-muted">Time left</span>
+            <span className="tabular-nums text-ink">
+              {etaSec > 0 ? fmtEta(etaSec) : counts.pending > 0 ? "—" : "Done"}
+            </span>
+          </span>
+          {counts.pending > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="text-muted">Waiting</span>
+              <span className="tabular-nums text-ink">{counts.pending.toLocaleString()}</span>
+            </span>
+          )}
+          {counts.ok > 0 && (
+            <span className="flex items-center gap-1.5" title="Placed, but no final status came back">
+              <span className="text-muted">No final status</span>
+              <span className="tabular-nums text-ink">{counts.ok.toLocaleString()}</span>
+            </span>
+          )}
+        </div>
+
+        <RatePanel
+          acct={acct}
+          campaignCps={running ? cpm / 60 : 0}
+          campaignLive={counts.dialing + counts.ok}
+          cap={job.concurrency}
+          campaignSec={
+            job.startedAt
+              ? Math.max(0, Math.floor(
+                  ((job.completedAt ? Date.parse(job.completedAt) : Date.now()) - Date.parse(job.startedAt)) / 1000,
+                ))
+              : 0
+          }
+          running={running}
+        />
+
+        {running && log.length > 0 && (
+          <div className="mt-4">
+            <Label>Live dispatch</Label>
+            <div className="max-h-56 divide-y divide-line overflow-auto rounded-[10px] border border-line bg-elev">
+              {log.map((r, i) => (
+                <div key={`${r.idx}-${i}`} className="flex items-center justify-between gap-3 px-3 py-1.5 font-mono text-xs">
+                  <span className="truncate">
+                    <span className="text-muted">[{r.idx}]</span> {r.phone}
+                    {r.name && <span className="ml-1 text-muted">— {r.name}</span>}
+                  </span>
+                  <RowStatus row={r} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {counts.retryable > 0 && job.status !== "running" && (
+          <Callout tone="warn" className="mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                <span className="text-ink">{counts.retryable.toLocaleString()} numbers didn&apos;t connect.</span>{" "}
+                <span className="text-muted">Retry no-answer, busy and errors in a new campaign.</span>
+              </span>
+              <Button size="sm" variant="ghost" leftIcon={<RotateCw size={12} />} onClick={onRetry}>Retry failed</Button>
+            </div>
+          </Callout>
+        )}
+
+        {failed.length > 0 && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-[13px] text-muted hover:text-ink">
+              See failed numbers ({failed.length}{failed.length >= 100 ? "+" : ""})
+            </summary>
+            <div className="mt-2 max-h-64 space-y-0.5 overflow-auto rounded-[9px] border border-line bg-elev p-2 font-mono text-xs">
+              {failed.map((r, i) => (
+                <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
+                  <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="ml-1 text-muted">— {r.name}</span>}</span>
+                  {/* Show the recorded error, not just the status. "failed"
+                      alone tells you nothing; "Plivo 400" tells you the
+                      caller ID is wrong. */}
+                  <span className="text-muted">
+                    {r.error || r.status}
+                    {r.hangupCause ? ` · ${r.hangupCause}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        {skipped.length > 0 && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-[13px] text-muted hover:text-ink">
+              See skipped (DND) numbers ({skipped.length}{skipped.length >= 100 ? "+" : ""})
+            </summary>
+            <div className="mb-2 mt-1.5 text-xs text-muted">
+              These numbers are on the Do Not Disturb list, so they were never called.
+            </div>
+            <div className="max-h-64 space-y-0.5 overflow-auto rounded-[9px] border border-line bg-elev p-2 font-mono text-xs">
+              {skipped.map((r, i) => (
+                <div key={`${r.idx}-${i}`} className="flex justify-between gap-3 py-0.5">
+                  <span><span className="text-muted">[{r.idx}]</span> {r.phone}{r.name && <span className="ml-1 text-muted">— {r.name}</span>}</span>
+                  <span className="text-muted">skipped · DND</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 // `remaining` = rows still recoverable by a Resume (pending + dialing). A paused
 // job with wedged 'dialing' rows has remaining > 0 even though pending is 0, so
 // it reads "paused" (Resume-able), not "stopped" (truly nothing left to dial).
-function StatusPill({ status, remaining, small }: { status: string; remaining: number; small?: boolean }) {
-  const map: Record<string, { tone: "ok" | "warn" | "muted"; label: string; dot?: boolean }> = {
-    running: { tone: "warn", label: "running", dot: true },
-    paused: { tone: "muted", label: remaining > 0 ? "paused" : "stopped" },
-    completed: { tone: "ok", label: "complete" },
+function StatusPill({ status, remaining }: { status: string; remaining: number }) {
+  const map: Record<string, { tone: "ok" | "warn" | "muted" | "accent" | "danger"; label: string; dot?: boolean }> = {
+    running: { tone: "accent", label: "Running", dot: true },
+    paused: remaining > 0 ? { tone: "warn", label: "Paused" } : { tone: "danger", label: "Stopped" },
+    completed: { tone: "ok", label: "Completed" },
   };
   const m = map[status] ?? { tone: "muted", label: status };
   return <Badge tone={m.tone} dot={m.dot}>{m.label}</Badge>;
@@ -740,16 +1020,6 @@ function ConnDot({ stale, updatedAt }: { stale: boolean; updatedAt: number | nul
   return <span className="inline-flex items-center gap-1 text-muted"><Wifi size={11} /> {ago === null ? "" : `updated ${ago}s ago`}</span>;
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: "ok" | "warn" | "danger" | "muted" }) {
-  const c = { ok: "text-ok", warn: "text-warn", danger: "text-danger", muted: "text-ink2" }[tone];
-  return (
-    <div className="bg-bg/60 border border-line rounded-lg px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className={`text-xl font-semibold tabular-nums ${c}`}>{value.toLocaleString()}</div>
-    </div>
-  );
-}
-
 function RowStatus({ row }: { row: BulkRow }) {
   const tone =
     row.status === "press1" || row.status === "connected" || row.status === "ok" ? "text-ok"
@@ -758,70 +1028,6 @@ function RowStatus({ row }: { row: BulkRow }) {
       : "text-danger";
   const label = row.status === "dnd" ? "skipped · DND" : row.status;
   return <span className={`${tone} whitespace-nowrap`}>{label}{row.hangupCause ? ` · ${row.hangupCause}` : ""}</span>;
-}
-
-// Real-time dialing dashboard (FEATURE 2). Percentages are of *dialed* (settled)
-// rows, so Connected + Failed + No Answer ≈ 100% as the campaign progresses.
-function LiveDashboard({ counts, cpm, running }: { counts: Counts; cpm: number; running: boolean }) {
-  const total = counts.total || 0;
-  const dialed = counts.dialed;
-  const dialedPct = total ? Math.round((dialed / total) * 100) : 0;
-  const connected = counts.connectedLifted;
-  const noAnswer = counts.noAnswer;
-  const failed = counts.busy + counts.rejected + counts.error + counts.failed;
-  const pctOf = (n: number) => (dialed > 0 ? Math.round((n / dialed) * 100) : 0);
-  const etaSec = running && cpm > 0 && counts.pending > 0 ? Math.round((counts.pending / cpm) * 60) : 0;
-
-  return (
-    <div className="rounded-xl border border-line bg-bg/50 p-4 space-y-3">
-      <div>
-        <div className="flex items-center justify-between text-sm mb-1.5">
-          <span className="flex items-center gap-1.5 text-ink2"><Phone size={13} /> Dialed</span>
-          <span className="font-mono tabular-nums text-ink">
-            {dialed.toLocaleString()} / {total.toLocaleString()} · {dialedPct}%
-          </span>
-        </div>
-        <div className="w-full h-2.5 bg-line rounded-full overflow-hidden flex" title="green: connected · amber: dialing">
-          <div className="h-full bg-ok transition-all duration-500" style={{ width: `${total ? (connected / total) * 100 : 0}%` }} />
-          <div className="h-full bg-danger transition-all duration-500" style={{ width: `${total ? (failed / total) * 100 : 0}%` }} />
-          <div className="h-full bg-warn/70 transition-all duration-500" style={{ width: `${total ? (noAnswer / total) * 100 : 0}%` }} />
-          <div className="h-full bg-warn transition-all duration-500" style={{ width: `${total ? (counts.dialing / total) * 100 : 0}%` }} />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <DashRow icon={<CheckCircle2 size={13} />} label="Connected" value={connected} pct={pctOf(connected)} tone="text-ok" />
-        <DashRow icon={<XCircle size={13} />} label="Failed" value={failed} pct={pctOf(failed)} tone="text-danger" />
-        <DashRow icon={<PhoneOff size={13} />} label="No Answer" value={noAnswer} pct={pctOf(noAnswer)} tone="text-warn" />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm pt-1 border-t border-line/60">
-        <span className="flex items-center gap-1.5">
-          <Zap size={13} className="text-ok" />
-          <span className="text-muted">Speed</span>
-          <span className="font-mono tabular-nums text-ok font-semibold">{(running ? cpm : 0).toLocaleString()} calls/min</span>
-        </span>
-        <span className="flex items-center gap-1.5">
-          <Clock size={13} className="text-muted" />
-          <span className="text-muted">Est. time</span>
-          <span className="font-mono tabular-nums text-ink">
-            {etaSec > 0 ? `${fmtEta(etaSec)} remaining` : counts.pending > 0 ? "—" : "complete"}
-          </span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function DashRow({ icon, label, value, pct, tone }: { icon: ReactNode; label: string; value: number; pct: number; tone: string }) {
-  return (
-    <div className="flex items-center justify-between bg-bg/40 border border-line rounded-lg px-3 py-2">
-      <span className={`flex items-center gap-1.5 text-xs ${tone}`}>{icon} {label}</span>
-      <span className="font-mono tabular-nums text-sm">
-        <span className="text-ink">{value.toLocaleString()}</span> <span className="text-muted text-xs">({pct}%)</span>
-      </span>
-    </div>
-  );
 }
 
 // Campaign- and account-level dialing meters: CPS (with progress vs the account
@@ -849,7 +1055,7 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
   return (
     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
       {/* This campaign */}
-      <div className="rounded-xl border border-line bg-bg/50 p-4">
+      <div className="rounded-[10px] border border-line2 bg-elev p-4">
         <div className="flex items-center justify-between mb-3">
           <span className="flex items-center gap-1.5 text-sm text-ink2">
             <Activity size={13} className="text-ok" /> This campaign
@@ -865,7 +1071,7 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
       </div>
 
       {/* Plivo account */}
-      <div className="rounded-xl border border-line bg-bg/50 p-4">
+      <div className="rounded-[10px] border border-line2 bg-elev p-4">
         <div className="flex items-center justify-between mb-3">
           <span className="flex items-center gap-1.5 text-sm text-ink2">
             <Server size={13} className="text-muted" /> Plivo account
@@ -877,7 +1083,7 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
         <Meter label="CPS limit" value={`${accCps || "—"}/s`} sub="all campaigns combined" pct={100} tone="bg-line" muted />
         <div className="h-2.5" />
         <Meter label="Live concurrency" value={shownAccLive.toLocaleString()} sub={maxLive ? `of ${maxLive} max` : ""} pct={accLivePct} tone="bg-warn" />
-        <div className="mt-1.5 text-[11px] text-muted flex items-center gap-2">
+        <div className="mt-1.5 text-xs text-muted flex items-center gap-2">
           {accountLive != null ? (
             <>
               <span className="inline-flex items-center gap-1">
@@ -891,7 +1097,7 @@ function RatePanel({ acct, campaignCps, campaignLive, cap, campaignSec, running 
               </span>
             </>
           ) : (
-            <span className="text-warn/80">Plivo live API unavailable — showing this app only</span>
+            <span className="text-warn">Plivo live API unavailable — showing this app only</span>
           )}
         </div>
       </div>
@@ -952,7 +1158,7 @@ function CampaignSummaryModal({ data, onClose, onNew }: { data: SummaryData; onC
     <Modal
       open
       onClose={onClose}
-      title={`✅ Campaign complete — ${data.job.id}`}
+      title="Campaign complete"
       maxWidth="max-w-lg"
       footer={
         <>
@@ -969,29 +1175,29 @@ function CampaignSummaryModal({ data, onClose, onNew }: { data: SummaryData; onC
       }
     >
       <div className="space-y-1.5">
-        <SumRow label="Total Contacts" value={total.toLocaleString()} />
-        <SumRow label="Successfully Dialed" value={`${dialed.toLocaleString()} ✅`} tone="text-ink" />
-        <SumRow label="Connected (Lifted)" value={`${connected.toLocaleString()}`} pct={`${pctOf(connected, dialed)}%`} tone="text-ok" />
-        <SumRow label="└─ Pressed 1" value={`${press1.toLocaleString()}`} pct={`${pct1(press1, total)}%`} sub />
+        <ModalRow label="Total contacts" value={total.toLocaleString()} />
+        <ModalRow label="Successfully dialed" value={dialed.toLocaleString()} tone="text-ink" />
+        <ModalRow label="Answered" value={`${connected.toLocaleString()}`} pct={`${pctOf(connected, dialed)}%`} tone="text-ok" />
+        <ModalRow label="Pressed 1" value={`${press1.toLocaleString()}`} pct={`${pct1(press1, total)}%`} sub />
         {placed > 0 && (
-          <SumRow label="Placed – no final status" value={`${placed.toLocaleString()}`} pct={`${pctOf(placed, dialed)}%`} tone="text-muted" />
+          <ModalRow label="Placed – no final status" value={`${placed.toLocaleString()}`} pct={`${pctOf(placed, dialed)}%`} tone="text-muted" />
         )}
-        <SumRow label="Busy" value={`${busy.toLocaleString()}`} pct={`${pctOf(busy, dialed)}%`} tone="text-warn" />
-        <SumRow label="No Answer" value={`${noAnswer.toLocaleString()}`} pct={`${pctOf(noAnswer, dialed)}%`} tone="text-warn" />
-        <SumRow label="Failed / Error" value={`${failedError.toLocaleString()}`} pct={`${pctOf(failedError, total)}%`} tone="text-danger" />
+        <ModalRow label="Busy" value={`${busy.toLocaleString()}`} pct={`${pctOf(busy, dialed)}%`} tone="text-warn" />
+        <ModalRow label="No answer" value={`${noAnswer.toLocaleString()}`} pct={`${pctOf(noAnswer, dialed)}%`} tone="text-warn" />
+        <ModalRow label="Failed / error" value={`${failedError.toLocaleString()}`} pct={`${pctOf(failedError, total)}%`} tone="text-danger" />
         {c.skipped > 0 && (
-          <SumRow label="Skipped (DND)" value={`${c.skipped.toLocaleString()}`} pct={`${pctOf(c.skipped, total)}%`} tone="text-muted" />
+          <ModalRow label="Skipped · DND" value={`${c.skipped.toLocaleString()}`} pct={`${pctOf(c.skipped, total)}%`} tone="text-muted" />
         )}
         <div className="h-px bg-line my-2.5" />
-        <SumRow label="Avg Call Duration" value={`${avgDur} seconds`} />
-        <SumRow label="Total Duration" value={`~${formatCallTime(data.durationSum)} of call time`} />
-        <SumRow label="Campaign Duration" value={campaignSec > 0 ? formatClock(campaignSec) : "—"} />
+        <ModalRow label="Average call length" value={`${avgDur} seconds`} />
+        <ModalRow label="Total call time" value={`~${formatCallTime(data.durationSum)} of call time`} />
+        <ModalRow label="Campaign ran for" value={campaignSec > 0 ? formatClock(campaignSec) : "—"} />
       </div>
     </Modal>
   );
 }
 
-function SumRow({ label, value, pct, tone, sub }: { label: string; value: string; pct?: string; tone?: string; sub?: boolean }) {
+function ModalRow({ label, value, pct, tone, sub }: { label: string; value: string; pct?: string; tone?: string; sub?: boolean }) {
   return (
     <div className={`flex items-baseline justify-between gap-3 text-sm ${sub ? "pl-4" : ""}`}>
       <span className={sub ? "text-muted" : "text-ink2"}>{label}</span>

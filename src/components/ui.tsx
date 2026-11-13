@@ -755,6 +755,20 @@ export interface KebabItem {
 export function Kebab({ items, label = "Actions" }: { items: KebabItem[]; label?: string }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  // The menu is position:fixed next to its button, so a table that scrolls
+  // sideways (overflow-x:auto) can't clip it on the last rows; it opens upward
+  // when there isn't room below.
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  function place() {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const need = 12 + items.length * 38;
+    const right = Math.max(8, window.innerWidth - r.right);
+    setPos(window.innerHeight - r.bottom < need && r.top > need
+      ? { bottom: window.innerHeight - r.top + 4, right }
+      : { top: r.bottom + 4, right });
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -764,30 +778,37 @@ export function Kebab({ items, label = "Actions" }: { items: KebabItem[]; label?
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
+    const onScroll = () => setOpen(false);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
     };
   }, [open]);
 
   return (
     <div ref={wrap} className="relative inline-block text-left">
       <button
+        ref={btn}
         type="button"
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { if (!open) place(); setOpen((v) => !v); }}
         className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-[8px] text-muted transition-colors hover:text-ink hover:bg-ink/[0.06]"
       >
         <span className="-mt-1 text-base leading-none">···</span>
       </button>
-      {open && (
+      {open && pos && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-1 min-w-[180px] overflow-hidden rounded-xl border border-line bg-panel p-1 shadow-pop animate-fade-in"
+          style={{ position: "fixed", top: pos.top, bottom: pos.bottom, right: pos.right }}
+          className="z-[45] min-w-[180px] overflow-hidden rounded-xl border border-line bg-panel p-1 shadow-pop animate-fade-in"
         >
           {items.map((it) => (
             <button

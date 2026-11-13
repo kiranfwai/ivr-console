@@ -90,3 +90,35 @@
   .lp-rv { opacity: 1; transform: none; }
   .lp-live, .lp-bar-eq, .lp-press, .lp-cue { animation: none; }
 }
+
+/* ---------- colour scope ----------
+   The marketing pages (landing + request access) were designed dark with the
+   teal accent. The app's tokens now default to light, so pin the old dark
+   palette on these pages only. Tailwind colours read these variables, so
+   every bg-bg / text-ink / brand utility inside .lp-scope keeps its look in
+   either app theme. */
+.lp-scope {
+  color-scheme: dark;
+  --c-bg: 10 12 16;
+  --c-panel: 15 18 24;
+  --c-elev: 22 26 35;
+  --c-line: 31 37 49;
+  --c-line2: 42 49 66;
+  --c-ink: 232 236 243;
+  --c-ink2: 184 192 207;
+  --c-muted: 122 133 151;
+  --c-brand: 94 234 212;
+  --c-onbrand: 4 36 32;
+  --c-accent: 94 234 212;
+  --c-brand2: 125 211 252;
+  --c-ok: 34 197 94;
+  --c-ok2: 22 163 74;
+  --c-warn: 245 158 11;
+  --c-warn2: 217 119 6;
+  --c-danger: 239 68 68;
+  --c-danger2: 220 38 38;
+  --c-info: 99 102 241;
+  --c-scrim: 0 0 0;
+  background: rgb(var(--c-bg));
+  color: rgb(var(--c-ink));
+}

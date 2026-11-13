@@ -2,8 +2,9 @@
 import { fmtDateTime } from "@/lib/format";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Phone, PhoneCall, Wallet, Download, Users2 } from "lucide-react";
-import { Card, Section, Badge, KPI, Spinner, EmptyState } from "../ui";
+import { Phone, Download, Building2 } from "lucide-react";
+import { Section, Badge, Button, Spinner, EmptyState, Loading, DataTable, TH, TD } from "../ui";
+import { Seg, SearchBox, Panel } from "../AdminTabKit";
 import { api } from "../useData";
 import { fmtMoney, istToday, istDaysAgo } from "./money";
 import { RangeControl } from "./shared";
@@ -75,6 +76,7 @@ export default function CallersView() {
   const [data, setData] = useState<CallsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     api<{ clients: ClientOpt[] }>("/api/admin/clients")
@@ -124,18 +126,25 @@ export default function CallersView() {
     [client, clients],
   );
 
+  // Phone search filters the rows already loaded (digits only, so spaces/+91 don't matter).
+  const digits = q.replace(/\D/g, "");
+  const shown = useMemo(
+    () => (data ? (digits ? data.rows.filter((r) => r.to.replace(/\D/g, "").includes(digits)) : data.rows) : []),
+    [data, digits],
+  );
+
   return (
     <Section>
-      {/* Filters */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 text-muted">
-            <Users2 size={14} />
-          </div>
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SearchBox value={q} onChange={setQ} placeholder="Search a phone number" className="w-full sm:w-[260px]" />
+        <label className="relative flex h-[34px] items-center gap-2 rounded-[9px] border border-line bg-panel pl-2.5 pr-1 text-[13px] shadow-xs focus-within:border-accent focus-within:shadow-glow">
+          <Building2 size={15} className="flex-none text-muted" />
           <select
             value={client}
             onChange={(e) => setClient(e.target.value)}
-            className="bg-bg/60 border border-line hover:border-line2 focus:border-accent/60 rounded-lg px-2.5 py-1.5 text-xs outline-none max-w-[200px]"
+            className="h-full max-w-[200px] cursor-pointer bg-transparent pr-1 text-ink outline-none"
+            aria-label="Client"
           >
             <option value="all">All clients</option>
             {clients.map((c) => (
@@ -144,136 +153,99 @@ export default function CallersView() {
               </option>
             ))}
           </select>
-          <RangeControl from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
-        </div>
+        </label>
+        <RangeControl from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
         {loading && <Spinner size={16} />}
-      </div>
-
-      {/* Outcome filter chips */}
-      <div className="flex flex-wrap items-center gap-1">
-        {STATUS_FILTERS.map((s) => {
-          const active = status === s.id;
-          return (
-            <button
-              key={s.id}
-              onClick={() => setStatus(s.id)}
-              className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
-                active ? "bg-accent/10 text-accent border-accent/25" : "text-ink2 border-line hover:bg-elev/60"
-              }`}
-            >
-              {s.label}
-            </button>
-          );
-        })}
+        <span className="flex-1" />
+        <Button variant="ghost" leftIcon={<Download size={14} />} onClick={exportCsv} disabled={!data?.rows.length}>
+          CSV
+        </Button>
       </div>
 
       {err && <div className="text-sm text-danger">{err}</div>}
 
-      {/* Totals */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <KPI
-          label="Calls"
-          value={(data?.totals.total ?? 0).toLocaleString()}
-          sub={selectedName}
-          icon={<Phone size={18} />}
-        />
-        <KPI
-          label="Connected"
-          value={(data?.totals.connected ?? 0).toLocaleString()}
-          sub="answered / pressed 1"
-          icon={<PhoneCall size={18} />}
-          tone="ok"
-        />
-        <KPI
-          label="Total charged"
-          value={fmtMoney(data?.totals.charge ?? 0, currency)}
-          sub="connected × per-call rate"
-          icon={<Wallet size={18} />}
-          tone="accent"
-        />
-      </div>
-
-      <Card
+      <Panel
         title="Callers"
-        description="Every number dialed in the range — per client, with the amount charged per connected call"
-        action={
-          <button
-            onClick={exportCsv}
-            disabled={!data?.rows.length}
-            className="inline-flex items-center gap-1 text-xs text-ink2 hover:text-ink px-2 py-1 rounded-md hover:bg-elev disabled:opacity-40"
-          >
-            <Download size={13} /> Export CSV
-          </button>
+        sub={
+          data
+            ? `${selectedName} · ${data.totals.total.toLocaleString("en-IN")} calls · ${data.totals.connected.toLocaleString("en-IN")} connected · ${fmtMoney(data.totals.charge, currency)} charged`
+            : "Every number dialled in the range"
+        }
+        right={
+          <Seg
+            value={status}
+            onChange={setStatus}
+            size="sm"
+            options={STATUS_FILTERS}
+          />
         }
       >
         {!data ? (
-          <div className="flex items-center gap-2 text-muted text-sm py-6 justify-center">
-            <Spinner size={16} /> Loading…
-          </div>
-        ) : data.rows.length === 0 ? (
+          <Loading label="Loading calls…" />
+        ) : shown.length === 0 ? (
           <EmptyState
             icon={<Phone size={20} />}
-            title="No calls in this range"
-            description="Adjust the client, date range, or outcome filter."
+            title={data.rows.length === 0 ? "No calls in this range" : "No number matches"}
+            description={
+              data.rows.length === 0
+                ? "Adjust the client, date range, or outcome filter."
+                : "Check the digits, or clear the search."
+            }
           />
         ) : (
           <>
-            <div className="overflow-auto -mx-1">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                    <th className="font-medium py-2 px-2">Caller</th>
-                    {client === "all" && <th className="font-medium px-2">Client</th>}
-                    <th className="font-medium px-2">Campaign</th>
-                    <th className="font-medium px-2">Outcome</th>
-                    <th className="font-medium px-2 text-right">Duration</th>
-                    <th className="font-medium px-2 text-right">Charge</th>
-                    <th className="font-medium px-2 text-right">Time (IST)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.rows.map((r, i) => {
-                    const meta = OUTCOME_META[r.outcome] || { label: r.outcome, tone: "muted" as const };
-                    return (
-                      <tr key={`${r.to}-${r.triggeredAt}-${i}`} className="border-t border-line hover:bg-elev/40">
-                        <td className="py-2 px-2 font-mono text-ink2 whitespace-nowrap">
-                          {formatPhone(r.to)}
-                          {!isDiallablePhone(normalizePhone(r.to)) && (
-                            <span className="ml-2 font-sans text-[11px] text-warn">invalid number</span>
-                          )}
-                        </td>
-                        {client === "all" && (
-                          <td className="px-2 text-ink2 max-w-[160px] truncate">{r.clientName}</td>
+            <DataTable>
+              <thead>
+                <tr>
+                  <th className={TH}>Number</th>
+                  {client === "all" && <th className={TH}>Client</th>}
+                  <th className={`${TH} hidden md:table-cell`}>Campaign</th>
+                  <th className={`${TH} hidden sm:table-cell`}>Called</th>
+                  <th className={TH}>Outcome</th>
+                  <th className={`${TH} hidden text-right sm:table-cell`}>Duration</th>
+                  <th className={`${TH} text-right`}>Charge</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((r, i) => {
+                  const meta = OUTCOME_META[r.outcome] || { label: r.outcome, tone: "muted" as const };
+                  return (
+                    <tr key={`${r.to}-${r.triggeredAt}-${i}`} className="transition-colors hover:bg-elev">
+                      <td className={`${TD} whitespace-nowrap font-semibold tabular-nums text-ink`}>
+                        {formatPhone(r.to)}
+                        {!isDiallablePhone(normalizePhone(r.to)) && (
+                          <span className="ml-2 text-[11px] font-normal text-warn">invalid number</span>
                         )}
-                        <td className="px-2 text-muted max-w-[160px] truncate">{r.campaignName || "—"}</td>
-                        <td className="px-2">
-                          <Badge tone={meta.tone}>{meta.label}</Badge>
-                        </td>
-                        {/* Talk time only means something on a connected call; on a
-                            no-answer the carrier reports ring time, which read as a
-                            36s "no answer". */}
-                        <td className="px-2 text-right tabular-nums text-ink2">
-                          {r.outcome === "connected" || r.outcome === "press1" ? fmtDuration(r.durationSec) : "—"}
-                        </td>
-                        <td className="px-2 text-right tabular-nums text-ink2">
-                          {r.charge > 0 ? fmtMoney(r.charge, currency) : "—"}
-                        </td>
-                        <td className="px-2 text-right text-muted whitespace-nowrap text-xs">{fmtTime(r.triggeredAt)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                      </td>
+                      {client === "all" && <td className={`${TD} max-w-[180px] truncate text-ink2`}>{r.clientName}</td>}
+                      <td className={`${TD} hidden max-w-[200px] truncate text-ink2 md:table-cell`}>{r.campaignName || "—"}</td>
+                      <td className={`${TD} hidden whitespace-nowrap text-muted sm:table-cell`}>{fmtTime(r.triggeredAt)}</td>
+                      <td className={TD}>
+                        <Badge tone={meta.tone}>{meta.label}</Badge>
+                      </td>
+                      {/* Talk time only means something on a connected call; on a
+                          no-answer the carrier reports ring time, which read as a
+                          36s "no answer". */}
+                      <td className={`${TD} hidden text-right tabular-nums text-ink2 sm:table-cell`}>
+                        {r.outcome === "connected" || r.outcome === "press1" ? fmtDuration(r.durationSec) : "—"}
+                      </td>
+                      <td className={`${TD} whitespace-nowrap text-right tabular-nums`}>
+                        {r.charge > 0 ? fmtMoney(r.charge, currency) : <span className="text-muted">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DataTable>
             {data.capped && (
-              <p className="text-xs text-muted mt-3">
-                The table lists the newest {data.rows.length.toLocaleString()} of {data.totals.total.toLocaleString()} calls —
+              <p className="m-0 border-t border-line px-5 py-3 text-[12.5px] text-muted">
+                The table lists the newest {data.rows.length.toLocaleString("en-IN")} of {data.totals.total.toLocaleString("en-IN")} calls —
                 the totals above cover all of them. Narrow the date range or pick a client to list the rest.
               </p>
             )}
           </>
         )}
-      </Card>
+      </Panel>
     </Section>
   );
 }

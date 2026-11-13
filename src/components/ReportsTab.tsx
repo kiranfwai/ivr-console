@@ -1,18 +1,18 @@
 "use client";
-import CampaignSelect from "./CampaignSelect";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  PhoneCall, PhoneIncoming, PhoneOff, Clock, Download, RefreshCw, TrendingUp, BarChart3,
-  ArrowUp, ArrowDown, X, ChevronRight, ChevronDown,
+  PhoneCall, PhoneIncoming, MousePointerClick, Clock, Wallet, Download, RefreshCw, Calendar,
+  Megaphone, ChevronDown, ChevronRight, Columns3, Search, X, Info, ArrowUp, ArrowDown,
 } from "lucide-react";
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
-  PieChart, Pie, Cell, BarChart, Bar,
-} from "recharts";
-import { Button, Card, KPI, Badge, Select, EmptyState, Section, Skeleton } from "./ui";
+  Button, Card, KPI, Badge, EmptyState, Section, Skeleton, DataPanel, DataTable, TH, TD, Label, Select, toast,
+} from "./ui";
 import { useFetch } from "./useData";
-import type { CallRecord, Campaign } from "@/lib/models";
+import { Popover, CheckBox, Initials, TRIGGER } from "./ReportsTabUi";
+import type { CallRecord } from "@/lib/models";
+import { CSV_COLUMNS, callOutcome, causeLabel, mmss, statusLabel } from "@/lib/report-format";
 
 interface Report {
   totals: {
@@ -26,6 +26,7 @@ interface Report {
     lifted: number;
     notLifted: number;
     liftRate: number;
+    spent?: number | null;
   };
   outcomes: {
     press1: number;
@@ -39,15 +40,23 @@ interface Report {
   byHour: Record<string, number>;
   byCampaign: Record<string, number>;
   campaignTable: CampaignRow[];
+  campaignsInRange?: RangeCampaign[];
   range: { from: string; to: string };
   hangupCauseCounts: Record<string, number>;
-  recent: (CallRecord & { outcome: string | null })[];
+  recent: RecentRow[];
+}
+
+interface RangeCampaign {
+  id: string;
+  name: string;
+  calls: number;
 }
 
 interface CampaignRow {
   campaignId: string;
   name: string;
   total: number;
+  answered?: number;
   lifted: number;
   press1: number;
   busy: number;
@@ -64,18 +73,17 @@ interface DrillRow {
   hangupCause: string | null;
 }
 
-type RecentRow = CallRecord & { outcome: string | null; gsheetConnName?: string | null };
+type RecentRow = CallRecord & { outcome: string | null; gsheetConnName?: string | null; cost?: number | null };
 
-// Report day buckets are IST (Asia/Kolkata) — match the server. Compute the
-// calendar day by shifting the instant by +5:30 and reading the UTC date.
+// Report day buckets are IST (Asia/Kolkata) — match the server.
 const IST_SHIFT_MS = (5 * 60 + 30) * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 function istDateKey(ms: number): string {
   return new Date(ms + IST_SHIFT_MS).toISOString().slice(0, 10);
 }
 function istTimeOfDay(iso: string): string {
-  return new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString().slice(11, 19);
+  return new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString().slice(11, 16);
 }
-// Compact IST "MM-DD HH:MM" for drill-down rows (keeps the date for multi-day ranges).
 function istStamp(iso: string): string {
   const d = new Date(Date.parse(iso) + IST_SHIFT_MS).toISOString();
   return `${d.slice(5, 10)} ${d.slice(11, 16)}`;
@@ -84,35 +92,59 @@ function todayKey(): string {
   return istDateKey(Date.now());
 }
 function offsetDay(n: number): string {
-  return istDateKey(Date.now() + n * 24 * 60 * 60 * 1000);
+  return istDateKey(Date.now() + n * DAY_MS);
+}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function niceDay(day: string, withYear = false): string {
+  const [y, m, d] = day.split("-");
+  return `${Number(d)} ${MONTHS[Number(m) - 1] ?? ""}${withYear ? ` ${y}` : ""}`;
+}
+function rangeLabel(from: string, to: string): string {
+  if (from === to) return niceDay(from, true);
+  return from.slice(0, 4) === to.slice(0, 4)
+    ? `${niceDay(from)} – ${niceDay(to)} ${to.slice(0, 4)}`
+    : `${niceDay(from, true)} – ${niceDay(to, true)}`;
+}
+const fmt = (n: number) => n.toLocaleString("en-IN");
+const rupees = (n: number) =>
+  "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toFixed(1)}%` : "—");
+
+/** Range presets, worked out on the IST calendar. */
+function presets(): { label: string; from: string; to: string }[] {
+  const today = todayKey();
+
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const lastMonthEnd = istDateKey(Date.parse(`${monthStart}T00:00:00.000+05:30`) - DAY_MS);
+  const lastMonthStart = `${lastMonthEnd.slice(0, 7)}-01`;
+  return [
+    { label: "Today", from: today, to: today },
+    { label: "Yesterday", from: offsetDay(-1), to: offsetDay(-1) },
+    { label: "Last 7 days", from: offsetDay(-6), to: today },
+    { label: "Last 14 days", from: offsetDay(-13), to: today },
+    { label: "This month", from: monthStart, to: today },
+    { label: `Last month (${MONTHS[Number(lastMonthEnd.slice(5, 7)) - 1]})`, from: lastMonthStart, to: lastMonthEnd },
+  ];
 }
 
-const OUTCOME_LABEL: Record<string, string> = {
-  press1: "Lifted + pressed 1",
-  connected: "Lifted, no press",
-  busy: "Busy",
-  "no-answer": "Not lifted",
-  rejected: "Rejected/invalid",
-  error: "Carrier error",
-  pending: "In progress",
-};
-const OUTCOME_TONE: Record<string, "ok" | "warn" | "danger" | "muted" | "accent" | "info"> = {
+/** Outcome groups shown as bars (and used to filter the calls table). */
+const GROUPS: { key: string; label: string; color: string; match: (o: string) => boolean }[] = [
+  { key: "answered", label: "Answered", color: "rgb(var(--c-accent))", match: (o) => o === "press1" || o === "connected" },
+  { key: "no-answer", label: "No answer", color: "rgb(var(--c-muted))", match: (o) => o === "no-answer" },
+  { key: "busy", label: "Busy", color: "rgb(var(--c-warn))", match: (o) => o === "busy" },
+  { key: "failed", label: "Failed", color: "rgb(var(--c-danger))", match: (o) => o === "rejected" || o === "error" || o === "failed" },
+  { key: "pending", label: "In progress", color: "rgb(var(--c-line2))", match: (o) => o === "pending" },
+];
+
+const STATUS_TONE: Record<string, "ok" | "warn" | "danger" | "muted" | "accent" | "info"> = {
   press1: "ok",
-  connected: "info",
+  connected: "ok",
   busy: "warn",
-  "no-answer": "warn",
+  "no-answer": "muted",
   rejected: "danger",
   error: "danger",
-  pending: "muted",
-};
-const OUTCOME_COLOR: Record<string, string> = {
-  press1: "#22c55e",
-  connected: "#6366f1",
-  busy: "#f59e0b",
-  "no-answer": "#fbbf24",
-  rejected: "#ef4444",
-  error: "#dc2626",
-  pending: "rgb(var(--c-muted))",
+  failed: "danger",
+  pending: "info",
 };
 
 export default function ReportsTab() {
@@ -120,219 +152,490 @@ export default function ReportsTab() {
   // screen reads as "no data" rather than "nothing yet today".
   const [from, setFrom] = useState<string>(() => offsetDay(-6));
   const [to, setTo] = useState<string>(todayKey());
-  const [campaign, setCampaign] = useState<string>("");
-  const { data: cdata } = useFetch<{ campaigns: Campaign[] }>("/api/campaigns");
-  const campaigns = cdata?.campaigns ?? [];
+  // null = every campaign that ran in the range; otherwise the picked ids.
+  const [selected, setSelected] = useState<string[] | null>(null);
 
   const qs = new URLSearchParams();
   if (from) qs.set("from", from);
   if (to) qs.set("to", to);
-  if (campaign) qs.set("campaign", campaign);
-  const { data, loading, reload } = useFetch<Report>(`/api/reports?${qs.toString()}`, [from, to, campaign]);
+  if (selected && selected.length) qs.set("campaigns", selected.join(","));
+  const query = qs.toString();
+  const { data, loading, reload } = useFetch<Report>(`/api/reports?${query}`, [query]);
 
-  function setPreset(start: string, end: string) {
-    setFrom(start);
-    setTo(end);
-  }
-  // Keep from <= to on manual edits so a range never inverts (which silently
-  // returns zero rows). The query key (url) is from/to, so any change re-fetches.
-  function changeFrom(v: string) {
-    setFrom(v);
-    if (to && v > to) setTo(v);
-  }
-  function changeTo(v: string) {
-    setTo(v);
-    if (from && v < from) setFrom(v);
-  }
-  function downloadCsv() {
-    const csvQs = new URLSearchParams();
-    if (from) csvQs.set("from", from);
-    if (to) csvQs.set("to", to);
-    if (campaign) csvQs.set("campaign", campaign);
-    window.open(`/api/reports/csv?${csvQs.toString()}`, "_blank");
-  }
-  function downloadXlsx() {
-    const xQs = new URLSearchParams();
-    if (from) xQs.set("from", from);
-    if (to) xQs.set("to", to);
-    if (campaign) xQs.set("campaign", campaign);
-    window.open(`/api/reports/xlsx?${xQs.toString()}`, "_blank");
+  const ran = useMemo(() => data?.campaignsInRange ?? [], [data]);
+
+  // A new range can drop campaigns that didn't run in it — keep the selection
+  // to campaigns that are actually in the list.
+  useEffect(() => {
+    if (!selected || !data?.campaignsInRange || data.range.from !== from || data.range.to !== to) return;
+    const ids = new Set(data.campaignsInRange.map((c) => c.id));
+    const kept = selected.filter((id) => ids.has(id));
+    if (kept.length !== selected.length) setSelected(kept.length && kept.length < ids.size ? kept : null);
+  }, [data, selected, from, to]);
+
+  function applyRange(a: string, b: string) {
+    if (a > b) [a, b] = [b, a];
+    setFrom(a);
+    setTo(b);
   }
 
-  const isToday = from === todayKey() && to === todayKey();
-  const isYesterday = from === offsetDay(-1) && to === offsetDay(-1);
-  const is7d = from === offsetDay(-6) && to === todayKey();
-  const is30d = from === offsetDay(-29) && to === todayKey();
+  function exportUrl(kind: "csv" | "xlsx") {
+    const p = new URLSearchParams();
+    p.set("from", from);
+    p.set("to", to);
+    if (selected && selected.length) p.set("campaigns", selected.join(","));
+    return `/api/reports/${kind}?${p.toString()}`;
+  }
+  function download(kind: "csv" | "xlsx") {
+    const a = document.createElement("a");
+    a.href = exportUrl(kind);
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    const n = data?.totals.total ?? 0;
+    toast(`${kind === "csv" ? "CSV" : "Excel"} download started · ${fmt(n)} call${n === 1 ? "" : "s"}`, "ok");
+  }
 
-  // Trend hint for the Calls KPI: compare the most recent populated hour vs the
-  // one before it (both come straight from real byHour data, no fabrication).
-  const callsTrend = useMemo<"up" | "down" | "flat" | undefined>(() => {
-    if (!data) return undefined;
-    const vals = Object.entries(data.byHour)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([, v]) => v);
-    if (vals.length < 2) return undefined;
-    const last = vals[vals.length - 1];
-    const prev = vals[vals.length - 2];
-    if (last > prev) return "up";
-    if (last < prev) return "down";
-    return "flat";
-  }, [data]);
-
-  const isRangeFiltered = !is7d || campaign !== "";
+  const selectedList = selected ? ran.filter((c) => selected.includes(c.id)) : ran;
+  const total = data?.totals.total ?? 0;
 
   return (
     <Section>
-      <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-muted mb-1.5">Range</div>
-            <div className="inline-flex p-1 bg-elev/60 border border-line rounded-lg">
-              <RangeBtn active={isToday} onClick={() => setPreset(todayKey(), todayKey())} label="Today" />
-              <RangeBtn active={isYesterday} onClick={() => setPreset(offsetDay(-1), offsetDay(-1))} label="Yesterday" />
-              <RangeBtn active={is7d} onClick={() => setPreset(offsetDay(-6), todayKey())} label="7 days" />
-              <RangeBtn active={is30d} onClick={() => setPreset(offsetDay(-29), todayKey())} label="30 days" />
-            </div>
-          </div>
-          <div className="flex items-end gap-2">
-            <div>
-              <div className="text-xs uppercase tracking-wider text-muted mb-1.5">From</div>
-              <input
-                type="date"
-                value={from}
-                max={to}
-                onChange={(e) => changeFrom(e.target.value)}
-                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-accent/60"
-              />
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wider text-muted mb-1.5">To</div>
-              <input
-                type="date"
-                value={to}
-                min={from}
-                onChange={(e) => changeTo(e.target.value)}
-                className="bg-bg/60 border border-line rounded-lg px-2.5 py-2 text-sm outline-none hover:border-line2 focus:border-accent/60"
-              />
-            </div>
-          </div>
-          <div className="min-w-[200px]">
-            <div className="text-xs uppercase tracking-wider text-muted mb-1.5">Campaign</div>
-            <CampaignSelect campaigns={campaigns} value={campaign} onChange={setCampaign} emptyLabel="All campaigns" />
-          </div>
-          <div className="ml-auto flex gap-2">
-            <Button variant="ghost" onClick={reload} loading={loading} leftIcon={!loading && <RefreshCw size={14} />}>
-              Refresh
-            </Button>
-            <Button variant="ghost" onClick={downloadCsv} disabled={!data?.totals.total} leftIcon={<Download size={14} />}>
-              CSV
-            </Button>
-            <Button onClick={downloadXlsx} disabled={!data?.totals.total} leftIcon={<Download size={14} />}>
-              Excel
-            </Button>
-          </div>
+      {/* Sticky filter bar */}
+      <div className="sticky top-[58px] z-20 -mx-1 -mt-2 bg-bg/90 px-1 py-2.5 backdrop-blur">
+        <div className="flex flex-wrap items-center gap-2">
+          <RangePicker from={from} to={to} onApply={applyRange} />
+          <CampaignPicker
+            ran={ran}
+            selected={selected}
+            rangeText={rangeLabel(from, to)}
+            loading={loading && !data}
+            onApply={setSelected}
+          />
+          {selected && selectedList.map((c) => (
+            <span
+              key={c.id}
+              className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-[8px] border border-accent/25 bg-accent/[0.08] pl-2.5 pr-1 text-[12.5px] font-medium text-accent"
+            >
+              <span className="truncate">{c.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${c.name}`}
+                onClick={() => {
+                  const next = selected.filter((id) => id !== c.id);
+                  setSelected(next.length ? next : null);
+                }}
+                className="grid h-5 w-5 shrink-0 place-items-center rounded-md hover:bg-accent/15"
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          {selected && (
+            <button type="button" onClick={() => setSelected(null)} className="text-[13px] font-medium text-accent hover:underline">
+              Clear
+            </button>
+          )}
+          <span className="flex-1" />
+          <Button variant="subtle" size="md" onClick={reload} loading={loading} leftIcon={!loading && <RefreshCw size={14} />} aria-label="Refresh">
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          <ColumnsPopover />
+          <Button variant="ghost" onClick={() => download("xlsx")} disabled={!total} leftIcon={<Download size={14} />}>
+            Excel
+          </Button>
+          <Button onClick={() => download("csv")} disabled={!total} leftIcon={<Download size={14} />}>
+            Download CSV · {fmt(total)} call{total === 1 ? "" : "s"}
+          </Button>
         </div>
-      </Card>
+      </div>
 
       {loading && !data && <ReportSkeleton />}
 
-      {data && data.totals.total === 0 && (
+      {data && total === 0 && (
         <Card>
           <EmptyState
-            icon={<BarChart3 size={20} />}
-            title="No calls in this range"
+            icon={<Calendar size={20} />}
+            title="No calls in this date range"
             description={
-              isRangeFiltered
-                ? "No calls matched these filters. Try widening the date range or selecting all campaigns."
-                : "Calls from Dial, Bulk calls and Sheet Auto-Dial show up here once they are placed."
+              selected
+                ? "None of the picked campaigns placed calls in this range. Pick another range or clear the campaign filter."
+                : "Pick another range — only campaigns that ran in it are listed. Calls from Dial, Bulk calls and Sheet auto-dial show up here once placed."
             }
           />
         </Card>
       )}
 
-      {data && data.totals.total > 0 && (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <KPI label="Calls" value={data.totals.total} icon={<PhoneCall size={18} />} tone="accent" trend={callsTrend} sub={callsTrend ? "vs. last hour" : undefined} />
-            <KPI label="Lifted" value={data.totals.lifted} sub={`${data.totals.liftRate}% lift rate`} icon={<PhoneIncoming size={18} />} tone="ok" />
-            <KPI label="Press 1" value={data.totals.press1} sub={`${data.totals.press1Rate}%`} icon={<TrendingUp size={18} />} tone="ok" />
-            <KPI label="Not lifted" value={data.totals.notLifted} sub="busy + no-answer" icon={<PhoneOff size={18} />} tone="warn" />
-            <KPI label="Avg duration" value={`${data.totals.avgDurationSec}s`} icon={<Clock size={18} />} />
-          </div>
-
-          <ReportBody data={data} from={from} to={to} />
-        </>
+      {data && total > 0 && (
+        <ReportBody data={data} from={from} to={to} campaignCount={selected ? selected.length : ran.length} onCsv={() => download("csv")} />
       )}
     </Section>
   );
 }
 
-function ReportBody({ data, from, to }: { data: Report; from: string; to: string }) {
-  // Client-side outcome filter shared by the pie and the recent-calls table.
-  const [outcomeFilter, setOutcomeFilter] = useState<string | null>(null);
+/* ---------------- Date range popover ---------------- */
 
-  function toggleOutcome(name: string) {
-    setOutcomeFilter((cur) => (cur === name ? null : name));
-  }
+function RangePicker({ from, to, onApply }: { from: string; to: string; onApply: (a: string, b: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [a, setA] = useState(from);
+  const [b, setB] = useState(to);
+  const close = useCallback(() => setOpen(false), []);
+  useEffect(() => {
+    if (open) {
+      setA(from);
+      setB(to);
+    }
+  }, [open, from, to]);
+  const today = todayKey();
+  const list = presets();
 
-  const filteredRecent = useMemo(() => {
-    if (!outcomeFilter) return data.recent;
-    return data.recent.filter((r) => (r.outcome || "pending") === outcomeFilter);
-  }, [data.recent, outcomeFilter]);
+  return (
+    <Popover
+      open={open}
+      onClose={close}
+      trigger={
+        <button type="button" className={TRIGGER} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <Calendar size={15} className="text-muted" />
+          <span className="tabular-nums">{rangeLabel(from, to)}</span>
+          <ChevronDown size={14} className="text-muted" />
+        </button>
+      }
+    >
+      <div className="grid w-[min(520px,calc(100vw-2rem))] grid-cols-1 sm:grid-cols-[160px_1fr]">
+        <div className="border-b border-line p-1 sm:border-b-0 sm:border-r">
+          {list.map((p) => {
+            const on = p.from === from && p.to === to;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => {
+                  onApply(p.from, p.to);
+                  close();
+                }}
+                className={`flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+                  on ? "bg-accent/10 font-medium text-accent" : "text-ink2 hover:bg-ink/[0.05] hover:text-ink"
+                }`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="p-3.5">
+          <div className="text-[14px] font-semibold">Custom range</div>
+          <div className="mb-3 mt-0.5 text-xs text-muted">Days are India time (IST).</div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <Label>From</Label>
+              <input
+                type="date"
+                value={a}
+                max={today}
+                onChange={(e) => setA(e.target.value)}
+                className="w-full rounded-[9px] border border-line bg-panel px-2.5 py-2 text-sm text-ink shadow-xs outline-none hover:border-line2 focus:border-accent focus:shadow-glow"
+              />
+            </div>
+            <div>
+              <Label>To</Label>
+              <input
+                type="date"
+                value={b}
+                max={today}
+                onChange={(e) => setB(e.target.value)}
+                className="w-full rounded-[9px] border border-line bg-panel px-2.5 py-2 text-sm text-ink shadow-xs outline-none hover:border-line2 focus:border-accent focus:shadow-glow"
+              />
+            </div>
+          </div>
+          <div className="mt-3.5 flex justify-end gap-2">
+            <Button variant="subtle" size="sm" onClick={close}>Cancel</Button>
+            <Button
+              size="sm"
+              disabled={!a || !b}
+              onClick={() => {
+                onApply(a, b);
+                close();
+              }}
+            >
+              Apply
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
+/* ---------------- Campaign multi-select popover ---------------- */
+
+function CampaignPicker({
+  ran,
+  selected,
+  rangeText,
+  loading,
+  onApply,
+}: {
+  ran: RangeCampaign[];
+  selected: string[] | null;
+  rangeText: string;
+  loading: boolean;
+  onApply: (ids: string[] | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set());
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setDraft(new Set(selected ?? ran.map((c) => c.id)));
+      setQ("");
+    }
+    // Only when the popover opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const commit = useCallback(
+    (d: Set<string>) => {
+      if (!d.size) return; // nothing picked: keep what was there
+      onApply(d.size >= ran.length && ran.every((c) => d.has(c.id)) ? null : ran.filter((c) => d.has(c.id)).map((c) => c.id));
+    },
+    [onApply, ran],
+  );
+  const close = useCallback(() => {
+    setOpen(false);
+    commit(draft);
+  }, [commit, draft]);
+
+  const allSel = !selected;
+  const one = selected && selected.length === 1 ? ran.find((c) => c.id === selected[0]) : null;
+  const shown = q ? ran.filter((c) => c.name.toLowerCase().includes(q.toLowerCase())) : ran;
+
+  return (
+    <Popover
+      open={open}
+      onClose={close}
+      trigger={
+        <button type="button" className={TRIGGER} onClick={() => (open ? close() : setOpen(true))} aria-expanded={open}>
+          <Megaphone size={15} className="text-muted" />
+          <span className="max-w-[200px] truncate">
+            {loading ? "Campaigns" : allSel ? (
+              <>All campaigns <span className="text-[12.5px] font-normal text-muted">({ran.length})</span></>
+            ) : one ? one.name : `${selected!.length} campaigns`}
+          </span>
+          <ChevronDown size={14} className="text-muted" />
+        </button>
+      }
+    >
+      <div className="w-[min(340px,calc(100vw-2rem))]">
+        <div className="-mx-1.5 -mt-1.5 mb-1.5 flex items-center gap-2 border-b border-line px-3">
+          <Search size={15} className="text-muted" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search campaigns"
+            className="flex-1 bg-transparent py-2.5 text-[13.5px] text-ink outline-none placeholder:text-muted"
+          />
+        </div>
+        <div className="mx-2 mb-1.5 text-xs text-muted">
+          {ran.length} campaign{ran.length === 1 ? "" : "s"} ran in {rangeText}
+        </div>
+        <div className="max-h-[300px] overflow-auto">
+          {shown.map((c) => {
+            const on = draft.has(c.id);
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  const next = new Set(draft);
+                  if (on) next.delete(c.id);
+                  else next.add(c.id);
+                  setDraft(next);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[13.5px] hover:bg-ink/[0.05]"
+              >
+                <CheckBox on={on} />
+                <Initials name={c.name} size={28} />
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <span className="shrink-0 text-[12.5px] tabular-nums text-muted">{fmt(c.calls)} calls</span>
+              </button>
+            );
+          })}
+          {!shown.length && (
+            <div className="px-3 py-6 text-center text-[13px] text-muted">
+              {ran.length ? "No campaign matches that search." : "No campaigns ran in this range."}
+            </div>
+          )}
+        </div>
+        <div className="-mx-1.5 -mb-1.5 mt-1.5 flex items-center gap-3 border-t border-line bg-elev/60 px-3 py-2.5">
+          <button type="button" className="text-[13px] font-medium text-accent hover:underline" onClick={() => setDraft(new Set(ran.map((c) => c.id)))}>
+            Select all
+          </button>
+          <button type="button" className="text-[13px] font-medium text-accent hover:underline" onClick={() => setDraft(new Set())}>
+            Clear
+          </button>
+          <span className="flex-1 text-right text-xs text-muted">{draft.size ? `${draft.size} selected` : "Pick at least one"}</span>
+          <Button size="sm" disabled={!draft.size} onClick={close}>
+            Done
+          </Button>
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
+function ColumnsPopover() {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  return (
+    <Popover
+      open={open}
+      onClose={close}
+      align="right"
+      trigger={
+        <Button variant="ghost" onClick={() => setOpen((v) => !v)} leftIcon={<Columns3 size={14} />} aria-expanded={open}>
+          Columns
+        </Button>
+      }
+    >
+      <div className="w-[min(380px,calc(100vw-2rem))] px-2.5 py-2">
+        <div className="text-[14px] font-semibold">CSV columns</div>
+        <div className="mt-0.5 text-xs text-muted">One row per call, ready for Excel or Google Sheets.</div>
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {CSV_COLUMNS.map((c) => (
+            <span key={c} className="rounded-md border border-line bg-elev px-2 py-0.5 text-xs text-ink2">
+              {c}
+            </span>
+          ))}
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
+/* ---------------- Body ---------------- */
+
+function ReportBody({
+  data,
+  from,
+  to,
+  campaignCount,
+  onCsv,
+}: {
+  data: Report;
+  from: string;
+  to: string;
+  campaignCount: number;
+  onCsv: () => void;
+}) {
+  // Outcome-group filter shared by the outcome bars and the calls table.
+  const [group, setGroup] = useState<string | null>(null);
+  const t = data.totals;
+  const o = data.outcomes;
+  const spent = typeof t.spent === "number" ? t.spent : null;
+
+  const groupCounts: Record<string, number> = {
+    answered: o.press1 + o.connected,
+    "no-answer": o.noAnswer,
+    busy: o.busy,
+    failed: o.rejected + o.error,
+    pending: o.pending,
+  };
+
+  const rows = useMemo(() => {
+    const withOutcome = data.recent.map((r) => ({ ...r, _o: callOutcome(r) }));
+    if (!group) return withOutcome;
+    const g = GROUPS.find((x) => x.key === group);
+    return g ? withOutcome.filter((r) => g.match(r._o)) : withOutcome;
+  }, [data.recent, group]);
 
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Card title="Outcome breakdown" description="Click a slice or legend row to filter recent calls.">
-          <OutcomePie
-            outcomes={data.outcomes}
-            total={data.totals.total}
-            active={outcomeFilter}
-            onSelect={toggleOutcome}
+      <div className={`grid grid-cols-2 gap-3 ${spent != null ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+        <KPI label="Calls" value={fmt(t.total)} sub={`${campaignCount} campaign${campaignCount === 1 ? "" : "s"}`} icon={<PhoneCall size={18} />} tone="accent" />
+        <KPI label="Answered" value={fmt(t.answered)} sub={`${pct(t.answered, t.total)} answer rate`} icon={<PhoneIncoming size={18} />} tone="ok" />
+        <KPI label="Pressed 1" value={fmt(t.press1)} sub={t.answered ? `${pct(t.press1, t.answered)} of answered` : "—"} icon={<MousePointerClick size={18} />} tone="info" />
+        <KPI label="Avg talk time" value={t.answered ? `${t.avgDurationSec}s` : "—"} sub="answered calls" icon={<Clock size={18} />} />
+        {spent != null && (
+          <KPI
+            label="Spent"
+            value={rupees(spent)}
+            sub={t.press1 ? `${rupees(spent / t.press1)} per press-1` : "connected calls only"}
+            icon={<Wallet size={18} />}
+            tone="warn"
           />
-        </Card>
-        <Card title="Volume by hour">
-          <HourlyChart byHour={data.byHour} />
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]">
+        <DataPanel title="By campaign" meta={`${rangeLabel(from, to)} · click a row for its numbers`}>
+          <CampaignTable rows={data.campaignTable ?? []} from={from} to={to} />
+        </DataPanel>
+        <Card title="Outcomes" description={`${fmt(t.total)} calls · click one to filter the calls below`}>
+          <div className="space-y-0.5">
+            {GROUPS.filter((g) => g.key !== "pending" || groupCounts.pending > 0).map((g) => {
+              const v = groupCounts[g.key] || 0;
+              const on = group === g.key;
+              return (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => setGroup(on ? null : g.key)}
+                  className={`grid w-full grid-cols-[100px_1fr_84px] items-center gap-3 rounded-[8px] px-1.5 py-2 text-left text-[13px] transition-colors hover:bg-ink/[0.04] ${
+                    on ? "bg-accent/[0.07]" : group ? "opacity-60" : ""
+                  }`}
+                >
+                  <span className="truncate text-ink2">{g.label}</span>
+                  <span className="h-2 overflow-hidden rounded-full bg-line">
+                    <span className="block h-full rounded-full" style={{ width: `${t.total ? (v / t.total) * 100 : 0}%`, background: g.color }} />
+                  </span>
+                  <span className="text-right tabular-nums text-ink2">
+                    {fmt(v)} · {t.total ? Math.round((v / t.total) * 100) : 0}%
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex gap-2.5 rounded-[10px] border border-accent/20 bg-accent/[0.06] px-3 py-2.5 text-[13px] text-ink2">
+            <Info size={15} className="mt-0.5 shrink-0 text-accent" />
+            <span>The CSV has one row per call with {CSV_COLUMNS.length} columns — the same detail you get from a Wavelength call log.</span>
+          </div>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Card title="By campaign">
-          <CampaignBars rows={data.byCampaign} />
+      <DataPanel
+        title="Calls"
+        meta={
+          group
+            ? `${rows.length} ${GROUPS.find((g) => g.key === group)?.label.toLowerCase()} of the latest ${data.recent.length} · download the CSV for all of them`
+            : `Latest ${data.recent.length} of ${fmt(t.total)} · download the CSV for all of them`
+        }
+        action={
+          <>
+            {group && (
+              <Button variant="subtle" size="sm" leftIcon={<X size={12} />} onClick={() => setGroup(null)}>
+                Clear filter
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" leftIcon={<Download size={13} />} onClick={onCsv}>
+              CSV
+            </Button>
+          </>
+        }
+      >
+        <RecentTable rows={rows} filtered={!!group} />
+      </DataPanel>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card title="Calls by hour" description="When calls in this range were placed (IST).">
+          <HourlyChart byHour={data.byHour} />
         </Card>
-        <Card title="Why calls ended" description="As reported by the phone network for the latest calls in this range, most frequent first.">
+        <Card title="Why calls ended" description="As reported by the phone network for the latest calls, most frequent first.">
           <KVList rows={data.hangupCauseCounts} />
         </Card>
       </div>
-
-      <Card
-        title="Campaign breakdown"
-        description="Click a row to drill into individual numbers, outcomes, duration and time."
-      >
-        <CampaignTable rows={data.campaignTable ?? []} from={from} to={to} />
-      </Card>
-
-      <Card
-        title="Recent calls"
-        description={
-          outcomeFilter
-            ? `${filteredRecent.length} ${OUTCOME_LABEL[outcomeFilter] || outcomeFilter} of ${data.recent.length} loaded`
-            : `Showing ${data.recent.length} of ${data.totals.total}`
-        }
-        action={
-          outcomeFilter && (
-            <button
-              onClick={() => setOutcomeFilter(null)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-elev/60 border border-line text-ink2 hover:text-ink hover:border-line2 transition-colors"
-            >
-              <X size={12} />
-              Clear filter
-            </button>
-          )
-        }
-      >
-        <RecentTable rows={filteredRecent} filtered={!!outcomeFilter} />
-      </Card>
     </>
   );
 }
@@ -340,118 +643,17 @@ function ReportBody({ data, from, to }: { data: Report; from: string; to: string
 function ReportSkeleton() {
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-24 rounded-2xl" />
+          <Skeleton key={i} className="h-[104px] rounded-xl" />
         ))}
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Skeleton className="h-56 rounded-2xl" />
-        <Skeleton className="h-56 rounded-2xl" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]">
+        <Skeleton className="h-64 rounded-xl" />
+        <Skeleton className="h-64 rounded-xl" />
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Skeleton className="h-56 rounded-2xl" />
-        <Skeleton className="h-56 rounded-2xl" />
-      </div>
-      <Skeleton className="h-64 rounded-2xl" />
+      <Skeleton className="h-72 rounded-xl" />
     </>
-  );
-}
-
-function RangeBtn({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-2.5 py-1.5 rounded-md text-xs transition-all ${
-        active ? "bg-accent/15 text-accent" : "text-ink2 hover:text-ink"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function OutcomePie({
-  outcomes,
-  total,
-  active,
-  onSelect,
-}: {
-  outcomes: Report["outcomes"];
-  total: number;
-  active: string | null;
-  onSelect: (name: string) => void;
-}) {
-  const data = [
-    { name: "press1", value: outcomes.press1 },
-    { name: "connected", value: outcomes.connected },
-    { name: "busy", value: outcomes.busy },
-    { name: "no-answer", value: outcomes.noAnswer },
-    { name: "rejected", value: outcomes.rejected },
-    { name: "error", value: outcomes.error },
-  ].filter((d) => d.value > 0);
-
-  if (!data.length) return <div className="text-sm text-muted">No data yet.</div>;
-
-  const hasActive = active != null;
-
-  return (
-    <div className="flex items-center gap-6">
-      <div className="w-40 h-40 relative shrink-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="value"
-              innerRadius={48}
-              outerRadius={72}
-              strokeWidth={0}
-              paddingAngle={2}
-              onClick={(e: any) => e?.name && onSelect(e.name)}
-            >
-              {data.map((entry, i) => (
-                <Cell
-                  key={i}
-                  fill={OUTCOME_COLOR[entry.name]}
-                  className="cursor-pointer outline-none transition-opacity"
-                  fillOpacity={hasActive && active !== entry.name ? 0.28 : 1}
-                />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={tooltipStyle}
-              formatter={(v: any, n: any) => [v, OUTCOME_LABEL[n] || n]}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <div className="text-2xl font-semibold tabular-nums">{total}</div>
-          <div className="text-[10px] uppercase tracking-wider text-muted">calls</div>
-        </div>
-      </div>
-      <div className="space-y-1 flex-1 min-w-0">
-        {data.map((d) => {
-          const isActive = active === d.name;
-          const dimmed = hasActive && !isActive;
-          return (
-            <button
-              key={d.name}
-              onClick={() => onSelect(d.name)}
-              className={`w-full flex items-center justify-between gap-2 text-sm px-1.5 py-1 rounded-md transition-colors hover:bg-elev/60 ${
-                isActive ? "bg-elev/80 ring-1 ring-line2" : ""
-              } ${dimmed ? "opacity-50" : ""}`}
-              title={isActive ? "Click to clear filter" : "Click to filter recent calls"}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: OUTCOME_COLOR[d.name] }} />
-                <span className="text-ink2 truncate">{OUTCOME_LABEL[d.name]}</span>
-              </div>
-              <span className="font-mono tabular-nums text-ink shrink-0">{d.value}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
@@ -459,14 +661,13 @@ function HourlyChart({ byHour }: { byHour: Record<string, number> }) {
   const entries = Object.entries(byHour).sort();
   if (!entries.length) return <div className="text-sm text-muted">No data.</div>;
   const data = entries.map(([k, v]) => ({ hour: k.slice(11), calls: v, raw: k }));
-
   return (
     <div className="h-40">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
           <defs>
-            <linearGradient id="brandFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgb(var(--c-accent))" stopOpacity={0.45} />
+            <linearGradient id="reportsFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgb(var(--c-accent))" stopOpacity={0.35} />
               <stop offset="100%" stopColor="rgb(var(--c-accent))" stopOpacity={0} />
             </linearGradient>
           </defs>
@@ -474,72 +675,27 @@ function HourlyChart({ byHour }: { byHour: Record<string, number> }) {
           <XAxis dataKey="hour" tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} allowDecimals={false} />
           <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: "rgb(var(--c-line))" }} />
-          <Area type="monotone" dataKey="calls" stroke="rgb(var(--c-accent))" strokeWidth={2} fill="url(#brandFill)" />
+          <Area type="monotone" dataKey="calls" stroke="rgb(var(--c-accent))" strokeWidth={2} fill="url(#reportsFill)" />
         </AreaChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-function CampaignBars({ rows }: { rows: Record<string, number> }) {
-  const entries = Object.entries(rows).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  if (!entries.length) return <div className="text-sm text-muted">No data.</div>;
-  const data = entries.map(([name, calls]) => ({ name, calls }));
-
-  return (
-    <div className="h-40">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 10, fill: "rgb(var(--c-muted))" }} axisLine={false} tickLine={false} allowDecimals={false} />
-          <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11, fill: "rgb(var(--c-ink2))" }} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgb(var(--c-panel))" }} />
-          <Bar dataKey="calls" fill="rgb(var(--c-accent))" radius={[4, 4, 4, 4]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-/** Plain names for the carrier's hangup codes (the raw code stays in a tooltip). */
-const CAUSE_LABEL: Record<string, string> = {
-  NORMAL_CLEARING: "Call ended normally",
-  NO_ANSWER: "No answer",
-  NO_USER_RESPONSE: "No response",
-  ALLOTTED_TIMEOUT: "Rang out",
-  USER_BUSY: "Busy",
-  CALL_REJECTED: "Rejected",
-  UNALLOCATED_NUMBER: "Number not in use",
-  NUMBER_CHANGED: "Number changed",
-  INVALID_NUMBER_FORMAT: "Invalid number",
-  SUBSCRIBER_ABSENT: "Phone switched off / out of reach",
-  NETWORK_OUT_OF_ORDER: "Network problem",
-  NORMAL_TEMPORARY_FAILURE: "Temporary network failure",
-  RECOVERY_ON_TIMER_EXPIRE: "Network timed out",
-  ORIGINATOR_CANCEL: "Cancelled before answer",
-};
-function causeLabel(code: string): string {
-  if (CAUSE_LABEL[code]) return CAUSE_LABEL[code];
-  const s = code.replace(/_/g, " ").toLowerCase();
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
 function KVList({ rows }: { rows: Record<string, number> }) {
-  // Hangup causes sorted by frequency (desc), under plain names.
   const entries = Object.entries(rows).sort((a, b) => b[1] - a[1]);
   if (!entries.length) return <div className="text-sm text-muted">No data.</div>;
   const max = Math.max(...entries.map(([, v]) => v));
   return (
-    <div className="space-y-1.5 text-sm">
+    <div className="space-y-2 text-sm">
       {entries.map(([k, v]) => (
-        <div key={k} className="flex items-center justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="truncate text-ink2" title={k}>{causeLabel(k)}</span>
-              <span className="font-mono tabular-nums text-muted">{v}</span>
-            </div>
-            <div className="h-1 bg-line rounded-full overflow-hidden">
-              <div className="h-full bg-accent/50" style={{ width: `${(v / max) * 100}%` }} />
-            </div>
+        <div key={k}>
+          <div className="mb-1 flex items-center justify-between text-[13px]">
+            <span className="truncate text-ink2" title={k}>{causeLabel(k)}</span>
+            <span className="tabular-nums text-muted">{fmt(v)}</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-line">
+            <div className="h-full rounded-full bg-accent/60" style={{ width: `${(v / max) * 100}%` }} />
           </div>
         </div>
       ))}
@@ -547,38 +703,36 @@ function KVList({ rows }: { rows: Record<string, number> }) {
   );
 }
 
-type SortKey = "time" | "to" | "campaign" | "outcome" | "digit" | "duration" | "sheet";
-type SortDir = "asc" | "desc";
+/* ---------------- Calls table ---------------- */
 
+type SortKey = "time" | "lead" | "campaign" | "status" | "duration" | "cost";
+type SortDir = "asc" | "desc";
 const PAGE_SIZE = 25;
 
-function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean }) {
+function RecentTable({ rows, filtered }: { rows: (RecentRow & { _o: string })[]; filtered: boolean }) {
   const [sortKey, setSortKey] = useState<SortKey>("time");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [visible, setVisible] = useState<number>(PAGE_SIZE);
 
   function onSort(key: SortKey) {
-    if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
       setSortKey(key);
-      // Sensible defaults: text asc, numeric/time desc.
-      setSortDir(key === "to" || key === "campaign" || key === "outcome" || key === "sheet" ? "asc" : "desc");
+      setSortDir(key === "lead" || key === "campaign" || key === "status" ? "asc" : "desc");
     }
     setVisible(PAGE_SIZE);
   }
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
-    const val = (r: RecentRow): string | number => {
+    const val = (r: RecentRow & { _o: string }): string | number => {
       switch (sortKey) {
         case "time": return Date.parse(r.triggeredAt) || 0;
-        case "to": return r.to || "";
+        case "lead": return (r.name || r.to || "").toLowerCase();
         case "campaign": return (r.campaignName || "").toLowerCase();
-        case "outcome": return OUTCOME_LABEL[r.outcome || "pending"] || r.outcome || "pending";
-        case "digit": return r.digit || "";
+        case "status": return statusLabel(r._o);
         case "duration": return r.durationSec ?? -1;
-        case "sheet": return (r.gsheetConnName || "").toLowerCase();
+        case "cost": return r.cost ?? -1;
       }
     };
     return [...rows].sort((a, b) => {
@@ -591,56 +745,81 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
 
   if (!rows.length) {
     return (
-      <div className="text-sm text-muted py-4 text-center">
-        {filtered ? "No loaded calls match this outcome." : "No calls yet."}
+      <div className="border-t border-line px-5 py-8 text-center text-sm text-muted">
+        {filtered ? "None of the latest calls has this outcome." : "No calls yet."}
       </div>
     );
   }
 
   const shown = sorted.slice(0, visible);
   const remaining = sorted.length - shown.length;
+  const th = (label: string, col: SortKey, cls = "", right = false) => (
+    <th className={`${TH} ${right ? "text-right" : ""} ${cls}`}>
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className={`inline-flex items-center gap-1 transition-colors hover:text-ink ${sortKey === col ? "text-ink" : ""} ${right ? "flex-row-reverse" : ""}`}
+      >
+        {label}
+        {sortKey === col && (sortDir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
+      </button>
+    </th>
+  );
 
   return (
     <div>
-      <div className="overflow-auto -mx-1">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-              <Th label="Time" col="time" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
-              <Th label="To" col="to" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
-              <Th label="Campaign" col="campaign" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
-              <Th label="Source Sheet" col="sheet" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1 hidden md:table-cell" />
-              <Th label="Outcome" col="outcome" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
-              <Th label="Digit" col="digit" sortKey={sortKey} sortDir={sortDir} onSort={onSort} className="px-1" />
-              <Th label="Dur" col="duration" sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" className="px-1" />
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((r) => {
-              const o = r.outcome || "pending";
-              return (
-                <tr key={r.callUuid} className="border-t border-line hover:bg-elev/40 transition-colors">
-                  <td className="py-2 px-1 font-mono text-xs text-muted">{istTimeOfDay(r.triggeredAt)}</td>
-                  <td className="px-1 font-mono text-xs">{r.to}</td>
-                  <td className="px-1 truncate max-w-[160px]">{r.campaignName}</td>
-                  <td className="px-1 text-xs text-muted truncate max-w-[140px] hidden md:table-cell" title={r.gsheetConnName ?? ""}>
-                    {r.gsheetConnName || "—"}
-                  </td>
-                  <td className="px-1">
-                    <Badge tone={OUTCOME_TONE[o] || "muted"}>{OUTCOME_LABEL[o] || o}</Badge>
-                  </td>
-                  <td className="px-1 font-mono text-xs">{r.digit || "—"}</td>
-                  <td className="px-1 text-right font-mono text-xs tabular-nums">{r.durationSec ? `${r.durationSec}s` : "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable>
+        <thead>
+          <tr>
+            {th("When", "time")}
+            {th("Lead", "lead")}
+            {th("Campaign", "campaign", "hidden md:table-cell")}
+            {th("Status", "status")}
+            {th("Duration", "duration", "", true)}
+            <th className={`${TH} hidden md:table-cell`}>Pressed 1</th>
+            <th className={`${TH} hidden md:table-cell`}>WhatsApp</th>
+            {th("Cost", "cost", "hidden md:table-cell", true)}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r) => {
+            const d = new Date(Date.parse(r.triggeredAt) + IST_SHIFT_MS).toISOString().slice(0, 10);
+            return (
+              <tr key={r.callUuid} className="transition-colors hover:bg-ink/[0.025]">
+                <td className={`${TD} whitespace-nowrap`}>
+                  <div>{niceDay(d)}</div>
+                  <div className="text-xs tabular-nums text-muted">{istTimeOfDay(r.triggeredAt)}</div>
+                </td>
+                <td className={TD}>
+                  <div className="max-w-[180px] truncate font-medium">{r.name || r.to}</div>
+                  <div className="text-xs tabular-nums text-muted">
+                    {r.name ? r.to : ""}
+                    {r.gsheetConnName ? `${r.name ? " · " : ""}Sheet: ${r.gsheetConnName}` : ""}
+                  </div>
+                </td>
+                <td className={`${TD} hidden max-w-[200px] truncate md:table-cell`}>{r.campaignName}</td>
+                <td className={TD}>
+                  <Badge tone={STATUS_TONE[r._o] || "muted"}>{statusLabel(r._o)}</Badge>
+                </td>
+                <td className={`${TD} text-right tabular-nums`}>{r.durationSec ? mmss(r.durationSec) : "—"}</td>
+                <td className={`${TD} hidden md:table-cell`}>
+                  {r.digit === "1" ? <Badge tone="ok">Yes</Badge> : <span className="text-muted">No</span>}
+                </td>
+                <td className={`${TD} hidden md:table-cell`}>
+                  {r.whatsappSentAt ? <Badge tone="info">Sent</Badge> : <span className="text-muted">—</span>}
+                </td>
+                <td className={`${TD} hidden text-right tabular-nums md:table-cell`}>
+                  {typeof r.cost === "number" ? rupees(r.cost) : <span className="text-muted">—</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </DataTable>
       {remaining > 0 && (
-        <div className="flex justify-center pt-3">
+        <div className="flex justify-center py-3">
           <Button variant="ghost" size="sm" onClick={() => setVisible((v) => v + PAGE_SIZE)}>
-            Load {Math.min(PAGE_SIZE, remaining)} more · {remaining} remaining
+            Show {Math.min(PAGE_SIZE, remaining)} more · {remaining} remaining
           </Button>
         </div>
       )}
@@ -648,101 +827,69 @@ function RecentTable({ rows, filtered }: { rows: RecentRow[]; filtered: boolean 
   );
 }
 
-function Th({
-  label,
-  col,
-  sortKey,
-  sortDir,
-  onSort,
-  align = "left",
-  className = "",
-}: {
-  label: string;
-  col: SortKey;
-  sortKey: SortKey;
-  sortDir: SortDir;
-  onSort: (k: SortKey) => void;
-  align?: "left" | "right";
-  className?: string;
-}) {
-  const active = sortKey === col;
-  return (
-    <th className={`font-medium py-2 ${align === "right" ? "text-right" : "text-left"} ${className}`}>
-      <button
-        onClick={() => onSort(col)}
-        className={`inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-ink ${
-          active ? "text-ink" : "text-muted"
-        } ${align === "right" ? "flex-row-reverse" : ""}`}
-      >
-        {label}
-        {active && (sortDir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
-      </button>
-    </th>
-  );
-}
-
-// ---- Campaign breakdown table + phone-level drill-down (FEATURE 3) ----------
+/* ---------------- By-campaign table + phone-level drill-down ---------------- */
 
 function CampaignTable({ rows, from, to }: { rows: CampaignRow[]; from: string; to: string }) {
   const [openCid, setOpenCid] = useState<string | null>(null);
   if (!rows.length) {
-    return <div className="text-sm text-muted py-4 text-center">No campaign activity in this range.</div>;
+    return <div className="border-t border-line px-5 py-8 text-center text-sm text-muted">No campaign activity in this range.</div>;
   }
-  const dateLabel = from === to ? from : `${from} → ${to}`;
   return (
-    <div className="overflow-auto -mx-1">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-            <th className="font-medium py-2 px-1">Campaign</th>
-            <th className="font-medium px-1">Date</th>
-            <th className="font-medium px-1 text-right">Total</th>
-            <th className="font-medium px-1 text-right">Lifted</th>
-            <th className="font-medium px-1 text-right">Press 1</th>
-            <th className="font-medium px-1 text-right">Busy</th>
-            <th className="font-medium px-1 text-right">Failed</th>
-            <th className="font-medium px-1 text-right">Lift Rate</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const open = openCid === r.campaignId;
-            return (
-              <Fragment key={r.campaignId}>
-                <tr
-                  onClick={() => setOpenCid(open ? null : r.campaignId)}
-                  className={`border-t border-line cursor-pointer transition-colors ${open ? "bg-elev/50" : "hover:bg-elev/40"}`}
-                >
-                  <td className="py-2 px-1">
-                    <span className="inline-flex items-center gap-1.5">
-                      {open ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
-                      <span className="truncate max-w-[160px]">{r.name}</span>
+    <DataTable>
+      <thead>
+        <tr>
+          <th className={TH}>Campaign</th>
+          <th className={`${TH} text-right`}>Calls</th>
+          <th className={`${TH} hidden text-right sm:table-cell`}>Answered</th>
+          <th className={`${TH} text-right`}>Answer rate</th>
+          <th className={`${TH} hidden text-right sm:table-cell`}>Pressed 1</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const open = openCid === r.campaignId;
+          const answered = r.answered ?? r.lifted;
+          const rate = r.total ? (answered / r.total) * 100 : 0;
+          const canDrill = r.campaignId !== "none";
+          return (
+            <Fragment key={r.campaignId}>
+              <tr
+                onClick={() => canDrill && setOpenCid(open ? null : r.campaignId)}
+                className={`transition-colors ${canDrill ? "cursor-pointer" : ""} ${open ? "bg-elev" : "hover:bg-ink/[0.025]"}`}
+              >
+                <td className={TD}>
+                  <div className="flex items-center gap-2.5">
+                    {canDrill ? (
+                      open ? <ChevronDown size={13} className="shrink-0 text-muted" /> : <ChevronRight size={13} className="shrink-0 text-muted" />
+                    ) : <span className="w-[13px]" />}
+                    <Initials name={r.name} size={28} />
+                    <span className="max-w-[220px] truncate font-medium">{r.name}</span>
+                  </div>
+                </td>
+                <td className={`${TD} text-right tabular-nums`}>{fmt(r.total)}</td>
+                <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{fmt(answered)}</td>
+                <td className={TD}>
+                  <div className="flex items-center justify-end gap-2.5">
+                    <span className="hidden h-[5px] w-[70px] overflow-hidden rounded-full bg-line sm:block">
+                      <span className="block h-full rounded-full bg-accent" style={{ width: `${rate}%` }} />
                     </span>
-                    <span className="block font-mono text-[10px] text-muted truncate max-w-[200px] pl-[18px]">{r.campaignId}</span>
-                  </td>
-                  <td className="px-1 text-muted text-xs whitespace-nowrap">{dateLabel}</td>
-                  <td className="px-1 text-right font-mono tabular-nums">{r.total.toLocaleString()}</td>
-                  <td className="px-1 text-right font-mono tabular-nums text-ok">{r.lifted.toLocaleString()}</td>
-                  <td className="px-1 text-right font-mono tabular-nums">{r.press1.toLocaleString()}</td>
-                  <td className="px-1 text-right font-mono tabular-nums text-warn">{r.busy.toLocaleString()}</td>
-                  <td className="px-1 text-right font-mono tabular-nums text-danger">{r.failed.toLocaleString()}</td>
-                  <td className="px-1 text-right">
-                    <Badge tone={r.liftRate >= 20 ? "ok" : r.liftRate >= 10 ? "warn" : "muted"}>{r.liftRate}%</Badge>
+                    <span className="w-12 text-right tabular-nums">{rate.toFixed(1)}%</span>
+                  </div>
+                </td>
+                <td className={`${TD} hidden text-right tabular-nums sm:table-cell`}>{fmt(r.press1)}</td>
+              </tr>
+              {open && (
+                <tr>
+                  <td colSpan={5} className="border-b border-line/70 bg-elev/50 px-5 py-3">
+                    <DrillDown campaignId={r.campaignId} from={from} to={to} />
                   </td>
                 </tr>
-                {open && (
-                  <tr className="border-t border-line/40">
-                    <td colSpan={8} className="px-1 py-2">
-                      <DrillDown campaignId={r.campaignId} from={from} to={to} />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+              )}
+            </Fragment>
+          );
+        })}
+      </tbody>
+    </DataTable>
   );
 }
 
@@ -750,7 +897,7 @@ const DRILL_STATUSES = [
   { value: "", label: "All statuses" },
   { value: "connected", label: "Connected" },
   { value: "failed", label: "Failed" },
-  { value: "no-answer", label: "No Answer" },
+  { value: "no-answer", label: "No answer" },
   { value: "busy", label: "Busy" },
 ];
 
@@ -765,45 +912,43 @@ function DrillDown({ campaignId, from, to }: { campaignId: string; from: string;
   const rows = data?.rows ?? [];
 
   return (
-    <div className="bg-bg/50 border border-line rounded-lg p-3">
-      <div className="flex items-center justify-between gap-2 mb-2">
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs text-muted">
           {loading
             ? "Loading numbers…"
             : `${rows.length.toLocaleString()} number${rows.length === 1 ? "" : "s"}${data?.capped ? " (showing first 1,000)" : ""}`}
         </span>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="bg-bg/60 border border-line rounded-md px-2 py-1 text-xs outline-none hover:border-line2 focus:border-accent/60"
-        >
-          {DRILL_STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
+        <div className="w-40">
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="h-8 py-1 text-xs">
+            {DRILL_STATUSES.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </Select>
+        </div>
       </div>
       {loading && <Skeleton className="h-24 rounded-lg" />}
-      {!loading && !rows.length && <div className="text-xs text-muted py-3 text-center">No matching calls.</div>}
+      {!loading && !rows.length && <div className="py-3 text-center text-xs text-muted">No matching calls.</div>}
       {!loading && rows.length > 0 && (
-        <div className="max-h-72 overflow-auto rounded-md border border-line">
+        <div className="max-h-72 overflow-auto rounded-lg border border-line bg-panel">
           <table className="w-full text-xs">
-            <thead className="sticky top-0 bg-bg">
-              <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-                <th className="font-medium py-1.5 px-2">Phone</th>
-                <th className="font-medium px-2">Status</th>
-                <th className="font-medium px-2 text-right">Duration</th>
-                <th className="font-medium px-2 text-right">Time (IST)</th>
+            <thead className="sticky top-0 bg-elev">
+              <tr className="text-left text-muted">
+                <th className="px-3 py-2 font-medium">Phone</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 text-right font-medium">Duration</th>
+                <th className="px-3 py-2 text-right font-medium">Time (IST)</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={`${r.to}-${i}`} className="border-t border-line/60 hover:bg-elev/40">
-                  <td className="py-1.5 px-2 font-mono">{r.to}</td>
-                  <td className="px-2">
-                    <Badge tone={OUTCOME_TONE[r.outcome] || "muted"}>{OUTCOME_LABEL[r.outcome] || r.outcome}</Badge>
+                <tr key={`${r.to}-${i}`} className="border-t border-line/60 hover:bg-ink/[0.025]">
+                  <td className="px-3 py-1.5 tabular-nums">{r.to}</td>
+                  <td className="px-3 py-1.5">
+                    <Badge tone={STATUS_TONE[r.outcome] || "muted"}>{statusLabel(r.outcome)}</Badge>
                   </td>
-                  <td className="px-2 text-right font-mono tabular-nums">{r.durationSec ? `${r.durationSec}s` : "—"}</td>
-                  <td className="px-2 text-right font-mono text-muted whitespace-nowrap">{istStamp(r.triggeredAt)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{r.durationSec ? mmss(r.durationSec) : "—"}</td>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-muted">{istStamp(r.triggeredAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -821,3 +966,4 @@ const tooltipStyle = {
   fontSize: 12,
   color: "rgb(var(--c-ink))",
 };
+

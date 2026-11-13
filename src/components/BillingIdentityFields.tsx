@@ -57,7 +57,7 @@ function Switch({
         }`}
       >
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-panel shadow-xs transition-all ${
             checked ? "left-[1.125rem]" : "left-0.5"
           }`}
         />
@@ -255,7 +255,7 @@ export default function BillingIdentityFields({
       </div>
 
       <div className="sm:col-span-2 pt-1">
-        <div className="text-sm font-medium text-ink">Billing address</div>
+        <div className="border-t border-line pt-3 text-[13.5px] font-semibold text-ink">Billing address</div>
       </div>
 
       <AddressBlock
@@ -280,7 +280,7 @@ export default function BillingIdentityFields({
           {!value.shipSame && (
             <>
               <div className="sm:col-span-2">
-                <div className="text-sm font-medium text-ink">Shipping address</div>
+                <div className="text-[13.5px] font-semibold text-ink">Shipping address</div>
                 <div className="text-xs text-muted mt-0.5">
                   Kept on your account. Invoices are still addressed to the billing address
                   above, and the tax is still worked out from its state.
