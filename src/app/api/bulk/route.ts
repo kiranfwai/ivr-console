@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createBulkJob, getJobWithCounts, listBulkJobs } from "@/lib/bulk";
+import { createBulkJob, getJobWithCounts, listBulkJobs, countBulkJobs, type JobListFilter } from "@/lib/bulk";
 import { getCampaign } from "@/lib/campaigns";
 import { startWorker } from "@/lib/worker";
 import { createLimiter, BusyError } from "@/lib/limiter";
@@ -26,8 +26,26 @@ const uploadLimiter = createLimiter(
 const busy = (msg: string) =>
   NextResponse.json({ error: msg }, { status: 503, headers: { "Retry-After": "10" } });
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const q = new URL(req.url).searchParams;
+    // Paged history (Bulk calls → Past runs). Without these params the
+    // response is exactly what it always was: the latest 20 jobs.
+    if (q.has("offset") || q.has("kind") || q.has("status") || q.has("campaign")) {
+      const limit = Math.min(Math.max(1, Number(q.get("limit")) || 10), 100);
+      const kind = q.get("kind");
+      const status = q.get("status");
+      const f: JobListFilter = {
+        offset: Math.max(0, Number(q.get("offset")) || 0),
+        kind: kind === "call" || kind === "whatsapp" ? kind : undefined,
+        status: status === "running" || status === "paused" || status === "completed" ? status : undefined,
+        campaignId: q.get("campaign") || undefined,
+        from: q.get("from") || undefined,
+        to: q.get("to") || undefined,
+      };
+      const [jobs, total] = await Promise.all([listBulkJobs(limit, f), countBulkJobs(f)]);
+      return NextResponse.json({ jobs, total, limit, offset: f.offset });
+    }
     return NextResponse.json({ jobs: await listBulkJobs() });
   } catch (e) {
     console.error("[bulk] list failed:", e);

@@ -75,6 +75,37 @@ export default function BulkTab() {
   }, [campaigns]);
   const jobs = (jdata?.jobs ?? []).filter((j) => (j.kind ?? "call") === "call");
 
+  // Past runs: server-paged history of every bulk-call job (10 a page).
+  const HIST_PAGE = 10;
+  const [histPage, setHistPage] = useState(0);
+  const [histStatus, setHistStatus] = useState<"" | "running" | "paused" | "completed">("");
+  const [histCampaign, setHistCampaign] = useState("");
+  const [histFrom, setHistFrom] = useState("");
+  const [histTo, setHistTo] = useState("");
+  const histUrl = useMemo(() => {
+    const q = new URLSearchParams({ kind: "call", limit: String(HIST_PAGE), offset: String(histPage * HIST_PAGE) });
+    if (histStatus) q.set("status", histStatus);
+    if (histCampaign) q.set("campaign", histCampaign);
+    // Dates are picked in IST; send the IST day boundaries as instants.
+    if (histFrom) q.set("from", new Date(`${histFrom}T00:00:00+05:30`).toISOString());
+    if (histTo) q.set("to", new Date(new Date(`${histTo}T00:00:00+05:30`).getTime() + 86_400_000).toISOString());
+    return `/api/bulk?${q.toString()}`;
+  }, [histPage, histStatus, histCampaign, histFrom, histTo]);
+  // Refetch whenever the live job list refreshes, so a run that just
+  // finished updates here too.
+  const { data: hdata, loading: histLoading } = useFetch<{ jobs: BulkJobWithCounts[]; total: number }>(histUrl, [jdata]);
+  const hist = hdata?.jobs ?? [];
+  const histTotal = hdata?.total ?? 0;
+  const histPages = Math.max(1, Math.ceil(histTotal / HIST_PAGE));
+  const histPageList = useMemo(() => {
+    const out: number[] = [];
+    for (let i = 0; i < histPages; i++) {
+      if (i === 0 || i === histPages - 1 || Math.abs(i - histPage) <= 1) out.push(i);
+      else if (out[out.length - 1] !== -1) out.push(-1);
+    }
+    return out;
+  }, [histPages, histPage]);
+
   // Persisted across tab switches + refresh so uploaded contacts and the active
   // campaign are never lost (BUG 1). Live progress is re-fetched from the server
   // by the polling effect once activeJobId rehydrates.
@@ -630,8 +661,93 @@ export default function BulkTab() {
         buildSpec={buildSpec}
       />
 
-      {!!jobs.length && (
-        <DataPanel title="Recent jobs" meta="Click a row to follow it.">
+      {/* Every bulk-call run, newest first — paged and filterable, so older
+          campaigns and runs are never out of reach (the old card showed 8). */}
+      <DataPanel
+        title="Past runs"
+        meta={histTotal ? `${histTotal.toLocaleString()} run${histTotal === 1 ? "" : "s"} · click a row to open it` : "Every bulk call this workspace has run"}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-[10px] border border-line bg-elev p-[3px]">
+              {([["", "All"], ["running", "Running"], ["paused", "Stopped"], ["completed", "Completed"]] as const).map(([v, l]) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => { setHistStatus(v); setHistPage(0); }}
+                  className={`h-7 rounded-[7px] px-2.5 text-[12.5px] font-medium transition-colors ${histStatus === v ? "bg-panel text-ink shadow-card" : "text-muted hover:text-ink"}`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <select
+              value={histCampaign}
+              onChange={(e) => { setHistCampaign(e.target.value); setHistPage(0); }}
+              className="h-[34px] max-w-[200px] rounded-[9px] border border-line bg-panel px-2.5 text-[13px] text-ink shadow-xs outline-none focus:border-accent"
+              aria-label="Filter by campaign"
+            >
+              <option value="">All campaigns</option>
+              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <input
+              type="date"
+              value={histFrom}
+              onChange={(e) => { setHistFrom(e.target.value); setHistPage(0); }}
+              className="h-[34px] rounded-[9px] border border-line bg-panel px-2 text-[13px] text-ink shadow-xs outline-none focus:border-accent"
+              aria-label="From date"
+            />
+            <span className="text-muted">–</span>
+            <input
+              type="date"
+              value={histTo}
+              onChange={(e) => { setHistTo(e.target.value); setHistPage(0); }}
+              className="h-[34px] rounded-[9px] border border-line bg-panel px-2 text-[13px] text-ink shadow-xs outline-none focus:border-accent"
+              aria-label="To date"
+            />
+            {(histStatus || histCampaign || histFrom || histTo) && (
+              <button
+                type="button"
+                className="text-[13px] font-medium text-accent hover:underline"
+                onClick={() => { setHistStatus(""); setHistCampaign(""); setHistFrom(""); setHistTo(""); setHistPage(0); }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        }
+        footer={histTotal > HIST_PAGE ? (
+          <div className="flex items-center gap-2">
+            <span>
+              Showing <b className="font-semibold text-ink">{(histPage * HIST_PAGE + 1).toLocaleString()}–{Math.min(histTotal, (histPage + 1) * HIST_PAGE).toLocaleString()}</b> of {histTotal.toLocaleString()}
+            </span>
+            <span className="flex-1" />
+            <Button size="sm" variant="ghost" disabled={histPage === 0} onClick={() => setHistPage((p) => p - 1)}>Previous</Button>
+            <div className="hidden gap-0.5 sm:flex">
+              {histPageList.map((n, i) => n < 0 ? (
+                <span key={`gap${i}`} className="grid h-[30px] w-6 place-items-center text-muted">…</span>
+              ) : (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setHistPage(n)}
+                  className={`h-[30px] min-w-[30px] rounded-[8px] px-1.5 text-[13px] font-medium tabular-nums ${n === histPage ? "bg-panel text-ink shadow-card ring-1 ring-line" : "text-muted hover:bg-ink/[0.05]"}`}
+                >
+                  {n + 1}
+                </button>
+              ))}
+            </div>
+            <Button size="sm" variant="ghost" disabled={(histPage + 1) * HIST_PAGE >= histTotal} onClick={() => setHistPage((p) => p + 1)}>Next</Button>
+          </div>
+        ) : undefined}
+      >
+        {histLoading && !hdata ? (
+          <Loading label="Loading past runs…" />
+        ) : hist.length === 0 ? (
+          <EmptyState
+            title={histStatus || histCampaign || histFrom || histTo ? "No runs match these filters" : "No bulk calls yet"}
+            description={histStatus || histCampaign || histFrom || histTo ? "Try another status, campaign or date range." : "Runs you start or schedule will show up here."}
+          />
+        ) : (
           <DataTable>
             <thead>
               <tr>
@@ -645,7 +761,7 @@ export default function BulkTab() {
               </tr>
             </thead>
             <tbody>
-              {jobs.slice(0, 8).map((j) => {
+              {hist.map((j) => {
                 const s = summarize(j);
                 const isActive = activeJobId === j.id;
                 return (
@@ -704,8 +820,8 @@ export default function BulkTab() {
               })}
             </tbody>
           </DataTable>
-        </DataPanel>
-      )}
+        )}
+      </DataPanel>
 
       {/* Plain start check — like every other send in the console. */}
       <ConfirmSendModal

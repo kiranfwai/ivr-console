@@ -230,17 +230,45 @@ export async function getJobWithCounts(id: string): Promise<BulkJobWithCounts | 
   return { ...job, counts: await tallyJob(id) };
 }
 
-export async function listBulkJobs(limit = 20): Promise<BulkJobWithCounts[]> {
+export interface JobListFilter {
+  offset?: number;
+  kind?: "call" | "whatsapp";
+  status?: BulkJobStatus;
+  campaignId?: string;
+  /** ISO timestamps; jobs created at or after `from` and before `to`. */
+  from?: string;
+  to?: string;
+}
+
+/** WHERE clause + params shared by the job list and its count (tenant-scoped). */
+function jobWhere(f: JobListFilter): { where: string; params: any[] } {
   const params: any[] = [];
+  const parts: string[] = [];
   const cid = currentClientId();
-  let where = "";
-  if (cid) {
-    params.push(cid);
-    where = ` WHERE client_id=$${params.length}`;
-  }
-  params.push(limit);
+  if (cid) { params.push(cid); parts.push(`client_id=$${params.length}`); }
+  if (f.kind === "call") parts.push(`coalesce(kind,'call')='call'`);
+  if (f.kind === "whatsapp") parts.push(`kind='whatsapp'`);
+  if (f.status) { params.push(f.status); parts.push(`status=$${params.length}`); }
+  if (f.campaignId) { params.push(f.campaignId); parts.push(`campaign_id=$${params.length}`); }
+  if (f.from) { params.push(f.from); parts.push(`created_at >= $${params.length}`); }
+  if (f.to) { params.push(f.to); parts.push(`created_at < $${params.length}`); }
+  return { where: parts.length ? ` WHERE ${parts.join(" AND ")}` : "", params };
+}
+
+/** How many jobs match a filter — for "1–10 of N" paging. */
+export async function countBulkJobs(f: JobListFilter = {}): Promise<number> {
+  const { where, params } = jobWhere(f);
+  const { rows } = await query<{ n: number }>(`SELECT count(*)::int AS n FROM bulk_job${where}`, params);
+  return rows[0]?.n ?? 0;
+}
+
+export async function listBulkJobs(limit = 20, filter: JobListFilter = {}): Promise<BulkJobWithCounts[]> {
+  const { where, params } = jobWhere(filter);
+  params.push(Math.min(Math.max(1, limit), 100));
+  const limIdx = params.length;
+  params.push(Math.max(0, filter.offset ?? 0));
   const { rows } = await query<JobDbRow>(
-    `SELECT ${JOB_COLS} FROM bulk_job${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+    `SELECT ${JOB_COLS} FROM bulk_job${where} ORDER BY created_at DESC LIMIT $${limIdx} OFFSET $${params.length}`,
     params,
   );
   if (!rows.length) return [];

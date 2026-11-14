@@ -204,6 +204,17 @@ export default function ScheduleCard({
   onCount?: (n: number) => void;
 }) {
   const [items, setItems] = useState<ScheduleApi[] | null>(null);
+  // Upcoming first by default; finished runs live behind their own filter,
+  // 10 a page, so a long history never buries the next run.
+  const SCH_PAGE = 10;
+  const [schView, setSchView] = useState<"upcoming" | "finished" | "all">("upcoming");
+  const [schPage, setSchPage] = useState(0);
+  const isFinished = (x: ScheduleApi) => !x.nextRunAt && !x.enabled && x.runs > 0;
+  const nUpcoming = (items ?? []).filter((x) => !isFinished(x)).length;
+  const nFinished = (items ?? []).length - nUpcoming;
+  const viewItems = (items ?? []).filter((x) => schView === "all" || (schView === "finished") === isFinished(x));
+  const schPages = Math.max(1, Math.ceil(viewItems.length / SCH_PAGE));
+  const shownItems = viewItems.slice(Math.min(schPage, schPages - 1) * SCH_PAGE, Math.min(schPage, schPages - 1) * SCH_PAGE + SCH_PAGE);
   const [open, setOpen] = useState(false);
   const [toDelete, setToDelete] = useState<ScheduleApi | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -253,15 +264,49 @@ export default function ScheduleCard({
         title={title || "Scheduled runs"}
         meta={description || "Starts by itself at the time you choose — nothing needs to be open."}
         action={
-          !hideNew && (
-            <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setOpen(true)} disabled={!recipientCount}>
-              New schedule
-            </Button>
-          )
+          <div className="flex flex-wrap items-center gap-2">
+            {!!items?.length && (
+              <div className="inline-flex rounded-[10px] border border-line bg-elev p-[3px]">
+                {([["upcoming", "Upcoming", nUpcoming], ["finished", "Finished", nFinished], ["all", "All", items.length]] as const).map(([v, l, n]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => { setSchView(v); setSchPage(0); }}
+                    className={`flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[12.5px] font-medium transition-colors ${schView === v ? "bg-panel text-ink shadow-card" : "text-muted hover:text-ink"}`}
+                  >
+                    {l} <span className="text-[11.5px] text-muted tabular-nums">{n}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!hideNew && (
+              <Button size="sm" leftIcon={<Plus size={13} />} onClick={() => setOpen(true)} disabled={!recipientCount}>
+                New schedule
+              </Button>
+            )}
+          </div>
         }
+        footer={viewItems.length > SCH_PAGE ? (
+          <div className="flex items-center gap-2">
+            <span>
+              Showing <b className="font-semibold text-ink">{Math.min(schPage, schPages - 1) * SCH_PAGE + 1}–{Math.min(viewItems.length, (Math.min(schPage, schPages - 1) + 1) * SCH_PAGE)}</b> of {viewItems.length}
+            </span>
+            <span className="flex-1" />
+            <Button size="sm" variant="ghost" disabled={schPage === 0} onClick={() => setSchPage((p) => p - 1)}>Previous</Button>
+            <Button size="sm" variant="ghost" disabled={schPage >= schPages - 1} onClick={() => setSchPage((p) => p + 1)}>Next</Button>
+          </div>
+        ) : undefined}
       >
         {items === null ? (
           <div className="flex justify-center border-t border-line py-8"><Spinner /></div>
+        ) : items.length > 0 && viewItems.length === 0 ? (
+          <div className="border-t border-line">
+            <EmptyState
+              icon={<CalendarClock size={20} />}
+              title={schView === "upcoming" ? "Nothing coming up" : "Nothing finished yet"}
+              description={schView === "upcoming" ? `${nFinished} finished run${nFinished === 1 ? "" : "s"} — see the Finished tab.` : "Runs that have gone out will show up here."}
+            />
+          </div>
         ) : items.length === 0 ? (
           <div className="border-t border-line">
             <EmptyState
@@ -287,7 +332,7 @@ export default function ScheduleCard({
               </tr>
             </thead>
             <tbody>
-              {items.map((s) => {
+              {shownItems.map((s) => {
                 // Same rule as the Scheduled page: a one-off that has run and has
                 // nothing left to fire is finished, not paused — and has nothing to resume.
                 const finished = !s.nextRunAt && !s.enabled && s.runs > 0;
