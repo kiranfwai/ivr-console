@@ -8,6 +8,7 @@
 # Layout on the VM (everything under /root = the persistent 50 GB disk):
 #   /root/apps/ivr/src   git checkout (this repo)
 #   /root/apps/ivr/env   settings, mode 600 (filled from the laptop by vm.sh env)
+#   /root/apps/ivr/media uploaded audio (AUDIO_STORAGE=local), served at /audios/u/<file>
 name: ivr
 
 services:
@@ -22,6 +23,11 @@ services:
     env_file:
       - path: /root/apps/ivr/env
         format: raw
+    environment:
+      AUDIO_STORAGE: local
+      AUDIO_DIR: /data/media
+    volumes:
+      - /root/apps/ivr/media:/data/media
     ports:
       - "3001:3000"
     mem_limit: 1400m

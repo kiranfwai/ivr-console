@@ -69,10 +69,14 @@ Open the trial URL, log in, click every page in light + dark. Pages showing real
 - `ivr.freedomwithai.com` still resolves to AWS; AWS nginx (`/etc/nginx/sites-enabled/ivr-console-new`)
   forwards everything to `https://ivr-ezyzcq0mur.agent37.app` via `/etc/nginx/snippets/ivr-to-vm.conf`.
   Backup of the old site: `/etc/nginx/ivr-console-new.bak-20261114-1330`.
-- AWS app still runs with `WORKER_DISABLED=1` (env backup `/etc/ivr-console/env.bak-20261114-1329`).
-- VM runs workers (`WORKER_DISABLED=0`, `PGPOOL_MAX=50`, `PUBLIC_BASE_URL=https://ivr.freedomwithai.com`).
+- AWS IVR app STOPPED + disabled (`systemctl stop/disable ivr-console`, ~19:15 IST); its code + env kept
+  for rollback (env backup `/etc/ivr-console/env.bak-20261114-1329`). Both AWS nginx sites forward to the VM.
+- Audio uploads: `AUDIO_STORAGE=local` -> `/root/apps/ivr/media` on the VM, served at `/audios/u/<file>`.
+  Older audio stays on S3 (public URLs, keep playing). No AWS key needed.
+- `PGPOOL_MAX=15`, same as AWS (DB connection limit).
+- VM runs workers (`WORKER_DISABLED=0`, `PGPOOL_MAX=15`, `PUBLIC_BASE_URL=https://ivr.freedomwithai.com`).
 - Rollback in 1 minute: on AWS restore the nginx backup + reload, delete `WORKER_DISABLED=1` from the
-  env + restart ivr-console; then `WORKER_DISABLED=1 TRIAL_URL=https://ivr.freedomwithai.com bash deploy/agent37/vm.sh env`
+  env, `systemctl enable --now ivr-console`; then `WORKER_DISABLED=1 TRIAL_URL=https://ivr.freedomwithai.com bash deploy/agent37/vm.sh env`
   and force-recreate the VM container.
 
 ## Step 5: domain decision (to drop AWS entirely)
@@ -87,7 +91,7 @@ hostnames it doesn't own (tested: 403). Options:
 ## Step 6: the switch (only with Mani's OK, no calls running)
 
 1. AWS: add `WORKER_DISABLED=1` to `/etc/ivr-console/env`, `sudo systemctl restart ivr-console`.
-2. VM: `WORKER_DISABLED=0 PGPOOL_MAX=50 TRIAL_URL=<final url> bash deploy/agent37/vm.sh env`,
+2. VM: `WORKER_DISABLED=0 PGPOOL_MAX=15 TRIAL_URL=<final url> bash deploy/agent37/vm.sh env`,
    then `FORCE=1 bash deploy/agent37/vm.sh deploy`.
 3. Domain per Step 5.
 4. Watch: one test call to Mani's phone, one ₹1 top-up, `vm.sh logs`, Past runs, Call reports.
