@@ -10,7 +10,7 @@
 #
 # Needs the API key in ~/.agent37_key. VM id defaults to the IVR VM.
 set -euo pipefail
-VM_ID="${VM_ID:-uwzzlktkge}"
+VM_ID="${VM_ID:-ezyzcq0mur}"
 KEY="$(cat "$HOME/.agent37_key")"
 BASE=/root/apps/ivr
 REPO=https://github.com/kiranfwai/ivr-console.git

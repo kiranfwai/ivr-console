@@ -7,10 +7,10 @@ and Step 6 only happens with Mani's explicit OK at a quiet time.
 
 | | |
 |---|---|
-| Agent37 VM id | `uwzzlktkge` (2 vCPU / 4 GB RAM / 50 GB disk, region US) |
-| Outbound IP | `15.204.103.71`: the database host must allow it |
+| Agent37 VM id | `ezyzcq0mur` "apps-mumbai" (2 vCPU / 4 GB RAM / 50 GB disk, region ap-south = Mumbai; DB round trip ~20 ms. A US VM measured 257 ms: never use region us for this app) |
+| Outbound IP | `148.113.0.143` (DB currently accepts it without an allow-list) |
 | Persistent disk | only `/root` (50 GB). Docker already stores everything in `/root/docker` |
-| Reaching it | no SSH / no public IP. Commands go through Agent37's API (`vm.sh run`); web traffic only via Agent37 public URLs (`https://<prefix>-uwzzlktkge.agent37.app`) |
+| Reaching it | no SSH / no public IP. Commands go through Agent37's API (`vm.sh run`); web traffic only via Agent37 public URLs (`https://<prefix>-ezyzcq0mur.agent37.app`) |
 
 ## Sharing the VM with other apps
 
@@ -18,8 +18,8 @@ Every app is its **own container in its own compose project**:
 
 | App | Folder on VM | Host port | Public URL | Limits |
 |---|---|---|---|---|
-| IVR Console | `/root/apps/ivr/` | 3001 | `https://ivr-uwzzlktkge.agent37.app` | 1.4 GB RAM, 1.5 CPU |
-| (next app) | `/root/apps/<name>/` | 3002, 3003, ... | `https://<name>-uwzzlktkge.agent37.app` | set in its compose file |
+| IVR Console | `/root/apps/ivr/` | 3001 | `https://ivr-ezyzcq0mur.agent37.app` | 1.4 GB RAM, 1.5 CPU |
+| (next app) | `/root/apps/<name>/` | 3002, 3003, ... | `https://<name>-ezyzcq0mur.agent37.app` | set in its compose file |
 
 - Separate compose projects = separate private networks: the apps can't see each other.
 - Memory/CPU caps: one app spiking or leaking can't take the other down.
@@ -37,13 +37,13 @@ Every app is its **own container in its own compose project**:
 
 ```bash
 bash deploy/agent37/vm.sh setup     # folders + code checkout on the VM
-bash deploy/agent37/vm.sh url       # creates https://ivr-uwzzlktkge.agent37.app
+bash deploy/agent37/vm.sh url       # creates https://ivr-ezyzcq0mur.agent37.app
 ```
 
 ## Step 2: settings (laptop)
 
 ```bash
-TRIAL_URL=https://ivr-uwzzlktkge.agent37.app bash deploy/agent37/vm.sh env
+TRIAL_URL=https://ivr-ezyzcq0mur.agent37.app bash deploy/agent37/vm.sh env
 ```
 Copies the 20 live settings from AWS straight to the VM (nothing saved on the laptop),
 with **WORKER_DISABLED=1** (the VM cannot call or message anyone), the trial URL, and
@@ -64,7 +64,18 @@ Refuses to swap while calls are running unless `FORCE=1` (only when workers are 
 Open the trial URL, log in, click every page in light + dark. Pages showing real data
 = database reachable.
 
-## Step 5: domain decision (before the switch)
+## LIVE since 2026-11-14 19:00 IST
+
+- `ivr.freedomwithai.com` still resolves to AWS; AWS nginx (`/etc/nginx/sites-enabled/ivr-console-new`)
+  forwards everything to `https://ivr-ezyzcq0mur.agent37.app` via `/etc/nginx/snippets/ivr-to-vm.conf`.
+  Backup of the old site: `/etc/nginx/ivr-console-new.bak-20261114-1330`.
+- AWS app still runs with `WORKER_DISABLED=1` (env backup `/etc/ivr-console/env.bak-20261114-1329`).
+- VM runs workers (`WORKER_DISABLED=0`, `PGPOOL_MAX=50`, `PUBLIC_BASE_URL=https://ivr.freedomwithai.com`).
+- Rollback in 1 minute: on AWS restore the nginx backup + reload, delete `WORKER_DISABLED=1` from the
+  env + restart ivr-console; then `WORKER_DISABLED=1 TRIAL_URL=https://ivr.freedomwithai.com bash deploy/agent37/vm.sh env`
+  and force-recreate the VM container.
+
+## Step 5: domain decision (to drop AWS entirely)
 
 `ivr.freedomwithai.com` **cannot** simply be pointed at the VM: Agent37 rejects
 hostnames it doesn't own (tested: 403). Options:
