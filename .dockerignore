@@ -1,0 +1,15 @@
+.git
+node_modules
+.next
+.vercel
+.env*
+*.log
+*.tsbuildinfo
+# local deploy tooling holds a private key: never send it into an image
+skills
+deploy
+scripts
+voice-server
+public/dev-uploads
+Dockerfile
+.dockerignore

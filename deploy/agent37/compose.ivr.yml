@@ -1,0 +1,41 @@
+# IVR Console on the shared Agent37 VM.
+#
+# Isolation from the other app(s) on this VM:
+#   - own compose project ("ivr") => own private network; other apps can't reach it
+#   - hard memory / CPU caps, so a spike here can't take the other app down (or the reverse)
+#   - own host port (3001), exposed to the internet only through an Agent37 public port
+#
+# Layout on the VM (everything under /root = the persistent 50 GB disk):
+#   /root/apps/ivr/src   git checkout (this repo)
+#   /root/apps/ivr/env   settings, mode 600 (filled from the laptop by vm.sh env)
+name: ivr
+
+services:
+  ivr:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: ivr-console:latest
+    container_name: ivr
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: /root/apps/ivr/env
+        format: raw
+    ports:
+      - "3001:3000"
+    mem_limit: 1400m
+    memswap_limit: 1400m
+    cpus: 1.5
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

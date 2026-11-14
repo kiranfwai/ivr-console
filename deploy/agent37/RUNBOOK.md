@@ -1,93 +1,93 @@
-# Moving the IVR Console from AWS to the Agent37 VM
+# IVR Console on the Agent37 VM (containers)
 
-Plain-language runbook. Nothing here touches the live site until **Step 7**,
-and Step 7 only happens with Mani's explicit OK at a quiet time.
+Plain-language runbook. Nothing here touches the live AWS site until **Step 6**,
+and Step 6 only happens with Mani's explicit OK at a quiet time.
 
-## What moves, what stays
+## The VM
 
-| Piece | Where it is now | After the move |
-|---|---|---|
-| IVR app (Next.js) | AWS EC2 `52.76.194.245`, `/opt/ivr-console` | Agent37 VM, `/opt/ivr-console` |
-| Voice server (audio generation) | not running anywhere | Agent37 VM, private on `127.0.0.1:8765` |
-| Database (Postgres) | separate host `PGHOST` (Oracle) | **unchanged** — the VM just connects to it |
-| Audio files | Amazon S3 bucket `S3_BUCKET` | **unchanged** — needs an S3 key on the VM (see Step 3) |
-| LiveKit, "sangam" | same AWS EC2 | **stay on AWS** — only the IVR moves |
-| Domain `ivr.freedomwithai.com` | points at AWS | points at the VM (Step 7) |
+| | |
+|---|---|
+| Agent37 VM id | `uwzzlktkge` (2 vCPU / 4 GB RAM / 50 GB disk, region US) |
+| Outbound IP | `15.204.103.71`: the database host must allow it |
+| Persistent disk | only `/root` (50 GB). Docker already stores everything in `/root/docker` |
+| Reaching it | no SSH / no public IP. Commands go through Agent37's API (`vm.sh run`); web traffic only via Agent37 public URLs (`https://<prefix>-uwzzlktkge.agent37.app`) |
 
-## VM size
+## Sharing the VM with other apps
 
-The voice model peaks around **7.3 GB RAM** and is CPU-hungry, and the app
-build needs ~1.5 GB. Recommended: **4 vCPU / 16 GB RAM / 40 GB disk** (more
-vCPU = faster audio). Minimum that works: 4 vCPU / 12 GB / 30 GB.
+Every app is its **own container in its own compose project**:
 
-## Step 0 — what we need first (from Mani / Animesh)
+| App | Folder on VM | Host port | Public URL | Limits |
+|---|---|---|---|---|
+| IVR Console | `/root/apps/ivr/` | 3001 | `https://ivr-uwzzlktkge.agent37.app` | 1.4 GB RAM, 1.5 CPU |
+| (next app) | `/root/apps/<name>/` | 3002, 3003, ... | `https://<name>-uwzzlktkge.agent37.app` | set in its compose file |
 
-- SSH access to the VM: host/IP, username, key file saved on the laptop.
-- A hostname for the trial, e.g. `ivr2.freedomwithai.com`, pointed (DNS A record) at the VM — or use `<vm-ip>.nip.io` for a first look.
-- An **S3 access key** (IAM user with read/write on the audio bucket). The AWS server uses its built-in role; the VM can't.
-- Whoever manages the database host: allow the VM's outbound IP (printed by Step 1).
+- Separate compose projects = separate private networks: the apps can't see each other.
+- Memory/CPU caps: one app spiking or leaking can't take the other down.
+- Each app has its own settings file (`/root/apps/<name>/env`, mode 600) and its own deploy.
+- Memory budget on 4 GB: IVR 1.4 GB + other app <= ~1.5 GB, leaving room for the system
+  and for builds. **A build (~1.5 GB extra for a few minutes) should not run while
+  the other app is under heavy load.**
 
-## Step 1 — prepare the VM (no secrets, no risk)
+## Step 0: before the trial
 
-```bash
-scp -i <vm-key> deploy/agent37/provision-vm.sh <user>@<vm>:~
-ssh -i <vm-key> <user>@<vm> 'sudo DOMAINS="ivr2.freedomwithai.com" bash ~/provision-vm.sh'
-```
-Installs Node 20 (same as AWS), Caddy (automatic HTTPS), the app code, a
-systemd service (not started yet). Prints the VM's outbound IP.
+- Database: whoever manages the DB host allows `15.204.103.71`.
+- S3 key (IAM user, read/write on the audio bucket) if audio upload must work on the trial.
 
-## Step 2 — voice server (audio generation)
+## Step 1: one-time setup (laptop)
 
 ```bash
-ssh -i <vm-key> <user>@<vm> 'sudo VOICE_LOCAL_ONLY=1 bash /opt/ivr-console/voice-server/setup.sh'
+bash deploy/agent37/vm.sh setup     # folders + code checkout on the VM
+bash deploy/agent37/vm.sh url       # creates https://ivr-uwzzlktkge.agent37.app
 ```
-Downloads the ~3 GB model on first run, starts `ivr-voice`, private only.
 
-## Step 3 — copy the live settings (from the laptop)
+## Step 2: settings (laptop)
 
 ```bash
-export AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...   # the S3 key
-VM="<user>@<vm>" VM_KEY=<vm-key> TRIAL_URL="https://ivr2.freedomwithai.com" \
-  bash deploy/agent37/copy-env.sh
+TRIAL_URL=https://ivr-uwzzlktkge.agent37.app bash deploy/agent37/vm.sh env
 ```
-Pipes AWS's settings straight to the VM with **WORKER_DISABLED=1** (the VM
-cannot call or message anyone during the trial), the trial URL, and the voice
-server link.
+Copies the 20 live settings from AWS straight to the VM (nothing saved on the laptop),
+with **WORKER_DISABLED=1** (the VM cannot call or message anyone), the trial URL, and
+PGPOOL_MAX=10 (small DB pool while AWS is still live). Add an S3 key by exporting
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` first.
 
-## Step 4 — build and start
+## Step 3: build and start (laptop)
 
 ```bash
-ssh -i <vm-key> <user>@<vm> 'sudo bash /opt/ivr-console/deploy/agent37/deploy-app.sh'
+REF=main bash deploy/agent37/vm.sh deploy
+bash deploy/agent37/vm.sh status
 ```
+Builds the image while any old container keeps serving, then swaps (a few seconds).
+Refuses to swap while calls are running unless `FORCE=1` (only when workers are on).
 
-## Step 5 — trial checks (Mani)
+## Step 4: trial checks (Mani)
 
-- Open the trial URL, log in, click through every page (light + dark).
-- Audios → Generate audio: add a voice (with permission), make one short take, save it.
-- Database reachable (pages show real data). If they don't, the DB allow-list (Step 0) is missing.
+Open the trial URL, log in, click every page in light + dark. Pages showing real data
+= database reachable.
 
-## Step 6 — before the switch
+## Step 5: domain decision (before the switch)
 
-- Pick a quiet time. Check no calls are running (deploy-app.sh refuses to restart while busy).
-- Lower the DNS TTL of `ivr.freedomwithai.com` to 60 s a day before, if possible.
+`ivr.freedomwithai.com` **cannot** simply be pointed at the VM: Agent37 rejects
+hostnames it doesn't own (tested: 403). Options:
+1. Register a separate, dedicated domain with Agent37 (whole domain delegated to them;
+   needs $50 of total top-ups). The IVR then lives at e.g. `ivr.<new-domain>`.
+2. Keep `ivr.freedomwithai.com` as a redirect to the Agent37 URL (Plivo/Cashfree
+   callbacks use the Agent37 URL directly via PUBLIC_BASE_URL).
 
-## Step 7 — the switch (only with Mani's OK)
+## Step 6: the switch (only with Mani's OK, no calls running)
 
-1. AWS: stop the IVR workers so only one server ever dials —
-   add `WORKER_DISABLED=1` to `/etc/ivr-console/env` on AWS, `sudo systemctl restart ivr-console`.
-2. VM: in `/etc/ivr-console/env` set `PUBLIC_BASE_URL=https://ivr.freedomwithai.com`
-   and remove `WORKER_DISABLED=1`; add `ivr.freedomwithai.com` to `DOMAINS` and
-   re-run provision-vm.sh (Caddy picks up the certificate); `FORCE=1` deploy-app.sh.
-3. DNS: point `ivr.freedomwithai.com` at the VM.
-4. Watch: one test call to Mani's phone, one ₹1 top-up, the logs
-   (`journalctl -u ivr-console -f`), Past runs, Call reports.
+1. AWS: add `WORKER_DISABLED=1` to `/etc/ivr-console/env`, `sudo systemctl restart ivr-console`.
+2. VM: `WORKER_DISABLED=0 PGPOOL_MAX=50 TRIAL_URL=<final url> bash deploy/agent37/vm.sh env`,
+   then `FORCE=1 bash deploy/agent37/vm.sh deploy`.
+3. Domain per Step 5.
+4. Watch: one test call to Mani's phone, one ₹1 top-up, `vm.sh logs`, Past runs, Call reports.
 
-## Rollback (any time in the first week)
+## Rollback (first week)
 
-Point DNS back at AWS, remove `WORKER_DISABLED=1` on AWS and restart it, set
-`WORKER_DISABLED=1` on the VM. AWS keeps its code and settings untouched for a week.
+`WORKER_DISABLED=1 ... vm.sh env` + deploy on the VM; remove `WORKER_DISABLED=1` on AWS and
+restart it; point the domain back. AWS keeps its code and settings for a week.
 
 ## Known differences vs AWS
 
-- Region is probably Europe: every Plivo callback travels farther. Test-call quality is checked in Step 5.
-- No uptime guarantee from Agent37, and **a VM sleeps if the Agent37 balance runs out** — keep the balance topped up.
+- Region is US: Plivo callbacks travel a bit farther; checked with a test call in Step 6.
+- No uptime guarantee; **the VM sleeps if the Agent37 balance runs out**: keep it topped up.
+- After an Agent37 restart, containers come back via `restart: unless-stopped`.
