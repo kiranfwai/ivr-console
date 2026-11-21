@@ -53,6 +53,12 @@ export function deriveOutcome(
   if (digit === "1") return "press1";
 
   const c = hangupCause || "";
+  // ALLOTTED_TIMEOUT = Plivo cut the call at the campaign's "Call Ending
+  // Duration" (time_limit). When the call was answered the person heard the
+  // message: it is a connected call — billed, counted as answered, and never
+  // re-dialled by "retry failed". (Before this, ~36k answered calls since
+  // Aug 2026 were treated as no-answer and never charged.)
+  if (c === "ALLOTTED_TIMEOUT") return answered ? "connected" : "no-answer";
   if (BUSY.has(c)) return "busy";
   if (NO_ANSWER.has(c)) return "no-answer";
   if (REJECTED.has(c)) return "rejected";

@@ -88,7 +88,7 @@ const CAUSE_LABEL: Record<string, string> = {
   NO_ANSWER: "No answer",
   "No Answer": "No answer",
   NO_USER_RESPONSE: "No response",
-  ALLOTTED_TIMEOUT: "Rang out",
+  ALLOTTED_TIMEOUT: "Call time limit reached",
   USER_BUSY: "Busy",
   "Busy Line": "Busy",
   CALL_REJECTED: "Rejected",
